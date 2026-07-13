@@ -1,0 +1,3 @@
+-c -ffreestanding -fno-stack-protector -mno-red-zone -fno-builtin -I . -I ./include -nostdlib -m64 -g
+-nostdlib -static -T ./kernel64.ld -e KernelStart --gc-sections --build-id=none
+END
