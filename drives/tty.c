@@ -2,7 +2,7 @@
 
 uint16_t TTY_PrintCol = 0;
 uint16_t TTY_PrintRow = 0;
-ConsoleStyle CurrentConsoleStyle = {0};
+ConsoleStyle CurrentConsoleStyle = {COLOR_WHITE,COLOR_BLACK};
 
 void TTY_PrintChar(const char c,uint32_t color){
     SerialWriteChar(SERIAL_COM1,c);
@@ -37,17 +37,6 @@ void TTY_Print(const char *str,uint32_t color){
         TTY_PrintChar(str[i],color);
         i ++;
     }
-}
-
-int early_printk(const char* fmt, ...){
-    char buf[128];
-    __builtin_va_list args;
-	int ret;
-	__builtin_va_start(args, fmt);
-	ret = vsprintf(buf, fmt, args);
-	__builtin_va_end(args);
-    TTY_Print(buf,CurrentConsoleStyle.TextColor);
-	return ret;
 }
 
 void TTY_SetCursor(uint16_t col,uint16_t row){

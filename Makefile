@@ -70,7 +70,7 @@ include $(script-dir)/Kbuild.include
 
 # ========== 源码目录列表（链接顺序即遍历顺序）==========
 # 注意：init 必须在最前面，因为 KernelStart() 入口点在其中
-core-dirs := init kernel lib drives
+core-dirs := init kernel lib drives mm
 
 # ========== 读取各目录 Makefile 收集目标文件 ==========
 # 每个子目录 Makefile 定义 obj-y := file1.o file2.o ...
@@ -92,8 +92,12 @@ obj-y :=
 include drives/Makefile
 drives-objs := $(addprefix $(build-dir)/drives/, $(obj-y))
 
+obj-y :=
+include mm/Makefile
+mm-objs := $(addprefix $(build-dir)/mm/, $(obj-y))
+
 # 所有目标文件
-all-objs := $(init-objs) $(kernel-objs) $(lib-objs) $(drives-objs)
+all-objs := $(init-objs) $(kernel-objs) $(lib-objs) $(drives-objs) $(mm-objs)
 
 # 每个目录的 built-in.o（局部链接产物）
 builtin-all := $(addprefix $(build-dir)/, \
@@ -156,6 +160,9 @@ $(build-dir)/lib/built-in.o: $(lib-objs)
 $(build-dir)/drives/built-in.o: $(drives-objs)
 	$(call cmd,ld_builtin)
 
+$(build-dir)/mm/built-in.o: $(mm-objs)
+	$(call cmd,ld_builtin)
+
 # ========== 最终链接：kernel.elf ==========
 kernel.elf: $(builtin-all)
 	$(call cmd,ld_kernel)
@@ -176,11 +183,6 @@ config:
 .PHONY: clean
 clean:
 	$(call cmd,clean)
-
-# 深度清理（含旧构建工具产物）
-.PHONY: distclean
-distclean: clean
-	@rm -rf BuildK mnt
 
 # ========== 磁盘镜像与部署 ==========
 MNT_DIR     := ./mnt
@@ -225,21 +227,20 @@ run-debug: system
 #帮助
 .PHONY: help
 help:
-	@echo 'T001 Kernel build system (Linux 7.1.3 style)'
+	@echo 'T001 Kernel build system'
 	@echo ''
 	@echo 'Targets:'
-	@echo '  all          - Build kernel.elf (default)'
-	@echo '  clean        - Remove build/ and kernel.elf'
-	@echo '  distclean    - clean + remove old BuildK tool'
-	@echo '  config       - Generate include/config/auto.conf from Kconfig'
-	@echo '  disk         - Create bootable disk image'
-	@echo '  system       - Copy kernel.elf to disk image'
-	@echo '  run          - Build and run in QEMU'
-	@echo '  run-debug    - Build and run with GDB stub (-s -S)'
+	@echo '  all          - 构建kernel.elf (默认)'
+	@echo '  clean        - 删除build/和kernel.elf'
+	@echo '  config       - 由Kconfig生成include/config/auto.conf'
+	@echo '  disk         - 创建启动盘镜像'
+	@echo '  system       - 复制kernel.elf内核到镜像'
+	@echo '  run          - 编译并在QEMU中运行'
+	@echo '  run-debug    - 编译并在QEMU中调试'
 	@echo ''
 	@echo 'Options:'
-	@echo '  V=1          - Verbose (show full build commands)'
-	@echo '  ARCH=x86_64  - Target architecture'
+	@echo '  V=1          - 详细(显示完整的构建命令)'
+	@echo '  ARCH=x86_64  - 目标架构(默认: x86_64)'
 
 # 声明伪目标
 .PHONY: all config clean distclean disk system run run-debug help FORCE

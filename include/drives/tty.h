@@ -26,7 +26,6 @@ void TTY_PrintChar(const char c,uint32_t color);
  * @param color 颜色
  */
 void TTY_Print(const char *str,uint32_t color);
-int early_printk(const char* fmt, ...);
 
 void TTY_SetCursor(uint16_t col,uint16_t row);//设置打印位置
 void TTY_Clear();//清屏
