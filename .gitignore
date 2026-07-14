@@ -1,3 +1,7 @@
-data/
 build/
-BuildK
+kernel.elf
+mnt/
+include/config/
+.vscode/
+Copy
+System.img

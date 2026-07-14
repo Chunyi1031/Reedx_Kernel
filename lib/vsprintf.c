@@ -170,14 +170,10 @@ int vsprintf(char *buf, const char *fmt, __builtin_va_list args)
 	return str - buf;
 }
 
-/*
- * sprintf — 格式化字符串到缓冲区（可变参数包装）
- */
 int sprintf(char *buf, const char *fmt, ...)
 {
 	__builtin_va_list args;
 	int ret;
-
 	__builtin_va_start(args, fmt);
 	ret = vsprintf(buf, fmt, args);
 	__builtin_va_end(args);

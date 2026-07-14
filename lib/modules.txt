@@ -1,3 +1,0 @@
-kstring.c
-vsprintf.c
-END

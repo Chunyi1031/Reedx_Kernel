@@ -34,10 +34,9 @@ _Bool IsTransmitEmpty(uint16_t port) {
 }
 
 void SerialWriteChar(uint16_t port, char c) {
-    // 等待发送缓冲区为空
-    while(!IsTransmitEmpty(port));
-    // 发送字符
-    outb(port, (uint8_t)c);
+    if(!SerialIsInited)return;//检查是否初始化
+    while(!IsTransmitEmpty(port));//等待发送缓冲区为空
+    outb(port, (uint8_t)c);//发送字符
 }
 
 void SerialWriteString(uint16_t port, const char* str) {

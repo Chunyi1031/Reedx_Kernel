@@ -22,7 +22,7 @@ uint32_t rgb(uint8_t red, uint8_t green, uint8_t blue){
 //画点
 void DrawPiexl(uint16_t x,uint16_t y,uint32_t color){
     int index = y * SYSTEM_ScreenInfo.Width + x;
-    if(index < SYSTEM_ScreenInfo.FrameBufferSize*4 && index >= 0){
+    if(index < SYSTEM_ScreenInfo.FrameBufferSize && index >= 0){
         SYSTEM_FrameBuffer[index] = color;
     }
 }

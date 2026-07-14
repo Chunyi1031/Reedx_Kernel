@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# T001 Kernel Configuration
+#
+# 原理：
+#   Kconfig 是 Linux 内核的配置描述语言。每个 config 条目定义一个编译期
+#   开关（生成 CONFIG_<NAME> 宏），通过 make menuconfig / make config
+#   等工具生成 include/config/auto.conf，再由 Makefile include 进来。
+#
+#   T001 内核的 Kconfig 是简化版，不依赖完整 kbuild 工具链。
+#   运行 `make config` 生成 auto.conf。
+#
+# 参考：Linux 7.1.3 Kconfig 语法
+
+mainmenu "T001 Kernel Configuration"
+
+menu "General Setup"
+
+config T001_VERSION
+	string "Kernel version string"
+	default "0.1.0"
+	help
+	  T001 kernel version.  This is appended to the kernel release string
+	  and is displayed in the TTY on boot.
+
+endmenu
+
+menu "Debugging"
+
+config SERIAL_DEBUG
+	bool "Serial port debug output"
+	default y
+	help
+	  Enable early boot messages over COM1 serial port (38400 baud).
+	  Useful for debugging before the framebuffer TTY is initialized.
+
+config FRAMEBUFFER_DEBUG
+	bool "Framebuffer debug output"
+	default n
+	help
+	  Enable verbose framebuffer initialization logging.
+	  Prints pixel format info and framebuffer address to serial.
+
+endmenu
+
+menu "Drivers"
+
+config FRAMEBUFFER
+	bool "Framebuffer (GOP) support"
+	default y
+	help
+	  Enable UEFI Graphics Output Protocol framebuffer support.
+	  This is required for TTY text output on screen.
+
+config TTY
+	bool "TTY console"
+	default y
+	help
+	  Enable the TTY console layer.  Provides character output on the
+	  framebuffer with font rendering.
+
+endmenu
+
+menu "Library"
+
+config KSTRING
+	bool "String library (kstring)"
+	default y
+	help
+	  Include string manipulation functions: strcpy, strncpy, strcmp,
+	  strncmp, strlen, memset, memcpy, memmove, memcmp.
+
+config VSPRINTF
+	bool "Formatted print (vsprintf)"
+	default y
+	help
+	  Include vsprintf for formatted string output (%s, %d, %x, etc.).
+	  Required by TTY console.
+
+endmenu

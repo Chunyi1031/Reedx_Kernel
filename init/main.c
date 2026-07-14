@@ -1,7 +1,7 @@
 #include <klib.h>
-#include <drives/display.h>
 #include <desc.h>
-#include <kstring.h>
+#include <drives/display.h>
+#include <drives/tty.h>
 
 uint64_t SYSTEM_CPU_Fquency = 0;
 
@@ -10,7 +10,10 @@ _Bool LoadBootParam(BootParam* boot_param);//加载引导参数
 __attribute__((optimize("-O0")))
 void KernelStart(BootParam* boot_param){
     setup_gdt();
-    if(!LoadBootParam(boot_param))SYSTEM_STOP();
+    if(!LoadBootParam(boot_param))while(1);
+    InitSerial(SERIAL_COM1);
+    TTY_Clear();
+    TTY_Print("Hello World\n",COLOR_WHITE);
     SYSTEM_STOP();
 }
 

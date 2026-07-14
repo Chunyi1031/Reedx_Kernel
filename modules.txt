@@ -1,5 +1,0 @@
-init
-kernel
-lib
-drives
-END
