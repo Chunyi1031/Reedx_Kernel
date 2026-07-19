@@ -1,5 +1,7 @@
 /*
- * include/desc.h — x86_64 段描述符与 GDT 操作
+ * 由DeepSeek-V4-Pro参考Linux7.1.3生成
+ *
+ * include/desc.h — x86 段描述符与 GDT 操作
  *
  * 原理：
  *   GDT（Global Descriptor Table，全局描述符表）是 x86 保护模式的基石。
@@ -18,8 +20,13 @@
  *     [31:16] base[15:0]
  *     [15:0]  limit[15:0]
  *
- *   lgdt 指令加载 10 字节 GDTR（2 字节 size + 8 字节 address）。
+ *   lgdt 指令加载 10 字节 GDTR（2 字节 size + 4/8 字节 address）。
  *   加载后必须用 far jump/ret 刷新 CS，再重载其余段寄存器。
+ *
+ *   32/64 位切换：
+ *     本文件通过 types.h 中的 ARCH_X86_64 / ARCH_X86_32 宏，
+ *     使用预处理条件编译选择对应的 GDT 布局和汇编指令序列。
+ *     desc_ptr.address 使用 uintptr_t 自动适配指针宽度。
  *
  * 参考：Linux 7.1.3 arch/x86/include/asm/desc_defs.h / desc.h / segment.h
  */
@@ -32,6 +39,8 @@
 /*
  * 8 字节段描述符结构体
  * 位域顺序与硬件定义严格一致（x86 小端）
+ * 32 位和 64 位共用同一结构——硬件位布局完全相同，
+ * 区别仅在于 L（长模式）和 D（默认操作大小）标志位的组合。
  */
 struct desc_struct {
 	u16 limit0;         /* limit 低 16 位 */
@@ -50,15 +59,22 @@ struct desc_struct {
 } __attribute__((packed));
 
 /*
- * GDTR / IDTR 寄存器格式 (10 字节)
- * lgdt/lidt 指令的操作数
+ * GDTR / IDTR 寄存器格式
+ * lgdt/lidt 指令的操作数。
+ * 原理：address 字段使用 uintptr_t——在 ARCH_X86_64 下为 8 字节，
+ * 在 ARCH_X86_32 下为 4 字节，lgdt 指令根据当前模式自动识别指针宽度。
  */
 struct desc_ptr {
-	u16 size;     /* 表字节数 - 1 */
-	u64 address;  /* 表线性基址 */
+	u16 size;        /* 表字节数 - 1 */
+	uintptr_t address; /* 表线性基址 */
 } __attribute__((packed));
 
-/* ========== GDT 入口索引（遵循 Linux x86_64 布局）========== */
+/* ========== GDT 入口索引 ========== */
+#if defined(ARCH_X86_64) || defined(ARCH_AMD64)
+/*
+ * x86_64 布局（与 Linux x86_64 一致）：
+ * 保留 32 位兼容代码段，支持切换回 32 位兼容模式运行遗留代码。
+ */
 #define GDT_ENTRY_NULL          0   /* 必须为空的第 0 项 */
 #define GDT_ENTRY_KERNEL32_CS   1   /* 内核 32 位兼容代码段 */
 #define GDT_ENTRY_KERNEL_CS     2   /* 内核 64 位代码段 */
@@ -66,16 +82,36 @@ struct desc_ptr {
 #define GDT_ENTRY_USER32_CS     4   /* 用户 32 位代码段 */
 #define GDT_ENTRY_USER_DS       5   /* 用户数据段 */
 #define GDT_ENTRY_USER_CS       6   /* 用户 64 位代码段 */
+#elif defined(ARCH_X86_32) || defined(ARCH_AMD32)
+/*
+ * x86_32 布局——无长模式，仅 32 位保护模式。
+ * 代码段使用 D=1 标志（32 位默认操作大小）。
+ */
+#define GDT_ENTRY_NULL          0   /* 必须为空的第 0 项 */
+#define GDT_ENTRY_KERNEL_CS     1   /* 内核 32 位代码段 */
+#define GDT_ENTRY_KERNEL_DS     2   /* 内核数据段 */
+#define GDT_ENTRY_USER_CS       3   /* 用户 32 位代码段 */
+#define GDT_ENTRY_USER_DS       4   /* 用户数据段 */
+#else
+#error "Unknown architecture: must define ARCH_X86_64 or ARCH_X86_32"
+#endif
 
 #define GDT_ENTRIES             16  /* GDT 总条目数 */
 
 /* ========== 段选择子（selector = index * 8 + RPL）========== */
+#if defined(ARCH_X86_64) || defined(ARCH_AMD64)
 #define __KERNEL_CS     (GDT_ENTRY_KERNEL_CS * 8)
 #define __KERNEL_DS     (GDT_ENTRY_KERNEL_DS * 8)
 #define __USER_CS       (GDT_ENTRY_USER_CS * 8 + 3)
 #define __USER_DS       (GDT_ENTRY_USER_DS * 8 + 3)
 #define __USER32_CS     (GDT_ENTRY_USER32_CS * 8 + 3)
 #define __KERNEL32_CS   (GDT_ENTRY_KERNEL32_CS * 8)
+#elif defined(ARCH_X86_32) || defined(ARCH_AMD32)
+#define __KERNEL_CS     (GDT_ENTRY_KERNEL_CS * 8)
+#define __KERNEL_DS     (GDT_ENTRY_KERNEL_DS * 8)
+#define __USER_CS       (GDT_ENTRY_USER_CS * 8 + 3)
+#define __USER_DS       (GDT_ENTRY_USER_DS * 8 + 3)
+#endif
 
 /* ========== 描述符访问字节标志位 ========== */
 #define DESC_A      0x0001   /* 已访问 (Accessed) */
@@ -94,25 +130,43 @@ struct desc_ptr {
 #define DESC_G      (1 << 15) /* 粒度 4KB */
 
 /* ========== 常用段类型组合宏 ========== */
-/* 内核 64 位代码段: P|DPL0|S|E|RW|A + L */
+/*
+ * 原理：
+ *   L=1（长模式）仅在 x86_64 下有效，告知 CPU 代码段运行在 64 位模式。
+ *   D/B=1（默认 32 位操作）在 32 位保护模式下是必需的；
+ *   在 64 位模式下，数据段仍使用 D/B=1（兼容传统 32 位数据访问），
+ *   代码段则使用 L=1 替代 D/B。
+ *   G=1（4KB 粒度）配合 limit=0xFFFFF 覆盖完整的 4GB 地址空间。
+ *
+ *   DESC_CODE64:  P|DPL0|S|E|RW|A + L       （内核 64 位代码）
+ *   DESC_CODE32:  P|DPL0|S|E|RW|A + D/B + G  （内核 32 位代码）
+ *   DESC_DATA:    P|DPL0|S|RW|A + D/B + G    （内核数据，平坦 4GB）
+ */
+
+/* 内核 64 位代码段——仅 x86_64 长模式 */
 #define DESC_CODE64         (DESC_A | DESC_RW | DESC_E | DESC_S | DESC_P | DESC_DPL0 | DESC_L)
-/* 内核数据段: P|DPL0|S|RW|A + D/B + G (平坦 4GB) */
+/* 内核 32 位代码段——x86_32 保护模式 / x86_64 兼容模式 */
+#define DESC_CODE32         (DESC_A | DESC_RW | DESC_E | DESC_S | DESC_P | DESC_DPL0 | DESC_DB | DESC_G)
+/* 内核数据段——通用，两架构共用（D/B=1 在 32 位和 64 位下含义相同） */
 #define DESC_DATA           (DESC_A | DESC_RW | DESC_S | DESC_P | DESC_DPL0 | DESC_DB | DESC_G)
-/* 用户 64 位代码段 */
+
+/* 用户态对应 */
 #define DESC_USER_CODE64    (DESC_A | DESC_RW | DESC_E | DESC_S | DESC_P | DESC_DPL3 | DESC_L)
-/* 用户数据段 */
-#define DESC_USER_DATA      (DESC_A | DESC_RW | DESC_S | DESC_P | DESC_DPL3 | DESC_DB | DESC_G)
-/* 用户 32 位代码段（兼容模式用） */
 #define DESC_USER_CODE32    (DESC_A | DESC_RW | DESC_E | DESC_S | DESC_P | DESC_DPL3 | DESC_DB | DESC_G)
-/* 内核 32 位代码段（兼容模式用） */
-#define DESC_KERNEL_CODE32  (DESC_A | DESC_RW | DESC_E | DESC_S | DESC_P | DESC_DPL0 | DESC_DB | DESC_G)
+#define DESC_USER_DATA      (DESC_A | DESC_RW | DESC_S | DESC_P | DESC_DPL3 | DESC_DB | DESC_G)
+
+/* 向后兼容别名 */
+#define DESC_KERNEL_CODE32  DESC_CODE32
+#define DESC_USER_CODE32_   DESC_USER_CODE32
 
 /*
  * GDT_ENTRY_INIT — 从 flags/base/limit 构造一个 desc_struct 初始化器
  *
  * flags:  16 位组合标志 (低 8 位 = Access Byte, 高 8 位 = Flags Nibble)
- * base:   32 位段基址（64 位模式下通常为 0）
+ * base:   32 位段基址（通常为 0，平坦模式）
  * limit:  20 位段限长（粒度为字节时最大 1MB，4KB 时最大 4GB）
+ *
+ * 此宏与架构无关——硬件位域布局在 32 位和 64 位下完全一致。
  */
 #define GDT_ENTRY_INIT(flags, base, limit)                          \
 	{                                                               \

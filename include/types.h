@@ -1,7 +1,10 @@
 #ifndef _TYPES_H_
 #define _TYPES_H_
 
+#if !defined(ARCH_X86_64) && !defined(ARCH_AMD64) && \
+    !defined(ARCH_X86_32) && !defined(ARCH_AMD32)
 #define ARCH_X86_64
+#endif
 
 typedef signed char        int8_t;
 typedef unsigned char      uint8_t;
@@ -20,6 +23,7 @@ typedef uint64_t           size_t;
     #error "Unknown architecture"
 #endif
 
+//兼容Linux源码
 typedef uint8_t            u8;
 typedef uint16_t           u16;
 typedef uint32_t           u32;

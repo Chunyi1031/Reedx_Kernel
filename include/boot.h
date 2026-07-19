@@ -3,24 +3,21 @@
 
 #include <types.h>
 
-typedef struct e820_entry {
-    uint64_t addr;//起始地址
-    uint64_t size;//大小
-    uint32_t type;//类型
-} __attribute__((packed)) e820_entry;
-
 typedef struct ScreenInfo {
     uint32_t Width;//屏幕宽
     uint32_t Height;//屏幕高
     void* FrameBufferBase;//帧缓冲区基地址
     uint64_t FrameBufferSize;//帧缓冲区大小
-} ScreenInfo;
+} __attribute__((packed)) ScreenInfo;
 
-typedef struct MemoryInfo {
-    e820_entry* e820_entries;//E820条目指针
-    uint32_t e820_entries_count;//E820条目数量
-    uint64_t e820_entries_size;//E820条目大小
-} MemoryInfo;
+//内存映射
+typedef struct MEMORY_MAP{
+    uint64_t MapSize;
+    uint64_t DescriptorSize;
+    uint32_t DescriptorVersion;
+    uint32_t padding; 
+    void* Buffer;
+} __attribute__((packed)) UEFI_MEMORY_MAP;
 
 typedef struct DiskInfo{
     void* BootDiskHandle;//UEFI句柄
@@ -30,17 +27,22 @@ typedef struct DiskInfo{
     //设备路径
     EFI_DEVICE_PATH_PROTOCOL *DevicePath;
     int DevicePathSize;
-} DiskInfo;
+} __attribute__((packed)) DiskInfo;
 
 typedef struct BootParam{
     ScreenInfo screen_info;//屏幕信息
-    MemoryInfo memory_info;//内存信息
+    UEFI_MEMORY_MAP memory_info;//内存信息
     uint64_t CPU_Fquency;//参考CPU频率
     void* RSDP;//ACPI RSDP地址
     void* Font_Buffer;//字体缓冲区地址
+    uint64_t Font_Size;//字体大小
     void* KernelStartAddress;//内核起始地址
+    uint64_t KernelSize;//内核大小
     void* KernelStackAddress;//内核栈地址
+    uint64_t KernelStackSize;//内核栈大小
     DiskInfo disk_info;//磁盘信息
-} BootParam;
+} __attribute__((packed)) BootParam;
+
+extern BootParam *SYSTEM_BootParam;
 
 #endif

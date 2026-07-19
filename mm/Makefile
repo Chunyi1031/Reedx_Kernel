@@ -1,1 +1,1 @@
-obj-y := bitmap.o
+obj-y := bitmap.o pmm.o

@@ -1,15 +1,21 @@
 /*
+ * 由DeepSeek-V4-Pro参考Linux7.1.3生成
+ *
  * kernel/desc/gdt.c — GDT 初始化与加载
  *
  * 原理：
- *   1. 定义静态 GDT 表（16 项，参考 Linux x86_64 布局）
- *   2. 使用 GDT_ENTRY_INIT 宏逐项填充描述符
- *   3. 构造 10 字节 GDTR 指针，执行 lgdt 加载
- *   4. 通过远返回（lretq）刷新 CS 进入新的 64 位代码段
- *   5. 重载 DS/ES/FS/GS/SS 全部数据段寄存器
+ *   1. 定义静态 GDT 表，使用 GDT_ENTRY_INIT 宏逐项填充描述符
+ *   2. 构造 GDTR 指针，执行 lgdt 加载
+ *   3. 通过远返回刷新 CS 进入目标代码段
+ *   4. 重载 DS/ES/FS/GS/SS 全部数据段寄存器
  *
- *   注意：在 64 位长模式下 CS/DS/ES/SS 的基址和限长被硬件忽略，
- *   但 FS/GS 的基址仍然有效（通过 MSR 或描述符），这里全部设为平坦模式。
+ *   32/64 位切换：
+ *     ARCH_X86_64:  使用 pushq/lretq，GDT 含 64 位代码段和 32 位兼容段
+ *     ARCH_X86_32:  使用 pushl/lret，GDT 仅含 32 位保护模式段
+ *
+ *   注意：
+ *     在 64 位长模式下 CS/DS/ES/SS 的基址和限长被硬件忽略，
+ *     但 FS/GS 的基址仍然有效（通过 MSR 或描述符），这里全部设为平坦模式。
  *
  * 参考：Linux 7.1.3 arch/x86/kernel/cpu/common.c 中的 GDT 初始化
  */
@@ -18,7 +24,12 @@
 /*
  * GDT 表 — 必须在全局数据段中定义，确保 lgdt 时地址有效
  *
- * 布局（与 Linux x86_64 一致）：
+ * base=0, limit=0xFFFFF, G=1 → 覆盖 4GB，32 位和 64 位均足够。
+ * 64 位模式下需要完整的 64 位虚拟地址空间时，后续可通过 TSS/LDT 扩展。
+ */
+#if defined(ARCH_X86_64) || defined(ARCH_AMD64)
+/*
+ * x86_64 布局（与 Linux x86_64 一致）：
  *   [0]  NULL         — 硬件要求第一项必须为零
  *   [1]  KERNEL32_CS  — 内核 32 位代码段（兼容模式切换到 32 位）
  *   [2]  KERNEL_CS    — 内核 64 位代码段（当前运行环境）
@@ -27,18 +38,34 @@
  *   [5]  USER_DS      — 用户数据段
  *   [6]  USER_CS      — 用户 64 位代码段
  *   [7-15]            — 保留（TSS/LDT/percpu 等后续扩展）
- *
- * base=0, limit=0xFFFFF, G=1 → 覆盖 4GB，64 位模式足够
  */
 static struct desc_struct gdt_table[GDT_ENTRIES] __attribute__((aligned(16))) = {
 	[GDT_ENTRY_NULL]         = GDT_ENTRY_INIT(0, 0, 0),
-	[GDT_ENTRY_KERNEL32_CS]  = GDT_ENTRY_INIT(DESC_KERNEL_CODE32, 0, 0xFFFFF),
-	[GDT_ENTRY_KERNEL_CS]    = GDT_ENTRY_INIT(DESC_CODE64,        0, 0xFFFFF),
-	[GDT_ENTRY_KERNEL_DS]    = GDT_ENTRY_INIT(DESC_DATA,          0, 0xFFFFF),
-	[GDT_ENTRY_USER32_CS]    = GDT_ENTRY_INIT(DESC_USER_CODE32,   0, 0xFFFFF),
-	[GDT_ENTRY_USER_DS]      = GDT_ENTRY_INIT(DESC_USER_DATA,     0, 0xFFFFF),
-	[GDT_ENTRY_USER_CS]      = GDT_ENTRY_INIT(DESC_USER_CODE64,   0, 0xFFFFF),
+	[GDT_ENTRY_KERNEL32_CS]  = GDT_ENTRY_INIT(DESC_CODE32,      0, 0xFFFFF),
+	[GDT_ENTRY_KERNEL_CS]    = GDT_ENTRY_INIT(DESC_CODE64,      0, 0xFFFFF),
+	[GDT_ENTRY_KERNEL_DS]    = GDT_ENTRY_INIT(DESC_DATA,        0, 0xFFFFF),
+	[GDT_ENTRY_USER32_CS]    = GDT_ENTRY_INIT(DESC_USER_CODE32, 0, 0xFFFFF),
+	[GDT_ENTRY_USER_DS]      = GDT_ENTRY_INIT(DESC_USER_DATA,   0, 0xFFFFF),
+	[GDT_ENTRY_USER_CS]      = GDT_ENTRY_INIT(DESC_USER_CODE64, 0, 0xFFFFF),
 };
+#elif defined(ARCH_X86_32) || defined(ARCH_AMD32)
+/*
+ * x86_32 布局（32 位保护模式标准布局）：
+ *   [0]  NULL       — 硬件要求第一项必须为零
+ *   [1]  KERNEL_CS  — 内核 32 位代码段（D=1 保护模式）
+ *   [2]  KERNEL_DS  — 内核数据段（平坦 4GB）
+ *   [3]  USER_CS    — 用户 32 位代码段（DPL=3）
+ *   [4]  USER_DS    — 用户数据段（DPL=3）
+ *   [5-15]          — 保留（TSS/LDT 等后续扩展）
+ */
+static struct desc_struct gdt_table[GDT_ENTRIES] __attribute__((aligned(16))) = {
+	[GDT_ENTRY_NULL]       = GDT_ENTRY_INIT(0, 0, 0),
+	[GDT_ENTRY_KERNEL_CS]  = GDT_ENTRY_INIT(DESC_CODE32,      0, 0xFFFFF),
+	[GDT_ENTRY_KERNEL_DS]  = GDT_ENTRY_INIT(DESC_DATA,        0, 0xFFFFF),
+	[GDT_ENTRY_USER_CS]    = GDT_ENTRY_INIT(DESC_USER_CODE32, 0, 0xFFFFF),
+	[GDT_ENTRY_USER_DS]    = GDT_ENTRY_INIT(DESC_USER_DATA,   0, 0xFFFFF),
+};
+#endif
 
 /*
  * setup_gdt — 加载 GDT 并刷新全部段寄存器
@@ -48,16 +75,21 @@ static struct desc_struct gdt_table[GDT_ENTRIES] __attribute__((aligned(16))) = 
  * 步骤：
  *   1. 构造 GDTR 指针（表大小 = GDT_ENTRIES * 8 - 1）
  *   2. 执行 lgdt 指令加载新 GDT 到 GDTR
- *   3. lretq 远返回到 1f 标签，同时将 CS 设为 __KERNEL_CS
- *   4. 依次重载 DS/ES/FS/GS/SS 为 __KERNEL_DS（平坦数据段）
+ *   3. 远返回到 1f 标签，同时将 CS 设为目标选择子
+ *   4. 依次重载 DS/ES/FS/GS/SS 为数据段选择子
  */
 __attribute__((optimize("-O0")))
 void setup_gdt(void)
 {
 	struct desc_ptr gdtr;
-	/* GDTR.size = 表字节数 - 1 */
+	/*
+	 * GDTR.size = 表字节数 - 1。
+	 * GDTR.address 使用 uintptr_t 强制转换——在 ARCH_X86_64 下为
+	 * 64 位指针，在 ARCH_X86_32 下为 32 位指针，lgdt 自动适配。
+	 */
 	gdtr.size = (u16)(sizeof(gdt_table) - 1);
-	gdtr.address = (u64)&gdt_table;
+	gdtr.address = (uintptr_t)&gdt_table;
+
 	/* lgdt 加载新 GDT 基址 */
 	__asm__ volatile (
 		"lgdt %0\n\t"
@@ -65,11 +97,18 @@ void setup_gdt(void)
 		: "m" (gdtr)
 		: "memory"
 	);
+
 	/*
-	 * 远返回刷新 CS:
-	 *   push 新 CS 选择子 → push 返回地址(标签 1) → lretq 弹出 RIP 和 CS
-	 * 在 64 位模式下必须使用 lretq（REX.W 前缀的 far ret）
+	 * 远返回刷新 CS：
+	 *   push 新 CS 选择子 → push 返回地址(标签 1) → lret 弹出 IP 和 CS
+	 *
+	 * 原理：
+	 *   ARCH_X86_64: 使用 pushq（8 字节操作数）+ lretq（REX.W 前缀）
+	 *    因为 64 位模式下栈操作和返回地址都是 8 字节。
+	 *   ARCH_X86_32: 使用 pushl（4 字节操作数）+ lret
+	 *    因为 32 位模式下栈操作和返回地址都是 4 字节。
 	 */
+#if defined(ARCH_X86_64) || defined(ARCH_AMD64)
 	__asm__ volatile (
 		"pushq %0\n\t"
 		"pushq $1f\n\t"
@@ -84,4 +123,20 @@ void setup_gdt(void)
 		: "i" ((u16)__KERNEL_CS), "r" ((u16)__KERNEL_DS)
 		: "memory"
 	);
+#elif defined(ARCH_X86_32) || defined(ARCH_AMD32)
+	__asm__ volatile (
+		"pushl %0\n\t"
+		"pushl $1f\n\t"
+		"lret\n"
+		"1:\n\t"
+		"movw %1, %%ds\n\t"
+		"movw %1, %%es\n\t"
+		"movw %1, %%fs\n\t"
+		"movw %1, %%gs\n\t"
+		"movw %1, %%ss\n\t"
+		:
+		: "i" ((u16)__KERNEL_CS), "r" ((u16)__KERNEL_DS)
+		: "memory"
+	);
+#endif
 }

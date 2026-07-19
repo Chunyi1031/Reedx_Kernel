@@ -55,7 +55,7 @@ KBUILD_CFLAGS := -I$(srctree) -I$(srctree)/include
 # 内核基础标志（参考 Linux 7.1.3 arch/x86/Makefile）
 KBUILD_CFLAGS += -ffreestanding -fno-stack-protector -mno-red-zone
 KBUILD_CFLAGS += -fno-builtin -nostdlib -m64 -g
-KBUILD_CFLAGS += -Wall -Wno-unused-function -Wno-unused-variable
+KBUILD_CFLAGS += -Wall -Wno-unused-function -Wno-unused-variable -O0
 
 # 链接标志（参考 Linux 7.1.3 arch/x86/kernel/vmlinux.lds）
 KBUILD_LDFLAGS := -nostdlib -static -T $(srctree)/kernel64.ld
@@ -214,6 +214,14 @@ system: kernel.elf
 	sudo mount -o loop,offset=1048576 $(SYSTEM_DISK) $(MNT_DIR)
 	sudo cp kernel.elf $(MNT_DIR)/SYS/KERNEL.ELF
 	sudo umount $(MNT_DIR)
+
+update-disk: 
+	sudo mount -o loop,offset=1048576 $(SYSTEM_DISK) $(MNT_DIR)
+	sudo cp data/BOOTX64.EFI $(MNT_DIR)/EFI/BOOT/BOOTX64.EFI
+	sudo cp data/font.bin $(MNT_DIR)/SYS/KNLFNT.BIN
+	sudo cp kernel.elf $(MNT_DIR)/SYS/KERNEL.ELF
+	sudo umount $(MNT_DIR)
+.PHONY: update-disk
 
 # ========== QEMU 运行 ==========
 .PHONY: run

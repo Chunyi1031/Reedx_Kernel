@@ -3,38 +3,43 @@
 #include <drives/display.h>
 #include <drives/tty.h>
 #include <print.h>
-#include <mm/bitmap.h>
+#include <mm/pmm.h>
 
+BootParam *SYSTEM_BootParam = NULL;
 uint64_t SYSTEM_CPU_Fquency = 0;
+UEFI_MEMORY_MAP *SYSTEM_MemoryMap = NULL;
+
+extern char __bss_start[], __bss_end[];
 
 _Bool LoadBootParam(BootParam* boot_param);//加载引导参数
 int InitSystem();//初始化化系统
 
-__attribute__((optimize("-O0")))
 void KernelStart(BootParam* boot_param){
+    memset(__bss_start, 0, __bss_end - __bss_start);
     setup_gdt();
     if(!LoadBootParam(boot_param))SYSTEM_STOP();
     int status = InitSystem();
     if(status != 0){
-        print_ok();
+        print_error();
         early_printk("Kernel init failed:%d\n",status);
         SYSTEM_STOP();
     }
-    bitmap_t bitmap;
-    uint8_t bits[2];
-    BitmapInit(&bitmap,bits,16,false);
-    early_printk("%d\n",BitmapGetBit(&bitmap,8));
-    BitmapSetBits(&bitmap,8,1,true);
-    early_printk("%d %d %d\n",BitmapGetBit(&bitmap,7),BitmapGetBit(&bitmap,8),BitmapGetBit(&bitmap,9));
+    void* a = Pmm_Malloc(1);
+    Pmm_Free(a,1);
+    a = Pmm_Malloc(1);
+    void* b = Pmm_Malloc(10);
     SYSTEM_STOP();
 }
 
 _Bool LoadBootParam(BootParam* boot_param){
     if(!boot_param)return false;
+    SYSTEM_BootParam = boot_param;
     //屏幕数据
     SYSTEM_ScreenInfo = boot_param->screen_info;
     SYSTEM_FrameBuffer = (uint32_t*)SYSTEM_ScreenInfo.FrameBufferBase;
     kfont_data = (uint8_t*)boot_param->Font_Buffer;
+    //内存映射
+    SYSTEM_MemoryMap = &boot_param->memory_info;
     SYSTEM_CPU_Fquency = 2000000000;//CPU参考频率
     return true;
 }
@@ -42,5 +47,6 @@ _Bool LoadBootParam(BootParam* boot_param){
 int InitSystem(){
     InitSerial(SERIAL_COM1);
     TTY_Clear();
+    if(Init_Physical_Memory_Manager() != 0)return false;
     return 0;
 }

@@ -26,26 +26,23 @@ void BitmapInit(bitmap_t *bitmap,uint8_t *bits,uint32_t bit_size,_Bool value){
 //分配连续size个值为value的位
 int BitmapAllocBits(bitmap_t *bitmap,_Bool value,uint32_t size){
     int sidx = 0;
-    int ridx = -1;
     while(sidx < bitmap->bit_size){
         if(BitmapGetBit(bitmap,sidx) != value){
             sidx ++;
             continue;
         }
-        ridx = sidx;
+        int ridx = sidx;
         int i;
-        for(i = 1;i < size && sidx < bitmap->bit_size;i ++){
-            if(BitmapGetBit(bitmap,sidx++) != value){
-                ridx = -1;
-                break;
-            }
+        for(i = 1;i < size && sidx + 1 < bitmap->bit_size;i ++){
+            if(BitmapGetBit(bitmap,++sidx) != value)break;
         }
         if(i >= size){
             BitmapSetBits(bitmap,ridx,size,1);
             return ridx;
         }
+        sidx = ridx + 1;
     }
-    return ridx;
+    return -1;
 }
 
 //设置比特位
@@ -63,4 +60,12 @@ void BitmapSetBits(bitmap_t *bitmap,uint32_t index,uint32_t size,_Bool value){
 //设置单个比特位为1
 _Bool BitmapIsSet(bitmap_t *bitmap,uint32_t index){
     return BitmapGetBit(bitmap,index);
+}
+
+int GetCountOf_InBitmap(bitmap_t *bitmap,_Bool value){
+    int count = 0;
+    for(int i = 0;i < bitmap->bit_size;i ++){
+        if(BitmapGetBit(bitmap,i) == value)count ++;
+    }
+    return count;
 }

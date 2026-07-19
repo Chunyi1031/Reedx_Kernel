@@ -5,3 +5,4 @@ include/config/
 .vscode/
 Copy
 System.img
+kernel.elf
