@@ -143,6 +143,14 @@ $(build-dir)/%.o: $(srctree)/%.c
 	@mkdir -p $(dir $@)
 	$(call cmd,cc_o_c)
 
+# --- 汇编编译 (.S → .o) ---
+quiet_cmd_as_s_S = AS
+      cmd_as_s_S = $(CC) $(KBUILD_CFLAGS) -c -o $@ $<
+
+$(build-dir)/%.o: $(srctree)/%.S
+	@mkdir -p $(dir $@)
+	$(call cmd,as_s_S)
+
 # ========== 目录级链接规则 ==========
 # 每个目录的 .o 文件通过 ld -r 合并为单个 built-in.o
 # 原理：ld -r（部分链接/可重定位链接）将多个 .o 合并为一个，

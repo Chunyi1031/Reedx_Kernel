@@ -1,5 +1,6 @@
 #include <klib.h>
 #include <desc.h>
+#include <idt.h>
 #include <drives/display.h>
 #include <drives/tty.h>
 #include <print.h>
@@ -17,6 +18,7 @@ int InitSystem();//初始化化系统
 void KernelStart(BootParam* boot_param){
     memset(__bss_start, 0, __bss_end - __bss_start);
     setup_gdt();
+    setup_idt();
     if(!LoadBootParam(boot_param))SYSTEM_STOP();
     int status = InitSystem();
     if(status != 0){
@@ -24,10 +26,9 @@ void KernelStart(BootParam* boot_param){
         early_printk("Kernel init failed:%d\n",status);
         SYSTEM_STOP();
     }
-    void* a = Pmm_Malloc(1);
-    Pmm_Free(a,1);
-    a = Pmm_Malloc(1);
-    void* b = Pmm_Malloc(10);
+    setup_exceptions();
+    int* a = (int*)0xffff800000000000;
+    *a = 1;
     SYSTEM_STOP();
 }
 
