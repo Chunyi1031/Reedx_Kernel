@@ -6,7 +6,7 @@
                 "${workspaceFolder}/include/**"
             ],
             "defines": [],
-            "compilerPath": "/usr/bin/gcc",
+            "compilerPath": "/usr/bin/x86_64-linux-gnu-gcc",
             "cStandard": "c99",
             "cppStandard": "gnu++17",
             "intelliSenseMode": "linux-gcc-x64"
