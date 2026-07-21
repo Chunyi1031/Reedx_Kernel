@@ -84,6 +84,6 @@ void interrupt_GP(uint64_t error_code, uint64_t rip){
 
 void setup_exceptions(void){
 	for (int i = 0; i < NUM_EXCEPTION_VECTORS; i++)set_trap_gate(i, exc_entries_start + i * 16);
-	set_trap_gate(INT_GATE_PF,int_13_handler);
+	set_trap_gate(INT_GATE_GP,int_13_handler);
 	set_trap_gate(INT_GATE_PF,int_14_handler);
 }

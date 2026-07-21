@@ -5,6 +5,7 @@
 #include <boot.h>
 #include <serial.h>
 #include <kstring.h>
+#include <io.h>
 
 extern uint64_t SYSTEM_CPU_Fquency;
 

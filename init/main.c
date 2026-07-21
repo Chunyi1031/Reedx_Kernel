@@ -1,10 +1,13 @@
 #include <klib.h>
 #include <desc.h>
 #include <idt.h>
+#include <irq.h>
 #include <drives/display.h>
 #include <drives/tty.h>
 #include <print.h>
 #include <mm/pmm.h>
+#include <delay.h>
+#include <rtc.h>
 
 BootParam *SYSTEM_BootParam = NULL;
 uint64_t SYSTEM_CPU_Fquency = 0;
@@ -27,8 +30,15 @@ void KernelStart(BootParam* boot_param){
         SYSTEM_STOP();
     }
     setup_exceptions();
-    int* a = (int*)0xffff800000000000;
-    *a = 1;
+    tsc_calibrate();
+    rtc_init();
+    InitAPIC();
+    sti();
+    mdelay(1000);
+    early_printk("Ticks: %u\n", (uint32_t)SYSTEM_TimerTicks);
+    rtc_time_t time;
+    rtc_get_local(&time);
+    early_printk("%d/%d/%d %d:%d:%d %s\n",time.year,time.month,time.day,time.hour,time.minute,time.second,weekdays[time.wday]);
     SYSTEM_STOP();
 }
 

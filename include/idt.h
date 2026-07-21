@@ -15,8 +15,8 @@
  *              arch/x86/kernel/idt.c (idt_setup_from_table)
  */
 
-#ifndef _ASM_IDT_H_
-#define _ASM_IDT_H_
+#ifndef _INT_IDT_H_
+#define _INT_IDT_H_
 
 #include <types.h>
 #include <desc.h>

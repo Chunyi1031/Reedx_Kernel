@@ -99,10 +99,11 @@ int_13_handler:
 	pushq %r13
 	pushq %r14
 	pushq %r15
-	sub $8, %rsp 
-	movq 120(%rsp), %rdi
-	movq 128(%rsp), %rsi
+	sub $8, %rsp
+	movq 128(%rsp), %rdi
+	movq 136(%rsp), %rsi
 	call interrupt_GP
+	ud2
 
 int_14_handler:
 	cli
