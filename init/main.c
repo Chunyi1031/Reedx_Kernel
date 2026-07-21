@@ -4,6 +4,7 @@
 #include <irq.h>
 #include <drives/display.h>
 #include <drives/tty.h>
+#include <drives/ps2kbd.h>
 #include <print.h>
 #include <mm/pmm.h>
 #include <delay.h>
@@ -33,12 +34,16 @@ void KernelStart(BootParam* boot_param){
     tsc_calibrate();
     rtc_init();
     InitAPIC();
+    KeyboardInit();
     sti();
-    mdelay(1000);
+    mdelay(100);
     early_printk("Ticks: %u\n", (uint32_t)SYSTEM_TimerTicks);
     rtc_time_t time;
     rtc_get_local(&time);
     early_printk("%d/%d/%d %d:%d:%d %s\n",time.year,time.month,time.day,time.hour,time.minute,time.second,weekdays[time.wday]);
+    while(1){
+        early_printk("%c",GetKey());
+    }
     SYSTEM_STOP();
 }
 

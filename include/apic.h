@@ -118,4 +118,7 @@ uint32_t lapic_timer_calibrate(void);//使用PIT校准APIC定时器，返回Hz
 void lapic_timer_init(uint32_t freq_hz, uint8_t vector);//以指定频率启动周期定时器
 void lapic_timer_set_divisor(uint32_t divisor);//设置分频器
 
+//I/O APIC初始化
+void ioapic_init(void);//配置I/O APIC红重定向表，使能键盘IRQ
+
 #endif

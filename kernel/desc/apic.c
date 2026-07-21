@@ -9,6 +9,7 @@
  */
 
 #include <apic.h>
+#include <irq.h>
 #include <drives/timer.h>
 #include <print.h>
 #include <delay.h>
@@ -112,4 +113,58 @@ void lapic_timer_init(uint32_t freq_hz, uint8_t vector)
 	//配置LVT Timer
 	lapic_write(LAPIC_LVT_TIMER,vector | LAPIC_LVT_TIMER_PERIODIC | LAPIC_LVT_DM_FIXED);
 	lapic_write(LAPIC_TIMER_INITCNT, ticks_per_interrupt);
+}
+
+//I/O APIC MMIO基址（xAPIC模式）
+static const uintptr_t ioapic_base = IO_APIC_DEFAULT_PHYS_BASE;
+
+//从I/O APIC寄存器读32位值：先写索引到IOREGSEL，再从IOWIN读数据
+static uint32_t ioapic_read(uint32_t reg)
+{
+	*(volatile uint32_t *)(ioapic_base + IOAPIC_IOREGSEL) = reg;
+	return *(volatile uint32_t *)(ioapic_base + IOAPIC_IOWIN);
+}
+
+//向I/O APIC寄存器写32位值：先写索引到IOREGSEL，再写数据到IOWIN
+static void ioapic_write(uint32_t reg, uint32_t val)
+{
+	*(volatile uint32_t *)(ioapic_base + IOAPIC_IOREGSEL) = reg;
+	*(volatile uint32_t *)(ioapic_base + IOAPIC_IOWIN) = val;
+}
+
+//读取BSP的LAPIC ID（APIC ID寄存器bits 24-31）
+static uint8_t lapic_get_id(void)
+{
+	return (uint8_t)(lapic_read(LAPIC_ID) >> 24);
+}
+
+//配置I/O APIC重定向表项：将ISA IRQ映射到指定中断向量
+static void ioapic_set_irq(uint8_t irq, uint8_t vector, _Bool unmask)
+{
+	uint32_t idx_low = IOAPIC_REDTBL_BASE + irq * 2;  //重定向表项N的低32位索引
+	uint32_t idx_high = idx_low + 1;                    //重定向表项N的高32位索引
+	uint32_t low, high;
+	uint8_t bsp_id = lapic_get_id();
+	//低32位：向量 + 固定交付 + 物理目标 + 边沿触发 + 高电平有效
+	low = vector & IOAPIC_REDTBL_VECTOR_MASK;
+	low |= IOAPIC_REDTBL_DELIVERY_MODE_FIXED;
+	low |= IOAPIC_REDTBL_DEST_MODE_PHYSICAL;
+	//键盘是边沿触发，不设LEVEL位即默认为边沿
+	if (!unmask)
+		low |= IOAPIC_REDTBL_MASK;
+	//高32位：目标APIC ID放在bits 24-27（对应xAPIC 8位目标字段的高4位）
+	high = ((uint32_t)bsp_id << 24);
+	ioapic_write(idx_low, low);
+	ioapic_write(idx_high, high);
+}
+
+//初始化I/O APIC：将键盘IRQ（ISA IRQ 1）路由到对应中断向量并取消屏蔽
+void ioapic_init(void)
+{
+	int i;
+	//遍历16条ISA IRQ，全部设定路由，仅键盘IRQ取消屏蔽
+	for (i = 0; i < 16; i++) {
+		uint8_t vector = IRQ_VECTOR_BASE + (uint8_t)i;
+		ioapic_set_irq((uint8_t)i, vector, i == IRQ_KEYBOARD);
+	}
 }
