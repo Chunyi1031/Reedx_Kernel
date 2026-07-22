@@ -1,5 +1,6 @@
 #include <acpi/acpi.h>
 #include <klib.h>
+#include <print.h>
 
 sys_acpi_info SYSTEM_ACPI;
 

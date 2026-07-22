@@ -10,6 +10,7 @@
 #include <delay.h>
 #include <rtc.h>
 #include <acpi/acpi.h>
+#include <acpi/power.h>
 
 BootParam *SYSTEM_BootParam = NULL;
 uint64_t SYSTEM_CPU_Fquency = 0;
@@ -43,9 +44,12 @@ void KernelStart(BootParam* boot_param){
     rtc_get_local(&time);
     early_printk("Time: %d/%d/%d %d:%d:%d %s\n",time.year,time.month,time.day,time.hour,time.minute,time.second,weekdays[time.wday]);
     early_printk("ACPI: RSDP=%p XSDT=%p FADT=%p MADT=%p\n",SYSTEM_ACPI.rsdp,SYSTEM_ACPI.xsdt,SYSTEM_ACPI.fadt,SYSTEM_ACPI.madt);
-    while(1){
-        early_printk("%c",GetKey());
-    }
+    early_printk("reset:%x,%p\n",SYSTEM_ACPI.fadt->reset_register.space_id,SYSTEM_ACPI.fadt->reset_register.address);
+    mdelay(10000);
+    early_printk("Type 'r' to reboot or type 's' to shutdown.\n");
+    char key = GetKey();
+    if(key == 'r')SYSTEM_Restart();
+    if(key == 's')SYSTEM_Shutdown();
     SYSTEM_STOP();
 }
 

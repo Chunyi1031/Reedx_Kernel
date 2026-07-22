@@ -35,6 +35,20 @@ typedef u64 acpi_physical_address;
 //表签名比较宏
 #define ACPI_COMPARE_NAMESEG(a, b)  (*(u32 *)(a) == *(u32 *)(b))
 
+//acpi_generic_address Space ID
+enum AcpiGenericAddressSpacsID {
+	ACPI_GAS_SYSTEM_MEMORY 		= 0,
+	ACPI_GAS_SYSTEM_IO 			= 1,
+	ACPI_GAS_PCI				= 2,
+	ACPI_GAS_EC					= 3,
+	ACPI_GAS_SYSTEM_MB			= 4,
+	ACPI_GAS_CMOS_SYSTEM		= 5,
+	ACPI_GAS_PCI_BAR			= 6,
+	ACPI_GAS_IPMI				= 7,
+	ACPI_GAS_UIOI				= 8,
+	ACPI_GAS_SERIAL				= 9
+};
+
 #pragma pack(1)
 
 struct acpi_table_header {
