@@ -2,10 +2,12 @@
 
 uint16_t TTY_PrintCol = 0;
 uint16_t TTY_PrintRow = 0;
+_Bool TTY_ScreenEnabled = false;
 ConsoleStyle CurrentConsoleStyle = {COLOR_WHITE,COLOR_BLACK};
 
 void TTY_PrintChar(const char c,uint32_t color){
     SerialWriteChar(SERIAL_COM1,c);
+    if(!TTY_ScreenEnabled)return;
     uint16_t spl = TTY_PrintRow;
     uint16_t spr = TTY_PrintCol;
     //如果过界
@@ -45,5 +47,6 @@ void TTY_SetCursor(uint16_t col,uint16_t row){
 }
 
 void TTY_Clear(){
+    if(!TTY_ScreenEnabled)return;
     fillRect(0,0,SYSTEM_ScreenInfo.Width,SYSTEM_ScreenInfo.Height,CurrentConsoleStyle.BgColor);
 }

@@ -1,4 +1,5 @@
 #include <drives/display.h>
+#include <font.h>
 
 ScreenInfo SYSTEM_ScreenInfo;
 uint32_t*  SYSTEM_FrameBuffer = NULL;
@@ -11,7 +12,6 @@ static const char fontlist[94] = {
     '`','~','.',',','/','\\',';','\'',':','"','<','>','(',')','[',']','{','}','#','$','%','&','*',' ',
     '!','|','@','-','+','=','_','?'
 };
-uint8_t *kfont_data = NULL;//字体数据
 
 __attribute__((optimize("-O0")))
 //rgb转16进制
@@ -37,7 +37,7 @@ void fillRect(uint16_t x,uint16_t y,uint16_t w,uint16_t h,uint32_t color){
 }
 
 //字符（串）处理
-//显示字符
+//显示字符 —— 使用内置字体（include/font.h），不再依赖引导程序加载
 void DrawChar(char c,int x,int y,uint32_t color){
     int char_index = 84;
     for(int i = 0;i < 94;i ++){
@@ -48,7 +48,7 @@ void DrawChar(char c,int x,int y,uint32_t color){
     }
     int data_offset = char_index * 32;
     for (int row = 0; row < 16; row++) {
-        uint16_t row_data = (kfont_data[data_offset + row*2] << 8) | kfont_data[data_offset + row*2 + 1];
+        uint16_t row_data = (font[data_offset + row*2] << 8) | font[data_offset + row*2 + 1];
         for (int col = 0; col < 10; col++) {
             if ((row_data & (0x8000 >> col)) != 0) {
                 DrawPiexl(x + col, y + row, color);

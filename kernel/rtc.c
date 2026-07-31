@@ -5,12 +5,24 @@
  *              drivers/rtc/rtc-mc146818-lib.c (mc146818_avoid_UIP)
  *              drivers/rtc/lib.c (rtc_tm_to_time64 / rtc_time64_to_tm)
  *              Tomohiko Sakamoto (day-of-week algorithm)
+ *              UEFI Specification v2.10 §8.3 (GetTime), §4.6 (Table Signatures)
  */
 
 #include <rtc.h>
 #include <io.h>
 #include <irq.h>
+#include <efi.h>
+#include <print.h>
 #include <drives/timer.h>
+
+/* 外部引用——由 init/main.c 的 LoadBootParam() 设置 */
+extern EFI_RUNTIME_SERVICES *UEFI_RuntimeServices;
+extern _Bool UEFI_UseRT;
+
+/* UEFI 运行时服务表签名 ("RUNTSERV" ASCII，小端) */
+#define EFI_RT_SERVICES_SIGNATURE  0x56524553544e5552ULL
+#define RTC_EFI_YEAR_MIN  2020  // 合理年份下限
+#define RTC_EFI_YEAR_MAX  2100  // 合理年份上限
 
 //CMOS RTC寄存器（MC146818 / Intel ICH 兼容）
 #define CMOS_INDEX      0x70
@@ -31,6 +43,7 @@
 #define RTC_24H         (1 << 1)
 
 static uint64_t boot_epoch = 0;//启动时的UTC Unix时间戳
+_Bool rtc_efi_available = false;//UEFI 运行时服务 GetTime 是否可用
 
 //读CMOS 寄存器
 static uint8_t cmos_read(uint8_t reg){
@@ -167,9 +180,61 @@ static void cmos_read_time(rtc_time_t *tm){
 	tm->dst = is_dst(tm->year, tm->month, tm->day, tm->hour, tm->wday);
 }
 
+/*
+ * 检查 UEFI 运行时服务表签名是否有效。
+ * 原理：ExitBootServices 后引导服务内存被回收（填充 0xAF），
+ * 若 RuntimeServices 表本身或其函数指针指向已回收内存，
+ * 调用会返回垃圾数据。通过签名校验 + 年份范围校验双重保险。
+ */
+static _Bool rtc_validate_efi_rt(void){
+	if (!UEFI_UseRT) return false;
+	if (!UEFI_RuntimeServices) return false;
+	if (UEFI_RuntimeServices->Hdr.Signature != EFI_RT_SERVICES_SIGNATURE) {
+		return false;
+	}
+	if (!UEFI_RuntimeServices->GetTime) return false;
+	return true;
+}
+
+/*
+ * 通过 UEFI Runtime Services GetTime() 获取当前时间。
+ * 返回 true 表示成功且数值合理，false 表示不可用/失败/数值异常。
+ */
+static _Bool rtc_read_efi(rtc_time_t *tm){
+	EFI_TIME et;
+	EFI_STATUS s;
+	if (!rtc_efi_available) return false;
+	__builtin_memset(&et, 0, sizeof(et));
+	s = UEFI_RuntimeServices->GetTime(&et, NULL);
+	if (s != 0) {
+		rtc_efi_available = false;
+		return false;
+	}
+	if (et.Year < RTC_EFI_YEAR_MIN || et.Year > RTC_EFI_YEAR_MAX) {
+		rtc_efi_available = false;
+		return false;
+	}
+	if (et.Month < 1 || et.Month > 12 || et.Day < 1 || et.Day > 31) {
+		rtc_efi_available = false;
+		return false;
+	}
+	tm->year   = et.Year;
+	tm->month  = et.Month;
+	tm->day    = et.Day;
+	tm->hour   = et.Hour;
+	tm->minute = et.Minute;
+	tm->second = et.Second;
+	tm->wday   = compute_wday(et.Year, et.Month, et.Day);
+	tm->dst    = et.Daylight;
+	return true;
+}
+
 void rtc_init(void){
 	rtc_time_t tm;
 	uint64_t raw_epoch;
+	/* 签名校验：排除 ExitBootServices 后被回收的无效 RuntimeServices 指针 */
+	rtc_efi_available = rtc_validate_efi_rt();
+	/* 始终从 CMOS 读取一次作为回退基准 */
 	cmos_read_time(&tm);
 	raw_epoch = date_to_epoch(tm.year, tm.month, tm.day, tm.hour, tm.minute, tm.second);
 #if RTC_IS_UTC
@@ -180,6 +245,11 @@ void rtc_init(void){
 }
 
 uint64_t rtc_get_epoch(void){
+	if (rtc_efi_available) {
+		rtc_time_t tm;
+		if (rtc_read_efi(&tm))
+			return date_to_epoch(tm.year, tm.month, tm.day, tm.hour, tm.minute, tm.second);
+	}
 	return boot_epoch + SYSTEM_TimerTicks / OS_TICK_HZ;
 }
 
@@ -188,10 +258,12 @@ void rtc_epoch_to_utc(uint64_t epoch, rtc_time_t *tm){
 }
 
 void rtc_get_utc(rtc_time_t *tm){
+	if (rtc_read_efi(tm)) return;
 	epoch_to_date(rtc_get_epoch(), tm);
 }
 
 void rtc_get_local(rtc_time_t *tm){
+	if (rtc_read_efi(tm)) return;
 	uint64_t local_epoch;
 	local_epoch = rtc_get_epoch() + TIMEZONE_OFFSET_HOURS * 3600;
 	epoch_to_date(local_epoch, tm);

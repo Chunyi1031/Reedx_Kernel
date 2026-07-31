@@ -214,7 +214,7 @@ disk:
 	sudo mkdir -p $(MNT_DIR)/EFI/BOOT
 	sudo mkdir $(MNT_DIR)/SYS
 	sudo cp data/BOOTX64.EFI $(MNT_DIR)/EFI/BOOT/BOOTX64.EFI
-	sudo cp data/font.bin $(MNT_DIR)/SYS/KNLFNT.BIN
+	sudo cp data/BOOTCFG.TXT $(MNT_DIR)/EFI/BOOT/BOOTCFG.TXT
 	sudo umount $(MNT_DIR)
 
 .PHONY: system
@@ -226,7 +226,7 @@ system: kernel.elf
 update-disk: 
 	sudo mount -o loop,offset=1048576 $(SYSTEM_DISK) $(MNT_DIR)
 	sudo cp data/BOOTX64.EFI $(MNT_DIR)/EFI/BOOT/BOOTX64.EFI
-	sudo cp data/font.bin $(MNT_DIR)/SYS/KNLFNT.BIN
+	sudo cp data/BOOTCFG.TXT $(MNT_DIR)/EFI/BOOT/BOOTCFG.TXT
 	sudo cp kernel.elf $(MNT_DIR)/SYS/KERNEL.ELF
 	sudo umount $(MNT_DIR)
 .PHONY: update-disk
@@ -234,11 +234,11 @@ update-disk:
 # ========== QEMU 运行 ==========
 .PHONY: run
 run: system
-	qemu-system-x86_64 -m 1G -bios OVMF.fd -hda $(SYSTEM_DISK)
+	qemu-system-x86_64 -m 1G -bios ./OVMF.fd -hda $(SYSTEM_DISK)
 
 .PHONY: run-debug
 run-debug: system
-	qemu-system-x86_64 -m 1G -bios OVMF.fd -hda $(SYSTEM_DISK) -s -S
+	qemu-system-x86_64 -m 1G -bios ./OVMF.fd -hda $(SYSTEM_DISK) -s -S
 
 #帮助
 .PHONY: help

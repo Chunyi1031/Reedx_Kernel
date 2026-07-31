@@ -36,7 +36,6 @@
 typedef struct UEFI_MEMORY_DESCRIPTOR
 {
     uint32_t Type;           // 内存类型（如可用内存、保留内存等）
-    uint32_t Pad;            // 填充字段，用于对齐
     uintptr_t PhysicalStart; // 物理起始地址
     uintptr_t VirtualStart;  // 虚拟起始地址
     uint64_t NumberOfPages;  // 页数量

@@ -56,8 +56,8 @@ int Init_Physical_Memory_Manager() {
         early_printk("Physical Memory Manager initialization failed: UEFI Memory Map not found\n");
         return 1;
     }
-    //设置位置
-    MemDescAddr = (OS_MEMORY_DESCRIPTOR*)(SYSTEM_BootParam->KernelStartAddress+SYSTEM_BootParam->KernelSize);
+    //设置位置 —— KernelAddress 替代旧 KernelStartAddress
+    MemDescAddr = (OS_MEMORY_DESCRIPTOR*)(SYSTEM_BootParam->KernelAddress+SYSTEM_BootParam->KernelSize);
     MemDescAddr = (OS_MEMORY_DESCRIPTOR*)(((uintptr_t)MemDescAddr + PAGE_SIZE - 1)& ~(PAGE_SIZE - 1));
     if (!MemDescAddr) {
         print_error();

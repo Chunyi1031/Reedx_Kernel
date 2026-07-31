@@ -31,7 +31,9 @@ typedef struct {
 	uint8_t  dst;
 } rtc_time_t;
 
-static const char* weekdays[7] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Saturday"};
+extern _Bool rtc_efi_available;    //UEFI 运行时服务 GetTime 是否可用
+
+static const char* weekdays[7] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
 
 void rtc_init(void);//启动时从CMOS RTC读取一次 UTC基准时间戳
 uint64_t rtc_get_epoch(void);//返回当前UTC Unix时间戳

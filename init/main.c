@@ -5,6 +5,7 @@
 #include <drives/display.h>
 #include <drives/tty.h>
 #include <drives/ps2kbd.h>
+#include <efi.h>
 #include <print.h>
 #include <mm/pmm.h>
 #include <delay.h>
@@ -15,6 +16,8 @@
 BootParam *SYSTEM_BootParam = NULL;
 uint64_t SYSTEM_CPU_Fquency = 0;
 UEFI_MEMORY_MAP *SYSTEM_MemoryMap = NULL;
+EFI_RUNTIME_SERVICES *UEFI_RuntimeServices = NULL;
+_Bool UEFI_UseRT = false;
 
 extern char __bss_start[], __bss_end[];
 
@@ -35,6 +38,7 @@ void KernelStart(BootParam* boot_param){
     setup_exceptions();
     tsc_calibrate();
     rtc_init();
+    early_printk("Time source: %s\n", rtc_efi_available ? "UEFI Runtime Services" : "CMOS RTC");
     InitAPIC();
     KeyboardInit();
     sti();
@@ -56,15 +60,26 @@ void KernelStart(BootParam* boot_param){
 _Bool LoadBootParam(BootParam* boot_param){
     if(!boot_param)return false;
     SYSTEM_BootParam = boot_param;
-    //屏幕数据
-    SYSTEM_ScreenInfo = boot_param->screen_info;
+    //屏幕信息
+    SYSTEM_ScreenInfo.Width = boot_param->ScreenInfo.Width;
+    SYSTEM_ScreenInfo.Height = boot_param->ScreenInfo.Hieght;
+    SYSTEM_ScreenInfo.FrameBufferBase = (void*)boot_param->ScreenInfo.FrameBuffer;
+    SYSTEM_ScreenInfo.FrameBufferSize = boot_param->ScreenInfo.FrameBuffer_Size;
     SYSTEM_FrameBuffer = (uint32_t*)SYSTEM_ScreenInfo.FrameBufferBase;
-    kfont_data = (uint8_t*)boot_param->Font_Buffer;
+    //屏幕日志开关
+    TTY_ScreenEnabled = boot_param->PrintLog;
     //内存映射
-    SYSTEM_MemoryMap = &boot_param->memory_info;
-    SYSTEM_CPU_Fquency = 2000000000;//CPU参考频率
+    SYSTEM_MemoryMap = &boot_param->MemoryInfo;
     //ACPI
     SYSTEM_ACPI.rsdp = (struct acpi_table_rsdp*)boot_param->RSDP;
+    //运行时服务
+    if(boot_param){
+        UEFI_RuntimeServices = boot_param->RuntimeServices;
+        UEFI_UseRT = true;
+    }else{
+        UEFI_RuntimeServices = NULL;
+        UEFI_UseRT = false;
+    }
     return true;
 }
 

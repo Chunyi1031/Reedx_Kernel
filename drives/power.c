@@ -3,6 +3,7 @@
 #include <delay.h>
 #include <io.h>
 #include <print.h>
+#include <efi.h>
 
 void poweroff_acpi(struct acpi_table_fadt* fadt){
     //检查FADT表
@@ -136,8 +137,14 @@ void SYSTEM_Restart(){
 	early_printk("The machine will reboot!\n");
 	mdelay(500);
 	cli();
+	if(UEFI_UseRT){
+		UEFI_RuntimeServices->ResetSystem(EfiResetCold, 0, 0, NULL);
+		mdelay(100);
+		early_printk("UEFI Runtime Services restart failed!Try to ACPI shutdown\n");
+	}
 	reset_acpi(fadt);
 	early_printk("ACPI reboot failed!Try to VM shutdown\n");
 	outb(0x64, 0xFE);
+	sti();
 	early_printk("Restart failed!\n");
 }

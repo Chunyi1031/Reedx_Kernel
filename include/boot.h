@@ -3,44 +3,58 @@
 
 #include <types.h>
 
+/* 内核内部屏幕信息 —— 简洁便于驱动使用
+ * 由 LoadBootParam() 从引导程序的 BootScreenInfo 逐字段填充 */
 typedef struct ScreenInfo {
-    uint32_t Width;//屏幕宽
-    uint32_t Height;//屏幕高
-    void* FrameBufferBase;//帧缓冲区基地址
-    uint64_t FrameBufferSize;//帧缓冲区大小
+    uint32_t Width;              /* 屏幕宽 */
+    uint32_t Height;             /* 屏幕高 */
+    void*    FrameBufferBase;    /* 帧缓冲区基地址 */
+    uint64_t FrameBufferSize;   /* 帧缓冲区大小 */
 } __attribute__((packed)) ScreenInfo;
 
-//内存映射
-typedef struct MEMORY_MAP{
+/* 引导程序屏幕信息 —— 与引导程序 screen_info_t 布局严格一致
+ * 原理：此结构体嵌在 BootParam 中，引导程序直接按此布局写入，
+ * 内核通过 LoadBootParam 逐字段拷贝到 ScreenInfo */
+typedef struct BootScreenInfo {
+    _Bool     IsAvailable;       /* 屏幕可用标志 */
+    uint32_t* FrameBuffer;       /* 帧缓冲区地址 */
+    uint64_t  FrameBuffer_Size;  /* 帧缓冲区大小 */
+    uint32_t  Hieght;            /* 屏幕高 */
+    uint32_t  Width;             /* 屏幕宽 */
+    uint32_t  PixelFormat;       /* 像素格式 */
+} __attribute__((packed)) BootScreenInfo;
+
+/* 内存映射 —— 与引导程序 memory_info_t 布局严格一致 */
+typedef struct MEMORY_MAP {
     uint64_t MapSize;
     uint64_t DescriptorSize;
     uint32_t DescriptorVersion;
-    uint32_t padding; 
-    void* Buffer;
+    void*    Buffer;
 } __attribute__((packed)) UEFI_MEMORY_MAP;
 
-typedef struct DiskInfo{
-    void* BootDiskHandle;//UEFI句柄
-    uint64_t DiskSize;//磁盘总大小（字节）
-    uint64_t PartitionStart;//分区起始LBA）
-    EFI_GUID PartitionGuid;//GPT分区GUID
-    //设备路径
+/* 磁盘信息 —— 与引导程序 disk_info_t 布局严格一致 */
+typedef struct DiskInfo {
+    _Bool    IsGpt;
+    EFI_GUID PartitionGuid;
     EFI_DEVICE_PATH_PROTOCOL *DevicePath;
-    int DevicePathSize;
 } __attribute__((packed)) DiskInfo;
 
-typedef struct BootParam{
-    ScreenInfo screen_info;//屏幕信息
-    UEFI_MEMORY_MAP memory_info;//内存信息
-    uint64_t CPU_Fquency;//参考CPU频率
-    void* RSDP;//ACPI RSDP地址
-    void* Font_Buffer;//字体缓冲区地址
-    uint64_t Font_Size;//字体大小
-    void* KernelStartAddress;//内核起始地址
-    uint64_t KernelSize;//内核大小
-    void* KernelStackAddress;//内核栈地址
-    uint64_t KernelStackSize;//内核栈大小
-    DiskInfo disk_info;//磁盘信息
+/* 内核启动参数 —— 与引导程序 boot_param_t 字节精确匹配
+ * 原理：引导程序在栈上构建此结构体后直接跳转到 KernelStart(BootParam*)，
+ * 内核通过指针访问，任何字段偏移错误都会导致崩溃。*/
+typedef struct BootParam {
+    UEFI_MEMORY_MAP   MemoryInfo;
+    BootScreenInfo    ScreenInfo;
+    DiskInfo          DiskInfo;
+    void*             RSDP;
+    void*             SMBIOS;
+    void*             RuntimeServices;
+    uint64_t          RandomSeed;
+    uint64_t          KernelAddress;
+    uint64_t          KernelSize;
+    uint64_t          KernelStackAddress;
+    uint64_t          KernelStackSize;
+    _Bool             PrintLog;
 } __attribute__((packed)) BootParam;
 
 extern BootParam *SYSTEM_BootParam;

@@ -6,3 +6,4 @@ include/config/
 Copy
 System.img
 kernel.elf
+./OVMF.fd

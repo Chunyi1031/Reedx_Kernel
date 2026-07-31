@@ -6,8 +6,6 @@
 extern ScreenInfo SYSTEM_ScreenInfo;
 extern uint32_t*  SYSTEM_FrameBuffer;
 
-extern uint8_t *kfont_data;//字体数据
-
 //颜色:
 #define COLOR_RED 0xFFFF0000
 #define COLOR_GREEN 0xFF00FF00
