@@ -17,12 +17,21 @@
 #define MSR_IA32_APICBASE           0x0000001B
 #define MSR_IA32_APICBASE_ENABLE    (1 << 11)//APIC全局使能
 #define MSR_IA32_APICBASE_BSP       (1 << 8)//BSP标志
+#define MSR_IA32_APICBASE_X2APIC    (1 << 10)//x2APIC模式使能
 #define MSR_IA32_APICBASE_BASE_MASK 0xFFFFFFFFFF000ULL//物理基址（bits MAXPHYSADDR:12，覆盖到 35:12）
 
 #define APIC_DEFAULT_PHYS_BASE      0xFEE00000 //LAPIC默认物理基址（MSR 未初始化时的回退值）
 #define IO_APIC_DEFAULT_PHYS_BASE   0xFEC00000 //IOAPIC默认物理基址（无MADT时的回退值）
 
-//LAPIC寄存器偏移（相对基址）
+//x2APIC MSR基址：MSR = 0x800 + (寄存器偏移 >> 4)
+#define MSR_X2APIC_BASE             0x800
+#define X2APIC_MSR(reg)             (MSR_X2APIC_BASE + ((reg) >> 4))
+
+//CPUID x2APIC特性位
+#define CPUID_LEAF_FEATURES         1
+#define CPUID_FEATURE_X2APIC        (1 << 21)//ECX bit 21
+
+//LAPIC寄存器偏移（相对基址，xAPIC/x2APIC 共用相同偏移，访问方式不同）
 #define LAPIC_ID                    0x020   //APIC ID寄存器
 #define LAPIC_VERSION               0x030   //APIC版本寄存器
 #define     GET_LAPIC_VERSION(x)    ((x) & 0xFF)
@@ -128,11 +137,12 @@ struct apic_override {
 };
 
 //从MADT解析出的完整APIC配置信息
-//原理：汇总所有type 0/1/2/5子表，为APIC初始化提供正确的硬件地址和中断路由
+//原理：汇总所有type 0/1/2/5/9子表，为APIC初始化提供正确的硬件地址和中断路由
 struct apic_madt_info {
 	uint32_t  lapic_addr;                 //MADT表头中的LAPIC物理基址（通常0xFEE00000）
 	uint32_t  lapic_addr_override;        //type 5子表给出的覆盖值（0表示无覆盖）
-	uint8_t   bsp_lapic_id;               //BSP的LAPIC ID（从type 0子表的第一个可用CPU获取）
+	uint32_t  bsp_lapic_id;               //BSP的LAPIC ID（优先用x2APIC的32位ID，否则用xAPIC的8位）
+	uint8_t   has_x2apic_entries;         //MADT中存在x2APIC条目（暗示硬件支持x2APIC）
 	int       num_ioapics;                //已发现的I/O APIC数量
 	struct    apic_ioapic ioapics[MAX_IO_APICS];
 	int       num_overrides;              //中断重映射条目数量
@@ -143,37 +153,23 @@ struct apic_madt_info {
 
 extern struct apic_madt_info APIC_MADT;
 
-//LAPIC MMIO寄存器读写
+//LAPIC寄存器读写（自动分发xAPIC MMIO / x2APIC MSR）
 uint32_t lapic_read(uint32_t reg);
 void lapic_write(uint32_t reg, uint32_t val);
 
 //LAPIC基本操作
 uintptr_t lapic_get_base(void);//读取 MSR 获取 LAPIC 物理基址
-void lapic_enable(void);//使能LAPIC(设置Spurious寄存器)
+void lapic_enable(void);//使能LAPIC，尝试切换到x2APIC模式
 void lapic_send_eoi(void);//发送EOI
+uint32_t lapic_get_id(void);//获取当前LAPIC ID（xAPIC返回8位，x2APIC返回32位）
+_Bool lapic_is_x2apic(void);//是否处于x2APIC模式
 
 //APIC定时器
-uint32_t lapic_timer_calibrate(void);//使用PIT校准APIC定时器，返回Hz
-/**
- * @brief 启动APIC周期定时器
- *
- * @param freq_hz 定时器频率 (Hz)，例如 100 表示每 10ms 触发一次
- * @param vector  中断向量号，应为在 IDT 中注册的有效向量
- *
- * 参考：Intel SDM Vol.3 §10.5.4 APIC Timer
- */
+uint32_t lapic_timer_calibrate(void);//使用TSC校准APIC定时器，返回Hz
 void lapic_timer_init(uint32_t freq_hz, uint8_t vector);
 void lapic_timer_set_divisor(uint32_t divisor);//设置分频器
 
-
-/**
- * @brief 从MADT表解析APIC硬件信息
- *
- * @param madt 已校验的MADT表指针
- * @return 0 成功，-1 参数为空
- */
 int apic_parse_madt(struct acpi_table_madt *madt);
-
 void ioapic_init(void);//I/O APIC初始化
 
 #endif

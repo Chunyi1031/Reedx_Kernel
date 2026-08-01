@@ -32,6 +32,7 @@ void irq_dispatch(uint32_t vector){
 	switch (vector) {
 	case IRQ_TIMER:
 		SYSTEM_TimerTicks++;
+		print_to_console(1);
 		break;
 	case IRQ_KEYBOARD:
 		Keyboard_IRQ();

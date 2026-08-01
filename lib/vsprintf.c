@@ -98,11 +98,12 @@ int vsprintf(char *buf, const char *fmt, __builtin_va_list args)
 			fmt++;
 		}
 		width = skip_atoi(&fmt);
-		/* 长度修饰符 */
+		/* 长度修饰符：%l=64位(有符号扩展), %ll同%l（x86_64上long即为64位） */
 		long_flag = 0;
 		if (*fmt == 'l') {
 			long_flag = 1;
 			fmt++;
+			if (*fmt == 'l')fmt++;//%ll → 消耗第二个l
 		}
 
 		base = 10;
