@@ -11,6 +11,7 @@
 #include <irq.h>
 #include <drives/timer.h>
 #include <drives/ps2kbd.h>
+#include <print.h>
 
 volatile uint64_t SYSTEM_TimerTicks = 0;
 
@@ -44,11 +45,13 @@ void irq_dispatch(uint32_t vector){
 //APIC中断系统初始化
 void InitAPIC(void){
 	uint32_t apic_timer_freq;
-	int i;
-	pic_disable();
-	lapic_enable();
-	apic_timer_freq = lapic_timer_calibrate();
-	lapic_timer_init(apic_timer_freq, IRQ_VECTOR_BASE + IRQ_TIMER);
+	int i, ret;
+	ret = apic_parse_madt(SYSTEM_ACPI.madt);//从MADT解析APIC
+	if (ret != 0)early_printk("APIC MADT parse failed: %d, using defaults\n", ret);
+	pic_disable();//禁用PIC
+	lapic_enable();//启用LAPIC
+	apic_timer_freq = lapic_timer_calibrate();//校准APIC定时器频率
+	lapic_timer_init(apic_timer_freq, IRQ_VECTOR_BASE + IRQ_TIMER);//设置定时器中断
 	ioapic_init();
-	for (i = 0; i < NUM_IRQ_VECTORS; i++)set_intr_gate(IRQ_VECTOR_BASE + i,(void *)(irq_entries_start + i * 16));
+	for (i = 0; i < NUM_IRQ_VECTORS; i++)set_intr_gate(IRQ_VECTOR_BASE + i,(void *)(irq_entries_start + i * 16));//设置IDT
 }

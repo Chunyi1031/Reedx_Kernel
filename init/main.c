@@ -38,7 +38,6 @@ void KernelStart(BootParam* boot_param){
     setup_exceptions();
     tsc_calibrate();
     rtc_init();
-    early_printk("Time source: %s\n", rtc_efi_available ? "UEFI Runtime Services" : "CMOS RTC");
     InitAPIC();
     KeyboardInit();
     sti();

@@ -9,12 +9,13 @@
 
 #include <drives/timer.h>
 #include <io.h>
+#include <print.h>
 
 uint64_t tsc_freq_hz = 0;
 
 static inline uint64_t rdtsc_serialized(void){
 	uint32_t low, high;
-	__asm__ volatile ("lfence\n\trdtsc" : "=a"(low), "=d"(high));
+	__asm__ volatile ("lfence\n	rdtsc" : "=a"(low), "=d"(high));
 	return ((uint64_t)high << 32) | low;
 }
 
@@ -40,7 +41,18 @@ void tsc_calibrate(void){
 	tsc_end = rdtsc_serialized();
 	tsc_diff = tsc_end - tsc_start;
 	pit_tsc_freq = tsc_diff * (1000 / CALIBRATION_MS);
-	if (pit_tsc_freq > SYSTEM_CPU_Fquency / 2 &&pit_tsc_freq < SYSTEM_CPU_Fquency * 2)tsc_freq_hz = pit_tsc_freq;
-	else tsc_freq_hz = SYSTEM_CPU_Fquency;
+	early_printk("TSC calib: PIT=%lu Hz, CPU_freq=%lu Hz\n",
+	             (unsigned long)pit_tsc_freq, (unsigned long)SYSTEM_CPU_Fquency);
+	//原理：SYSTEM_CPU_Fquency==0表示未从UEFI获取CPU频率，此时交叉验证毫无意义，
+	//      直接信任PIT测量结果。只有当CPU频率已知时才做±2x合理性检查。
+	if (SYSTEM_CPU_Fquency == 0) {
+		tsc_freq_hz = pit_tsc_freq;
+	} else if (pit_tsc_freq > SYSTEM_CPU_Fquency / 2
+	           && pit_tsc_freq < SYSTEM_CPU_Fquency * 2) {
+		tsc_freq_hz = pit_tsc_freq;
+	} else {
+		tsc_freq_hz = SYSTEM_CPU_Fquency;
+	}
 	if (tsc_freq_hz < 1000000)tsc_freq_hz = 1000000000;
+	early_printk("TSC final: %lu Hz\n", (unsigned long)tsc_freq_hz);
 }

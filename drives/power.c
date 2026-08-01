@@ -137,7 +137,7 @@ void SYSTEM_Restart(){
 	early_printk("The machine will reboot!\n");
 	mdelay(500);
 	cli();
-	if(UEFI_UseRT){
+	if(UEFI_UseRT && UEFI_RuntimeServices->ResetSystem){
 		UEFI_RuntimeServices->ResetSystem(EfiResetCold, 0, 0, NULL);
 		mdelay(100);
 		early_printk("UEFI Runtime Services restart failed!Try to ACPI shutdown\n");
