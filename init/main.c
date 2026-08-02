@@ -12,6 +12,7 @@
 #include <rtc.h>
 #include <acpi/acpi.h>
 #include <acpi/power.h>
+#include <task.h>
 
 BootParam *SYSTEM_BootParam = NULL;
 uint64_t SYSTEM_CPU_Fquency = 0;
@@ -23,6 +24,7 @@ extern char __bss_start[], __bss_end[];
 
 _Bool LoadBootParam(BootParam* boot_param);//加载引导参数
 int InitSystem();//初始化化系统
+void test_thread();
 
 void KernelStart(BootParam* boot_param){
     memset(__bss_start, 0, __bss_end - __bss_start);
@@ -39,23 +41,38 @@ void KernelStart(BootParam* boot_param){
     tsc_calibrate();
     rtc_init();
     InitAPIC();
+    TaskInit();
     InitPrintk();
     KeyboardInit();
     sti();
-    mdelay(100);
-    early_printk("Ticks: %u\n", (uint32_t)SYSTEM_TimerTicks);
     rtc_time_t time;
     rtc_get_local(&time);
     printk("Time: %d/%d/%d %d:%d:%d %s\n",time.year,time.month,time.day,time.hour,time.minute,time.second,weekdays[time.wday]);
     printk("ACPI: RSDP=%p XSDT=%p FADT=%p MADT=%p\n",SYSTEM_ACPI.rsdp,SYSTEM_ACPI.xsdt,SYSTEM_ACPI.fadt,SYSTEM_ACPI.madt);
-    printk("reset:%x,%p\n",SYSTEM_ACPI.fadt->reset_register.space_id,SYSTEM_ACPI.fadt->reset_register.address);
-    printk(PRINTK_INFO"Shutdown in 10 seconds.\n");
-    mdelay(10000);
-    printk(PRINTK_INFO"Type 'r' to reboot or type 's' to shutdown.\n");
+    CreateKernelThread(test_thread,4096,"test");
+    task_struct* list[10];
+    int count;
+    count = TaskGetAll(list,10);
+    for(int i = 0;i < count;i ++){
+        printk("PID:%d  Stack:%p  Name:%s\n",list[i]->pid,list[i]->kernel_stack,list[i]->name);
+    }
+    mdelay(5000);
+    printk(PRINTK_INFO"Type 'r' to reboot or type 's' to shutdown.");
     char key = GetKey();
     if(key == 'r')SYSTEM_Restart();
     if(key == 's')SYSTEM_Shutdown();
     SYSTEM_STOP();
+}
+
+void test_thread(){
+    while(1){
+        fillRect(400,400,10,10,COLOR_RED);
+        mdelay(1000);
+        fillRect(400,400,10,10,COLOR_GREEN);
+        mdelay(1000);
+        fillRect(400,400,10,10,COLOR_BLUE);
+        mdelay(1000);
+    }
 }
 
 _Bool LoadBootParam(BootParam* boot_param){

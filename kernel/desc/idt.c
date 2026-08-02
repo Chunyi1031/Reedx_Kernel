@@ -12,12 +12,9 @@
 #include <serial.h>
 #include <klib.h>
 
-//参考Linux 7.1.3 arch/x86/kernel/idt.c中idt_table：static gate_desc idt_table[IDT_ENTRIES] __page_aligned_bss;
 static struct gate_desc idt_table[IDT_ENTRIES] __attribute__((aligned(4096)));
 
-//参考Linux 7.1.3 arch/x86/include/asm/desc.h中native_write_idt_entry
-static inline void write_idt_entry(struct gate_desc *idt, int entry, const struct gate_desc *gate)
-{
+static inline void write_idt_entry(struct gate_desc *idt, int entry, const struct gate_desc *gate){
 	idt[entry] = *gate;
 }
 

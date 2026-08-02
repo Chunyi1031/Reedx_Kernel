@@ -1,6 +1,7 @@
 #include <print.h>
 #include <mm/pmm.h>
 #include <idt.h>
+#include <task.h>
 
 int early_printk(const char* fmt, ...){
 	char buf[256];
@@ -49,6 +50,12 @@ static const char *level_strings[] = {
 	[PRINTK_LVL_DEBUG]     = "DEBUG",
 };
 
+void task_putlog(){
+	while(1){
+		print_to_console(1);
+	}
+}
+
 int InitPrintk(){
 	PRINTK_text_buffer = Pmm_Malloc((PRINTK_TEXT_BUFFER_SIZE + 4095) & ~4095);
 	PRINTK_log_info = Pmm_Malloc(((sizeof(PRINTK_LOG_INFO_t) * PRINTK_COUNT_MAX) & ~4095) + 4095);
@@ -59,6 +66,7 @@ int InitPrintk(){
 	info_head = 0;
 	info_count = 0;
 	console_read = 0;
+	CreateKernelThread(task_putlog,8192,"Kernel Log");
 	return 0;
 }
 

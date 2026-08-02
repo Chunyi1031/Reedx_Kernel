@@ -12,6 +12,7 @@
 #include <drives/timer.h>
 #include <drives/ps2kbd.h>
 #include <print.h>
+#include <task.h>
 
 volatile uint64_t SYSTEM_TimerTicks = 0;
 
@@ -32,8 +33,9 @@ void irq_dispatch(uint32_t vector){
 	switch (vector) {
 	case IRQ_TIMER:
 		SYSTEM_TimerTicks++;
-		print_to_console(1);
-		break;
+		send_eoi((uint8_t)vector);
+		schedule();
+		return;
 	case IRQ_KEYBOARD:
 		Keyboard_IRQ();
 		break;
