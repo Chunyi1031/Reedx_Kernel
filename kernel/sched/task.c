@@ -1,10 +1,13 @@
 #include <task.h>
 #include <mm/pmm.h>
 #include <idt.h>
+#include <irq.h>
+#include <spinlock.h>
 
 static struct list_node task_list_head = {&task_list_head, &task_list_head};//任务链表头
 task_struct* current_task = NULL;//当前运行的任务
 task_struct* kernel_task = NULL;//内核任务
+task_struct* idle_task = NULL;//idle任务
 
 //在head后面插入节点（头插法）
 static inline void list_add(struct list_node *node, struct list_node *head) {
@@ -66,7 +69,7 @@ void TaskInit(){
     //将内核任务设为当前任务
     current_task = kernel_task;
     current_task->state = TASK_RUNNING;
-    CreateKernelThread(idle_thread,4096,"Idle Task");//创建IDLE任务
+    idle_task = CreateKernelThread(idle_thread,4096,"Idle Task");//创建IDLE任务
 }
 
 void TaskListAdd(task_struct* t){
@@ -157,9 +160,9 @@ void TaskExit(){
 
 void TaskKill(task_struct* t){
     if(!t)return;
+    if((t == kernel_task) || (t == idle_task))return;//不能杀死内核任务和idle任务
     t->state = TASK_TERMINATED;//标记为终止
-    //如果杀死的是当前任务，立即调度
-    if(t == current_task)schedule();
+    if(t == current_task)schedule();//如果杀死的是当前任务，立即调度
     cli();
     TaskListRemove(t);//从就绪队列移除
     if(t->kernel_stack)Pmm_Free(t->kernel_stack,t->stack_size / 4096);//回收栈
@@ -167,6 +170,118 @@ void TaskKill(task_struct* t){
     memset(t,0,4096);
     sti();
 }
+
+/*DeepSeek V4 Pro*/
+static DEFINE_WAIT_QUEUE(timeout_wq);//超时等待队列
+
+//将当前任务挂到等待队列并主动让出CPU
+void sleep_on(wait_queue_head_t *wq){
+    if(!wq || !current_task)return;
+    list_add_tail(&current_task->wait_node, wq);
+    current_task->state = TASK_BLOCKED;
+    schedule();
+}
+
+//从等待队列中唤醒一个任务
+static void wake_up_one(wait_queue_head_t *wq){
+    task_struct *task;
+    if(!wq || list_empty(wq))return;
+    task = container_of(wq->next, task_struct, wait_node);
+    list_del(&task->wait_node);
+    task->wake_up_ticks = 0;
+    if(task->state == TASK_BLOCKED)TaskListAdd(task);
+}
+
+//唤醒等待队列上的一个任务
+void wake_up(wait_queue_head_t *wq){
+    wake_up_one(wq);
+}
+
+//唤醒等待队列上的全部任务
+void wake_up_all(wait_queue_head_t *wq){
+    while(!list_empty(wq))wake_up_one(wq);
+}
+
+//睡眠指定毫秒(精度受限于OS_TICK_HZ=100,即10ms粒度)
+void msleep(uint64_t ms){
+    if(ms == 0 || !current_task)return;
+    current_task->wake_up_ticks = SYSTEM_TimerTicks + (ms + 9) / 10;
+    sleep_on(&timeout_wq);
+}
+
+//遍历超时队列,将已到期的任务移到就绪队列
+void timeout_wake_check(void){
+    task_struct *task;
+    struct list_node *pos;
+    if(list_empty(&timeout_wq))return;
+    list_for_each(pos, &timeout_wq) {
+    	task = container_of(pos, task_struct, wait_node);
+    	if(task->wake_up_ticks > 0 && task->wake_up_ticks <= SYSTEM_TimerTicks){
+    		list_del(&task->wait_node);
+    		task->wake_up_ticks = 0;
+    		if(task->state == TASK_BLOCKED)TaskListAdd(task);
+    		if(list_empty(&timeout_wq))return;
+    		pos = &timeout_wq;
+    	}
+    }
+}
+
+//初始化信号量
+void sem_init(semaphore_t *sem, int initial_count){
+	sem->count = initial_count;
+	spin_lock_init(&sem->lock);
+	sem->wq.prev = &sem->wq;
+	sem->wq.next = &sem->wq;
+}
+
+//P操作:获取信号量,若count<=0则阻塞等待
+void sem_down(semaphore_t *sem){
+	unsigned long flags;
+	if(!sem)return;
+	spin_lock_irqsave(&sem->lock, flags);
+	sem->count--;
+	if(sem->count < 0){
+		list_add_tail(&current_task->wait_node, &sem->wq);
+		current_task->state = TASK_BLOCKED;
+		spin_unlock_irqrestore(&sem->lock, flags);
+		schedule();
+		return;
+	}
+	spin_unlock_irqrestore(&sem->lock, flags);
+}
+
+//V操作:释放信号量,若有等待者则唤醒一个
+void sem_up(semaphore_t *sem){
+	unsigned long flags;
+	task_struct *task;
+	if(!sem)return;
+	spin_lock_irqsave(&sem->lock, flags);
+	sem->count++;
+	if(sem->count <= 0){
+		task = container_of(sem->wq.next, task_struct, wait_node);
+		list_del(&task->wait_node);
+		task->wake_up_ticks = 0;
+		if(task->state == TASK_BLOCKED)TaskListAdd(task);
+	}
+	spin_unlock_irqrestore(&sem->lock, flags);
+}
+
+//非阻塞尝试获取信号量:成功返回1,失败返回0
+_Bool sem_trydown(semaphore_t *sem){
+	unsigned long flags;
+	_Bool ret;
+	if(!sem)return false;
+	spin_lock_irqsave(&sem->lock, flags);
+	if(sem->count > 0){
+		sem->count--;
+		ret = true;
+	}else{
+		ret = false;
+	}
+	spin_unlock_irqrestore(&sem->lock, flags);
+	return ret;
+}
+/*DeepSeek V4 Pro-END*/
 
 //保存上文，切换下文
 __attribute__((naked))

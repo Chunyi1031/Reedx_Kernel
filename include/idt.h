@@ -105,25 +105,25 @@ struct gate_desc {
  * @param ist:   中断栈表索引 (0=不使用)
  * @param seg:   代码段选择子
  */
-static inline void pack_gate(struct gate_desc *gate, unsigned int type, unsigned long func, unsigned int dpl, unsigned int ist, unsigned int seg)
-{
-	gate->offset_low  = (u16)(func >> 0);
-	gate->offset_middle = (u16)(func >> 16);
-	gate->offset_high = (u32)(func >> 32);
-	gate->segment     = (u16)seg;
-	gate->bits.ist    = ist;
-	gate->bits.zero   = 0;
-	gate->bits.type   = type;
-	gate->bits.dpl    = dpl;
-	gate->bits.p      = 1;
-	gate->reserved    = 0;
-}
+#define pack_gate(gate, _type, _func, _dpl, _ist, _seg)                  \
+	do {                                                                   \
+		(gate)->offset_low    = (u16)((unsigned long)(_func) >>  0);      \
+		(gate)->offset_middle = (u16)((unsigned long)(_func) >> 16);      \
+		(gate)->offset_high   = (u32)((unsigned long)(_func) >> 32);      \
+		(gate)->segment       = (u16)(_seg);                              \
+		(gate)->bits.ist      = (_ist);                                   \
+		(gate)->bits.zero     = 0;                                        \
+		(gate)->bits.type     = (_type);                                  \
+		(gate)->bits.dpl      = (_dpl);                                   \
+		(gate)->bits.p        = 1;                                        \
+		(gate)->reserved      = 0;                                        \
+	} while (0)
 
 //执行lidt指令将desc_ptr加载到IDTR
-static inline void load_idt(const struct desc_ptr *dtr)
-{
-	__asm__ volatile ("lidt %0" : : "m" (*dtr) : "memory");
-}
+#define load_idt(dtr)                                            \
+	do {                                                         \
+		__asm__ volatile ("lidt %0" : : "m" (*(dtr)) : "memory");\
+	} while (0)
 
 extern void default_int_handler_entry(void);//默认中断处理程序入口 (kernel/asm/idt_handler.S)
 extern void default_int_handler(void);//默认中断处理程序(kernel/desc/idt.c)

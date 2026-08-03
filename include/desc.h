@@ -191,10 +191,10 @@ struct desc_ptr {
  * 调用后 CS 中缓存的描述符不会自动刷新，必须紧跟一次远跳转/远返回
  * 或通过 setup_gdt() 提供的完整流程。
  */
-static inline void load_gdt(const struct desc_ptr *dtr)
-{
-	__asm__ volatile ("lgdt %0" : : "m" (*dtr) : "memory");
-}
+#define load_gdt(dtr)                                            \
+	do {                                                         \
+		__asm__ volatile ("lgdt %0" : : "m" (*(dtr)) : "memory");\
+	} while (0)
 
 /* 初始化并加载 GDT，同时刷新全部段寄存器 */
 void setup_gdt(void);

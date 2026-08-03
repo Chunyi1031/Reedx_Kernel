@@ -1,13 +1,3 @@
-/*
- * 由Hermes Agent + DeepSeek-V4-Pro参考Linux 7.1.3生成
- *
- * kernel/desc/irq.c — 硬件中断管理 (APIC 架构)
- *
- * 参考：Linux 7.1.3 arch/x86/kernel/apic/apic.c (setup_APIC_timer /
- *       setup_local_APIC)
- *              arch/x86/kernel/irq.c (通用 IRQ 分发)
- */
-
 #include <irq.h>
 #include <drives/timer.h>
 #include <drives/ps2kbd.h>
@@ -32,9 +22,10 @@ void irq_dispatch(uint32_t vector){
 	vector -= IRQ_VECTOR_BASE;
 	switch (vector) {
 	case IRQ_TIMER:
-		SYSTEM_TimerTicks++;
-		send_eoi((uint8_t)vector);
-		schedule();
+		SYSTEM_TimerTicks++;//增加计数
+		timeout_wake_check();//检查并唤醒超时的msleep任务
+		send_eoi((uint8_t)vector);//发送EOI
+		schedule();//调度
 		return;
 	case IRQ_KEYBOARD:
 		Keyboard_IRQ();

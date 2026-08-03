@@ -13,6 +13,7 @@
 #include <acpi/acpi.h>
 #include <acpi/power.h>
 #include <task.h>
+#include <spinlock.h>
 
 BootParam *SYSTEM_BootParam = NULL;
 uint64_t SYSTEM_CPU_Fquency = 0;
@@ -25,6 +26,7 @@ extern char __bss_start[], __bss_end[];
 _Bool LoadBootParam(BootParam* boot_param);//加载引导参数
 int InitSystem();//初始化化系统
 void test_thread();
+spinlock_t lock_test;
 
 void KernelStart(BootParam* boot_param){
     memset(__bss_start, 0, __bss_end - __bss_start);
@@ -56,7 +58,7 @@ void KernelStart(BootParam* boot_param){
     for(int i = 0;i < count;i ++){
         printk("PID:%d  Stack:%p  Name:%s\n",list[i]->pid,list[i]->kernel_stack,list[i]->name);
     }
-    mdelay(5000);
+    msleep(5000);
     printk(PRINTK_INFO"Type 'r' to reboot or type 's' to shutdown.");
     char key = GetKey();
     if(key == 'r')SYSTEM_Restart();
@@ -67,11 +69,11 @@ void KernelStart(BootParam* boot_param){
 void test_thread(){
     while(1){
         fillRect(400,400,10,10,COLOR_RED);
-        mdelay(1000);
+        msleep(1000);
         fillRect(400,400,10,10,COLOR_GREEN);
-        mdelay(1000);
+        msleep(1000);
         fillRect(400,400,10,10,COLOR_BLUE);
-        mdelay(1000);
+        msleep(1000);
     }
 }
 
