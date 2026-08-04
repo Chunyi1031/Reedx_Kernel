@@ -26,6 +26,8 @@ extern char __bss_start[], __bss_end[];
 _Bool LoadBootParam(BootParam* boot_param);//加载引导参数
 int InitSystem();//初始化化系统
 void test_thread();
+void condvar_test_thread();
+void condvar_waiter_thread();
 spinlock_t lock_test;
 
 void KernelStart(BootParam* boot_param){
@@ -61,8 +63,8 @@ void KernelStart(BootParam* boot_param){
     msleep(5000);
     printk(PRINTK_INFO"Type 'r' to reboot or type 's' to shutdown.");
     char key = GetKey();
-    if(key == 'r')SYSTEM_Restart();
     if(key == 's')SYSTEM_Shutdown();
+    else SYSTEM_Restart();
     SYSTEM_STOP();
 }
 

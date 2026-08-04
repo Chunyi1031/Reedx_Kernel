@@ -283,6 +283,184 @@ _Bool sem_trydown(semaphore_t *sem){
 }
 /*DeepSeek V4 Pro-END*/
 
+//初始化互斥锁为未锁定状态
+void mutex_init(mutex_t *m){
+	m->locked = 0;
+	m->owner = NULL;
+	spin_lock_init(&m->lock);
+	m->wq.prev = &m->wq;
+	m->wq.next = &m->wq;
+}
+
+//加锁
+void mutex_lock(mutex_t *m){
+	uint64_t flags;
+	if(!m)return;
+	spin_lock_irqsave(&m->lock, flags);
+    //如果未锁定，加锁
+	if(!m->locked){
+		m->locked = 1;//标记为已锁定
+		m->owner = current_task;//设置持有者为当前任务
+		spin_unlock_irqrestore(&m->lock, flags);
+		return;
+	}
+	list_add_tail(&current_task->wait_node, &m->wq);//将当前任务加入等待队列
+	current_task->state = TASK_BLOCKED;//标记为阻塞
+	spin_unlock_irqrestore(&m->lock, flags);
+	schedule();//让出CPU
+}
+
+//解锁
+void mutex_unlock(mutex_t *m){
+	uint64_t flags;
+	task_struct *task;
+	if(!m)return;
+	spin_lock_irqsave(&m->lock, flags);
+    //不是持有者,拒绝解锁
+	if(m->owner != current_task){
+		spin_unlock_irqrestore(&m->lock, flags);
+		return;
+	}
+    //如果等待队列为空
+	if(list_empty(&m->wq)){
+        //清空数据
+		m->locked = 0;
+		m->owner = NULL;
+	}else{
+        //不为空，唤醒等待队列上的一个任务，并将其设为持有者
+		task = container_of(m->wq.next, task_struct, wait_node);
+		list_del(&task->wait_node);
+		m->owner = task;
+		if(task->state == TASK_BLOCKED)TaskListAdd(task);
+	}
+	spin_unlock_irqrestore(&m->lock, flags);
+}
+
+//非阻塞尝试加锁
+_Bool mutex_trylock(mutex_t *m){
+	uint64_t flags;
+	_Bool ret;
+	if(!m)return false;
+	spin_lock_irqsave(&m->lock, flags);
+    //如果未锁定，加锁并返回true
+	if(!m->locked){
+		m->locked = 1;
+		m->owner = current_task;
+		ret = true;
+    //否则返回false
+	}else{
+		ret = false;
+	}
+	spin_unlock_irqrestore(&m->lock, flags);
+	return ret;
+}
+
+//初始化消息队列
+void msgq_init(msg_queue_t *q, void **buf, int capacity){
+    //初始化结构体
+	q->buf = buf;
+	q->capacity = capacity;
+	q->head = 0;
+	q->tail = 0;
+	sem_init(&q->slots, capacity);//初始所有槽位空闲
+	sem_init(&q->items, 0);//初始无消息
+	mutex_init(&q->lock);//初始化互斥锁
+}
+
+//发送消息
+void msgq_send(msg_queue_t *q, void *msg){
+	sem_down(&q->slots);//等待空闲槽位
+	mutex_lock(&q->lock);//加锁
+	q->buf[q->tail] = msg;//写入消息
+	q->tail = (q->tail + 1) % q->capacity;//移动尾指针
+	mutex_unlock(&q->lock);//解锁
+	sem_up(&q->items);//通知有新消息
+}
+
+//接收消息
+void *msgq_recv(msg_queue_t *q){
+	void *msg;
+	sem_down(&q->items);//等待消息
+	mutex_lock(&q->lock);//加锁
+	msg = q->buf[q->head];//读取消息
+	q->head = (q->head + 1) % q->capacity;//移动头指针
+	mutex_unlock(&q->lock);//解锁
+	sem_up(&q->slots);//通知有空闲槽位
+	return msg;
+}
+
+//非阻塞发送
+_Bool msgq_trysend(msg_queue_t *q, void *msg){
+	if(!sem_trydown(&q->slots))return false;
+	mutex_lock(&q->lock);
+	q->buf[q->tail] = msg;
+	q->tail = (q->tail + 1) % q->capacity;
+	mutex_unlock(&q->lock);
+	sem_up(&q->items);
+	return true;
+}
+
+//非阻塞接收
+void *msgq_tryrecv(msg_queue_t *q){
+	void *msg;
+	if(!sem_trydown(&q->items))return NULL;
+	mutex_lock(&q->lock);
+	msg = q->buf[q->head];
+	q->head = (q->head + 1) % q->capacity;
+	mutex_unlock(&q->lock);
+	sem_up(&q->slots);
+	return msg;
+}
+
+//初始化条件变量
+void cond_init(condition_t *cv){
+	cv->wq.prev = &cv->wq;
+	cv->wq.next = &cv->wq;
+	spin_lock_init(&cv->lock);
+}
+
+//原子地释放mutex并睡眠,被唤醒后重新获取mutex
+void cond_wait(condition_t *cv, mutex_t *m){
+	uint64_t flags;
+	if(!cv || !m)return;
+	spin_lock_irqsave(&cv->lock, flags);
+	mutex_unlock(m);//释放锁
+    //睡眠
+	list_add_tail(&current_task->wait_node, &cv->wq);
+	current_task->state = TASK_BLOCKED;
+	spin_unlock_irqrestore(&cv->lock, flags);
+	schedule();//切走
+	mutex_lock(m);//醒来后重新获取mutex
+}
+
+//唤醒等待队列上的一个任务
+void cond_signal(condition_t *cv){
+	unsigned long flags;
+	task_struct *task;
+	if(!cv)return;
+	spin_lock_irqsave(&cv->lock, flags);
+	if(!list_empty(&cv->wq)){
+		task = container_of(cv->wq.next, task_struct, wait_node);
+		list_del(&task->wait_node);
+		if(task->state == TASK_BLOCKED)TaskListAdd(task);
+	}
+	spin_unlock_irqrestore(&cv->lock, flags);
+}
+
+//唤醒等待队列上的全部任务
+void cond_broadcast(condition_t *cv){
+	uint64_t flags;
+	task_struct *task;
+	if(!cv)return;
+	spin_lock_irqsave(&cv->lock, flags);
+	while(!list_empty(&cv->wq)){
+		task = container_of(cv->wq.next, task_struct, wait_node);
+		list_del(&task->wait_node);
+		if(task->state == TASK_BLOCKED)TaskListAdd(task);
+	}
+	spin_unlock_irqrestore(&cv->lock, flags);
+}
+
 //保存上文，切换下文
 __attribute__((naked))
 void switch_to(void *prev, void *next) {
