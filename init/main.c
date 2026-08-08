@@ -8,6 +8,7 @@
 #include <efi.h>
 #include <print.h>
 #include <mm/pmm.h>
+#include <mm/pgtables.h>
 #include <delay.h>
 #include <rtc.h>
 #include <acpi/acpi.h>
@@ -26,8 +27,6 @@ extern char __bss_start[], __bss_end[];
 _Bool LoadBootParam(BootParam* boot_param);//加载引导参数
 int InitSystem();//初始化化系统
 void test_thread();
-void condvar_test_thread();
-void condvar_waiter_thread();
 spinlock_t lock_test;
 
 void KernelStart(BootParam* boot_param){
@@ -52,7 +51,20 @@ void KernelStart(BootParam* boot_param){
     rtc_time_t time;
     rtc_get_local(&time);
     printk("Time: %d/%d/%d %d:%d:%d %s\n",time.year,time.month,time.day,time.hour,time.minute,time.second,weekdays[time.wday]);
-    printk("ACPI: RSDP=%p XSDT=%p FADT=%p MADT=%p\n",SYSTEM_ACPI.rsdp,SYSTEM_ACPI.xsdt,SYSTEM_ACPI.fadt,SYSTEM_ACPI.madt);
+    uint64_t cr3;
+    asm volatile("mov %%cr3, %0" : "=r"(cr3));
+    uint64_t vaddr = 0x100000;
+    uint64_t *pte = get_pte(cr3, vaddr, 1);
+    if (pte) {
+        printk("PTE for 0x%llx: %llx\n", vaddr, *pte);
+        printk("  Physical page: 0x%llx\n", pte_get_paddr(*pte));
+        printk("  Present: %d, Writable: %d, Huge: %d\n",
+               pte_is_present(*pte) ? 1 : 0,
+               (*pte & PTE_WRITABLE) ? 1 : 0,
+               pte_is_huge(*pte) ? 1 : 0);
+    } else {
+        printk("Failed to get PTE\n");
+    }
     CreateKernelThread(test_thread,4096,"test");
     task_struct* list[10];
     int count;

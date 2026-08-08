@@ -9,6 +9,7 @@
             "miDebuggerServerAddress": "localhost:1234",
             "miDebuggerPath": "/usr/bin/gdb",
             "cwd": "${workspaceFolder}",
+            "preLaunchTask": "Build & Start QEMU Debug",
             "stopAtEntry": false,
             "setupCommands": [
                 {
@@ -27,6 +28,26 @@
             "logging": {
                 "engineLogging": false
             }
+        },
+        {
+            "name": "Run",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${fileDirname}/${fileBasenameNoExtension}",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "${defaultBuildTask}"
         }
     ]
 }
