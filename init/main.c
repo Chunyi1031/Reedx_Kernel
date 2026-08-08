@@ -40,7 +40,6 @@ void KernelStart(BootParam* boot_param){
         early_printk("Kernel init failed:%d\n",status);
         SYSTEM_STOP();
     }
-    setup_exceptions();
     tsc_calibrate();
     rtc_init();
     InitAPIC();
@@ -50,21 +49,7 @@ void KernelStart(BootParam* boot_param){
     sti();
     rtc_time_t time;
     rtc_get_local(&time);
-    printk("Time: %d/%d/%d %d:%d:%d %s\n",time.year,time.month,time.day,time.hour,time.minute,time.second,weekdays[time.wday]);
-    uint64_t cr3;
-    asm volatile("mov %%cr3, %0" : "=r"(cr3));
-    uint64_t vaddr = 0x100000;
-    uint64_t *pte = get_pte(cr3, vaddr, 1);
-    if (pte) {
-        printk("PTE for 0x%llx: %llx\n", vaddr, *pte);
-        printk("  Physical page: 0x%llx\n", pte_get_paddr(*pte));
-        printk("  Present: %d, Writable: %d, Huge: %d\n",
-               pte_is_present(*pte) ? 1 : 0,
-               (*pte & PTE_WRITABLE) ? 1 : 0,
-               pte_is_huge(*pte) ? 1 : 0);
-    } else {
-        printk("Failed to get PTE\n");
-    }
+    printk(PRINTK_INFO"UEFI PML4 at 0x%llx,Kernel PML4 at 0x%llx",UEFI_PML4,KERNEL_PML4);
     CreateKernelThread(test_thread,4096,"test");
     task_struct* list[10];
     int count;
@@ -119,7 +104,10 @@ _Bool LoadBootParam(BootParam* boot_param){
 
 int InitSystem(){
     InitSerial(SERIAL_COM1);
+    setup_exceptions();
     TTY_Clear();
+    UEFI_PML4 = get_cr3();
+    KERNEL_PML4 = UEFI_PML4;
     if(Init_Physical_Memory_Manager() != 0)return 1;
     int Status = InitACPI(SYSTEM_ACPI.rsdp);
     if(Status != 0){
@@ -129,5 +117,12 @@ int InitSystem(){
     }
     print_ok();
     early_printk("ACPI init success\n");
+    if (InitKernelPageTable() != 0) {
+        print_error();
+        early_printk("Kernel page table init failed\n");
+        return 1;
+    }
+    print_ok();
+    early_printk("Kernel page table ready\n");
     return 0;
 }

@@ -21,6 +21,7 @@
 #define PTE_HUGE            (1ULL << 7)     //大页
 #define PTE_GLOBAL          (1ULL << 8)     //全局页
 #define PTE_NO_EXECUTE      (1ULL << 63)    //禁止执行
+#define PTE_CAN_COVERED     (1ULL << 62)    //可覆盖
 
 typedef uintptr_t pml4_t[512];
 typedef uintptr_t pdpt_t[512];
@@ -32,6 +33,12 @@ typedef uintptr_t pt_t[512];
 #define pte_is_present(pte) ((pte & PTE_PRESENT) != 0)
 #define pte_is_huge(pte)    ((pte & PTE_HUGE) != 0)
 
+extern uintptr_t UEFI_PML4;
+extern uintptr_t KERNEL_PML4;
+
+uintptr_t get_cr3();
+void set_cr3(uintptr_t cr3);
+
 /**
  * 获取虚拟地址对应的页表项（PTE）
  * 
@@ -41,5 +48,28 @@ typedef uintptr_t pt_t[512];
  * @return           PTE 的虚拟地址指针，失败返回 NULL
  */
 uintptr_t* get_pte(uintptr_t pml4_phys, uintptr_t vaddr, int alloc);
+
+/**
+ * 建立虚拟地址到物理地址的映射
+ * 
+ * @param pml4_phys  PML4 物理地址
+ * @param vaddr      虚拟地址（4KB 对齐）
+ * @param paddr      物理地址（4KB 对齐）
+ * @param flags      页表项权限标志
+ * @return           0=成功，1=PML4无效 2=地址未对齐 3=分配失败 4=覆盖保护
+ */
+int vmm_map_page(uintptr_t pml4_phys, uintptr_t vaddr, uintptr_t paddr, uint64_t flags);
+
+/**
+ * 取消虚拟地址的映射
+ * 
+ * @param pml4_phys  PML4 物理地址
+ * @param vaddr      虚拟地址（4KB 对齐）
+ * @param out_paddr  输出被取消映射的物理地址（可为 NULL）
+ * @return           0=成功，1=参数错误，2=地址未对齐，3=页表不存在，4=未映射
+ */
+int vmm_unmap_page(uintptr_t pml4_phys, uintptr_t vaddr, uintptr_t *out_paddr);
+
+int InitKernelPageTable();//初始化内核页表
 
 #endif
