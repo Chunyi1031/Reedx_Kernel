@@ -9,6 +9,7 @@
 #include <print.h>
 #include <mm/pmm.h>
 #include <mm/pgtables.h>
+#include <mm/vmm.h>
 #include <delay.h>
 #include <rtc.h>
 #include <acpi/acpi.h>
@@ -124,5 +125,6 @@ int InitSystem(){
     }
     print_ok();
     early_printk("Kernel page table ready\n");
+    InitKernelMapping();
     return 0;
 }

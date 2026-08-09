@@ -5,7 +5,7 @@
             "label": "Start Test",
             "type": "shell",
             "command": "cd ${workspaceFolder} && make && make run",
-            "isBackground": false,
+            "isBackground": true,
             "problemMatcher": [],
             "group": {
                 "kind": "build",

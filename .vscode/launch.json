@@ -2,7 +2,22 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "QEMU Kernel Debug (attach)",
+            "name": "▶ Run Kernel",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "/bin/true",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "Start Test",
+            "stopAtEntry": false,
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "logging": {
+                "engineLogging": false
+            }
+        },
+        {
+            "name": "🐛 Debug Kernel",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/kernel.elf",
@@ -28,26 +43,6 @@
             "logging": {
                 "engineLogging": false
             }
-        },
-        {
-            "name": "Run",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${fileDirname}/${fileBasenameNoExtension}",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}",
-            "environment": [],
-            "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                }
-            ],
-            "preLaunchTask": "${defaultBuildTask}"
         }
     ]
 }

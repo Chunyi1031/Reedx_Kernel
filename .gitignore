@@ -2,7 +2,7 @@ build/
 kernel.elf
 mnt/
 include/config/
-.vscode/
+# .vscode/
 Copy
 System.img
 kernel.elf
