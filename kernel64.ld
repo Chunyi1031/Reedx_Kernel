@@ -4,7 +4,7 @@ ENTRY(KernelStart)
 
 SECTIONS
 {
-    . = 0x100000;
+    . = 0xFFFF800000100000;
     
     . = ALIGN(4K);
     .text : {

@@ -1,5 +1,6 @@
 #include <print.h>
 #include <mm/pmm.h>
+#include <mm/vmm.h>
 #include <idt.h>
 #include <task.h>
 
@@ -57,8 +58,8 @@ void task_putlog(){
 }
 
 int InitPrintk(){
-	PRINTK_text_buffer = Pmm_Malloc((PRINTK_TEXT_BUFFER_SIZE + 4095) & ~4095);
-	PRINTK_log_info = Pmm_Malloc(((sizeof(PRINTK_LOG_INFO_t) * PRINTK_COUNT_MAX) & ~4095) + 4095);
+	PRINTK_text_buffer = (char*)PHYS_TO_VIRT(Pmm_Malloc((PRINTK_TEXT_BUFFER_SIZE + 4095) & ~4095));
+	PRINTK_log_info = (PRINTK_LOG_INFO_t*)PHYS_TO_VIRT(Pmm_Malloc(((sizeof(PRINTK_LOG_INFO_t) * PRINTK_COUNT_MAX) & ~4095) + 4095));
 	if(!PRINTK_text_buffer || !PRINTK_log_info)return 1;
 	memset(PRINTK_text_buffer, 0, PRINTK_TEXT_BUFFER_SIZE);
 	memset(PRINTK_log_info, 0, sizeof(PRINTK_LOG_INFO_t) * PRINTK_COUNT_MAX);

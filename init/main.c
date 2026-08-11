@@ -27,13 +27,14 @@ extern char __bss_start[], __bss_end[];
 
 _Bool LoadBootParam(BootParam* boot_param);//加载引导参数
 int InitSystem();//初始化化系统
+void KernelMain();//内核主函数
 void test_thread();
 spinlock_t lock_test;
 
+//内核入口
 void KernelStart(BootParam* boot_param){
     memset(__bss_start, 0, __bss_end - __bss_start);
     setup_gdt();
-    setup_idt();
     if(!LoadBootParam(boot_param))SYSTEM_STOP();
     int status = InitSystem();
     if(status != 0){
@@ -41,12 +42,23 @@ void KernelStart(BootParam* boot_param){
         early_printk("Kernel init failed:%d\n",status);
         SYSTEM_STOP();
     }
+    void (*entry)(void) = (void*)PHYS_TO_VIRT((uintptr_t)KernelMain);
+    entry();
+    SYSTEM_STOP();
+}
+
+void KernelMain(){
+    setup_gdt();
+    setup_idt();
+    setup_exceptions();
     tsc_calibrate();
     rtc_init();
     InitAPIC();
     TaskInit();
     InitPrintk();
     KeyboardInit();
+    switch_kernel_info_to_high();
+    switch_kernel_stack_to_high();
     sti();
     rtc_time_t time;
     rtc_get_local(&time);
@@ -63,7 +75,6 @@ void KernelStart(BootParam* boot_param){
     char key = GetKey();
     if(key == 's')SYSTEM_Shutdown();
     else SYSTEM_Restart();
-    SYSTEM_STOP();
 }
 
 void test_thread(){
@@ -105,7 +116,6 @@ _Bool LoadBootParam(BootParam* boot_param){
 
 int InitSystem(){
     InitSerial(SERIAL_COM1);
-    setup_exceptions();
     TTY_Clear();
     UEFI_PML4 = get_cr3();
     KERNEL_PML4 = UEFI_PML4;

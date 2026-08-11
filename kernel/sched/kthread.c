@@ -1,5 +1,6 @@
 #include <task.h>
 #include <mm/pmm.h>
+#include <mm/vmm.h>
 #include <idt.h>
 
 static pid_t next_pid = 1;
@@ -8,15 +9,15 @@ task_struct* CreateKernelThread(void (*entry)(void),uint64_t stack_size,const ch
     //参数检查
     if(!entry || stack_size == 0)return NULL;
     //分配任务结构体
-    task_struct* task = (task_struct*)Pmm_Malloc(1);
+    task_struct* task = (task_struct*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(1));
     if(!task)return NULL;
     memset(task,0,4096);
     //分配栈
     uint32_t stack_pages = ((stack_size + 4095) & ~4095) / 4096;
     stack_size = stack_pages * 4096;
-    void* stack = Pmm_Malloc(stack_pages);
+    void* stack = (void*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(stack_pages));
     if(!stack){
-        Pmm_Free(task,1);
+        Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)task),1);
         return NULL;
     }
     memset(stack,0,stack_size);

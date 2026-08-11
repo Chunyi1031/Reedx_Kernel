@@ -1,5 +1,6 @@
 #include <task.h>
 #include <mm/pmm.h>
+#include <mm/vmm.h>
 #include <idt.h>
 #include <irq.h>
 #include <spinlock.h>
@@ -57,14 +58,14 @@ void TaskInit(){
     task_list_head.prev = &task_list_head;
     task_list_head.next = &task_list_head;
     //填充内核进程结构体
-    kernel_task = (task_struct*)Pmm_Malloc(1);
+    kernel_task = (task_struct*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(1));
     if (!kernel_task) SYSTEM_STOP();
     memset(kernel_task, 0, 4096);
     kernel_task->pid = 0;
     kernel_task->tgid = 0;
     kernel_task->state = TASK_READY;
     strcpy(kernel_task->name, "Reedx Kernel");
-    kernel_task->kernel_stack = (void*)SYSTEM_BootParam->KernelStackAddress;
+    kernel_task->kernel_stack = (void*)PHYS_TO_VIRT((uintptr_t)SYSTEM_BootParam->KernelStackAddress);
     kernel_task->stack_size = SYSTEM_BootParam->KernelStackSize;
     //将内核任务设为当前任务
     current_task = kernel_task;
@@ -165,8 +166,8 @@ void TaskKill(task_struct* t){
     if(t == current_task)schedule();//如果杀死的是当前任务，立即调度
     cli();
     TaskListRemove(t);//从就绪队列移除
-    if(t->kernel_stack)Pmm_Free(t->kernel_stack,t->stack_size / 4096);//回收栈
-    Pmm_Free(t,1);
+    if(t->kernel_stack)Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)t->kernel_stack),t->stack_size / 4096);
+    Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)t),1);
     memset(t,0,4096);
     sti();
 }

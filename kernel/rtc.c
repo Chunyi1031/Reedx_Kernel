@@ -14,10 +14,8 @@
 #include <efi.h>
 #include <print.h>
 #include <drives/timer.h>
+#include <mm/pgtables.h>
 
-/* 外部引用——由 init/main.c 的 LoadBootParam() 设置 */
-extern EFI_RUNTIME_SERVICES *UEFI_RuntimeServices;
-extern _Bool UEFI_UseRT;
 
 /* UEFI 运行时服务表签名 ("RUNTSERV" ASCII，小端) */
 #define EFI_RT_SERVICES_SIGNATURE  0x56524553544e5552ULL
@@ -186,6 +184,7 @@ static void cmos_read_time(rtc_time_t *tm){
  * 若 RuntimeServices 表本身或其函数指针指向已回收内存，
  * 调用会返回垃圾数据。通过签名校验 + 年份范围校验双重保险。
  */
+__attribute__((ms_abi, target("no-sse")))
 static _Bool rtc_validate_efi_rt(void){
 	if (!UEFI_UseRT) return false;
 	if (!UEFI_RuntimeServices) return false;
@@ -200,12 +199,15 @@ static _Bool rtc_validate_efi_rt(void){
  * 通过 UEFI Runtime Services GetTime() 获取当前时间。
  * 返回 true 表示成功且数值合理，false 表示不可用/失败/数值异常。
  */
+__attribute__((ms_abi, target("no-sse")))
 static _Bool rtc_read_efi(rtc_time_t *tm){
 	EFI_TIME et;
 	EFI_STATUS s;
 	if (!rtc_efi_available) return false;
-	__builtin_memset(&et, 0, sizeof(et));
+	memset(&et, 0, sizeof(et));
+	uintptr_t saved_cr3 = get_cr3();
 	s = UEFI_RuntimeServices->GetTime(&et, NULL);
+	if (get_cr3() != saved_cr3) set_cr3(KERNEL_PML4);
 	if (s != 0) {
 		rtc_efi_available = false;
 		return false;

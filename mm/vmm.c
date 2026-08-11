@@ -3,6 +3,7 @@
 #include <mm/pmm.h>
 #include <boot.h>
 #include <print.h>
+#include <task.h>
 
 void InitKernelMapping() {
     BootParam *bp = SYSTEM_BootParam;
@@ -34,4 +35,38 @@ void InitKernelMapping() {
             vmm_map_page(KERNEL_PML4, PHYS_TO_VIRT(pa), pa, PTE_PRESENT | PTE_WRITABLE | PTE_CAN_COVERED);
         }
     }
+}
+
+__attribute__((noinline, naked))
+void switch_kernel_stack_to_high(void) {
+    __asm__ volatile(
+        "mov %%rsp, %%rax\n\t"
+        "mov $0xFFFF800000000000, %%rbx\n\t"
+        "add %%rbx, %%rax\n\t"
+        "mov (%%rsp), %%rcx\n\t"
+        "sub $8, %%rax\n\t"
+        "mov %%rcx, (%%rax)\n\t"
+        "mov %%rax, %%rsp\n\t"
+        "and $0xFFFFFFFFFFFFFFF0, %%rsp\n\t"
+        "ret\n\t"
+        :
+        :
+        : "rax", "rbx", "rcx", "memory"
+    );
+}
+
+void switch_kernel_info_to_high(void) {
+    uintptr_t old_rsp;
+    __asm__ volatile("mov %%rsp, %0" : "=r"(old_rsp));//获取栈
+    uintptr_t new_rsp = PHYS_TO_VIRT(old_rsp);
+    //确保当前 RSP 所在页及前一页在高地址已映射（栈向下增长）
+    uintptr_t cur_page = old_rsp & PAGE_MASK;
+    for (int i = 0; i < 2; i++) {
+        uintptr_t pa = cur_page - i * PAGE_SIZE;
+        uintptr_t *pte = (uintptr_t*)get_pte(KERNEL_PML4, PHYS_TO_VIRT(pa), 0);
+        if (!pte || !pte_is_present(*pte)) {
+            vmm_map_page(KERNEL_PML4, PHYS_TO_VIRT(pa), pa, PTE_PRESENT | PTE_WRITABLE | PTE_CAN_COVERED);
+        }
+    }
+    current_task->context.rsp = new_rsp;
 }

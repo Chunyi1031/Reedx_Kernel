@@ -111,7 +111,8 @@ void setup_gdt(void)
 #if defined(ARCH_X86_64) || defined(ARCH_AMD64)
 	__asm__ volatile (
 		"pushq %0\n\t"
-		"pushq $1f\n\t"
+		"leaq 1f(%%rip), %%rax\n\t"
+		"pushq %%rax\n\t"
 		"lretq\n"
 		"1:\n\t"
 		"movw %1, %%ds\n\t"
@@ -121,7 +122,7 @@ void setup_gdt(void)
 		"movw %1, %%ss\n\t"
 		:
 		: "i" ((u16)__KERNEL_CS), "r" ((u16)__KERNEL_DS)
-		: "memory"
+		: "rax", "memory"
 	);
 #elif defined(ARCH_X86_32) || defined(ARCH_AMD32)
 	__asm__ volatile (
