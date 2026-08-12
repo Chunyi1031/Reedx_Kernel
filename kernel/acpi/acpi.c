@@ -1,6 +1,7 @@
 #include <acpi/acpi.h>
 #include <klib.h>
 #include <print.h>
+#include <mm/vmm.h>
 
 sys_acpi_info SYSTEM_ACPI;
 
@@ -45,5 +46,10 @@ int InitACPI(struct acpi_table_rsdp* rsdp){
     if(!SYSTEM_ACPI.madt)return 5;
     //成功
     SYSTEM_ACPI.is_init = true;
+    SYSTEM_ACPI.rsdp = (void*)PHYS_TO_VIRT((uintptr_t)SYSTEM_ACPI.rsdp);
+    SYSTEM_ACPI.rsdt = (void*)PHYS_TO_VIRT((uintptr_t)SYSTEM_ACPI.rsdt);
+    SYSTEM_ACPI.xsdt = (void*)PHYS_TO_VIRT((uintptr_t)SYSTEM_ACPI.xsdt);
+    SYSTEM_ACPI.fadt = (void*)PHYS_TO_VIRT((uintptr_t)SYSTEM_ACPI.fadt);
+    SYSTEM_ACPI.madt = (void*)PHYS_TO_VIRT((uintptr_t)SYSTEM_ACPI.madt);
     return 0;
 }

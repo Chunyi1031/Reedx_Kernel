@@ -2,7 +2,10 @@
 #define _SPINLOCK_H_
 
 #include <types.h>
-#include <task.h>
+
+typedef struct spinlock {
+    volatile int locked;//0:未锁定,1:已锁定
+} spinlock_t;
 
 #define spin_lock_init(lock) ((lock)->locked = 0)	//初始化自旋锁
 

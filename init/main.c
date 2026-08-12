@@ -42,6 +42,7 @@ void KernelStart(BootParam* boot_param){
         early_printk("Kernel init failed:%d\n",status);
         SYSTEM_STOP();
     }
+    //跳转到高地址
     void (*entry)(void) = (void*)PHYS_TO_VIRT((uintptr_t)KernelMain);
     entry();
     SYSTEM_STOP();
@@ -63,6 +64,10 @@ void KernelMain(){
     rtc_time_t time;
     rtc_get_local(&time);
     printk(PRINTK_INFO"UEFI PML4 at 0x%llx,Kernel PML4 at 0x%llx",UEFI_PML4,KERNEL_PML4);
+    mm_struct* mm = vmm_create_address_space();
+    mm_struct* mm1 = vmm_clone_address_space(mm);
+    early_printk("%p,%p\n",mm,mm1);
+    vmm_destroy_address_space(mm);
     CreateKernelThread(test_thread,4096,"test");
     task_struct* list[10];
     int count;
@@ -105,7 +110,7 @@ _Bool LoadBootParam(BootParam* boot_param){
     SYSTEM_ACPI.rsdp = (struct acpi_table_rsdp*)boot_param->RSDP;
     //运行时服务
     if(boot_param){
-        UEFI_RuntimeServices = boot_param->RuntimeServices;
+        UEFI_RuntimeServices = (EFI_RUNTIME_SERVICES*)PHYS_TO_VIRT(boot_param->RuntimeServices);
         UEFI_UseRT = true;
     }else{
         UEFI_RuntimeServices = NULL;
@@ -120,14 +125,6 @@ int InitSystem(){
     UEFI_PML4 = get_cr3();
     KERNEL_PML4 = UEFI_PML4;
     if(Init_Physical_Memory_Manager() != 0)return 1;
-    int Status = InitACPI(SYSTEM_ACPI.rsdp);
-    if(Status != 0){
-        print_error();
-        early_printk("ACPI init failed:%d\n",Status);
-        return Status;
-    }
-    print_ok();
-    early_printk("ACPI init success\n");
     if (InitKernelPageTable() != 0) {
         print_error();
         early_printk("Kernel page table init failed\n");
@@ -136,5 +133,13 @@ int InitSystem(){
     print_ok();
     early_printk("Kernel page table ready\n");
     InitKernelMapping();
+    int Status = InitACPI(SYSTEM_ACPI.rsdp);
+    if(Status != 0){
+        print_error();
+        early_printk("ACPI init failed:%d\n",Status);
+        return Status;
+    }
+    print_ok();
+    early_printk("ACPI init success\n");
     return 0;
 }

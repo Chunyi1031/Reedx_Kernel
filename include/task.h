@@ -19,15 +19,6 @@ typedef struct task_context {
     uint64_t ss;
 } __attribute__((packed)) task_context_t;
 
-struct list_node {
-    struct list_node *prev;//指向前一个节点
-    struct list_node *next;//指向下一个节点
-};
-
-typedef struct spinlock {
-    volatile int locked;//0:未锁定,1:已锁定
-} spinlock_t;
-
 typedef struct list_node wait_queue_head_t;//等待队列头
 
 typedef struct semaphore {

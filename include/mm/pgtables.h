@@ -20,6 +20,7 @@
 #define PTE_DIRTY           (1ULL << 6)     //页已被写入
 #define PTE_HUGE            (1ULL << 7)     //大页
 #define PTE_GLOBAL          (1ULL << 8)     //全局页
+#define PTE_COW             (1ULL << 9)     //写时复制
 #define PTE_NO_EXECUTE      (1ULL << 63)    //禁止执行
 #define PTE_CAN_COVERED     (1ULL << 62)    //可覆盖
 
