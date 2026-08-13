@@ -11,6 +11,10 @@
 #include <serial.h>
 #include <klib.h>
 #include <print.h>
+#include <task.h>
+#include <mm/vmm.h>
+#include <mm/pmm.h>
+#include <mm/pgtables.h>
 
 /* 异常名称表，与 INT_GATE_* 宏对应 */
 static const char *const exception_names[] = {
@@ -66,12 +70,50 @@ void exc_dispatch(uint32_t vector,uintptr_t rip){
 	SYSTEM_STOP();
 }
 
-void interrupt_PF(uint64_t fault_addr, uint64_t error_code){
+//缺页错误码位定义
+#define PF_ERR_PRESENT  (1ULL << 0)//页已存在（保护违例）
+#define PF_ERR_WRITE    (1ULL << 1)//写访问
+#define PF_ERR_USER     (1ULL << 2)//用户态访问
+#define PF_ERR_RSVD     (1ULL << 3)//保留位被置位
+#define PF_ERR_EXEC     (1ULL << 4)//取指访问
+
+void interrupt_PF(uint64_t fault_addr, uint64_t error_code, uintptr_t rip){
+	//按需分页：用户态、页不存在、非保留位错误
+	if ((error_code & PF_ERR_USER) && !(error_code & PF_ERR_PRESENT) && !(error_code & PF_ERR_RSVD)) {
+		if (current_task && current_task->mm) {
+			vm_area_t *vma = find_vma(current_task->mm, fault_addr);
+			if (vma) {
+				//权限检查
+				if ((error_code & PF_ERR_WRITE) && !(vma->vm_flags & VM_WRITE)) goto pf_error;
+				if ((error_code & PF_ERR_EXEC) && !(vma->vm_flags & VM_EXEC)) goto pf_error;
+				//分配物理页
+				void *paddr = Pmm_Malloc(1);
+				if (!paddr) goto pf_error;
+				memset((void*)PHYS_TO_VIRT((uintptr_t)paddr), 0, PAGE_SIZE);
+				//构造页表项
+				uintptr_t page_vaddr = fault_addr & PAGE_MASK;
+				uint64_t flags = PTE_PRESENT | PTE_USER;
+				if (vma->vm_flags & VM_WRITE) flags |= PTE_WRITABLE;
+				if (!(vma->vm_flags & VM_EXEC)) flags |= PTE_NO_EXECUTE;
+				//映射
+				if (vmm_map_page((uintptr_t)current_task->mm->pgd, page_vaddr, (uintptr_t)paddr, flags) != 0) {
+					Pmm_Free(paddr, 1);
+					goto pf_error;
+				}
+				current_task->mm->rss++;
+				return;
+			}
+		}
+	}
+pf_error:
 	print_error();
-	early_printk("%s\nCR2=%p  Error Code=%X\n",exception_names[INT_GATE_PF],fault_addr,error_code);
-	TTY_Print(error_code & (1<<2) ? "[USER]" : "[SUPER]",error_code & (1<<2) ? COLOR_YELLOW : COLOR_CYAN);
-    TTY_Print(error_code & (1<<1) ? "[WRITE]" : "[READ]", COLOR_YELLOW);
-    TTY_Print(error_code & (1<<4) ? "[EXEC]" : "", COLOR_YELLOW);
+	early_printk("%s\nRIP=%p CR2=%p Error Code=%X\n",exception_names[INT_GATE_PF],rip,fault_addr,error_code);
+	TTY_Print(error_code & PF_ERR_USER ? "[USER]" : "[SUPER]", error_code & PF_ERR_USER ? COLOR_YELLOW : COLOR_CYAN);
+	TTY_Print(error_code & PF_ERR_WRITE ? "[WRITE]" : "[READ]", COLOR_YELLOW);
+	TTY_Print(error_code & PF_ERR_EXEC ? "[EXEC]" : "", COLOR_YELLOW);
+	TTY_Print(error_code & PF_ERR_PRESENT ? "[PRESENT]" : "[NOT PRESENT]", COLOR_YELLOW);
+	TTY_Print(error_code & PF_ERR_RSVD ? "[RESERVED]" : "", COLOR_YELLOW);
+	DrawString("The machine needs to restart\n",SYSTEM_ScreenInfo.Width/2-145,SYSTEM_ScreenInfo.Height/2-8,COLOR_YELLOW);
 	SYSTEM_STOP();
 }
 

@@ -378,3 +378,24 @@ mm_struct* vmm_clone_address_space(mm_struct *src_mm){
     spin_unlock(&src_mm->mm_lock);
     return dst_mm;
 }
+
+vm_area_t* find_vma(mm_struct *mm, uintptr_t addr) {
+    if (!mm || list_empty(&mm->mmap)) return NULL;
+    if (mm->mmap_cache) {
+        vm_area_t *cached = mm->mmap_cache;
+        if (addr >= cached->vm_start && addr < cached->vm_end) {
+            return cached;
+        }
+    }
+    vm_area_t *vma;
+    list_for_each_entry(vma, &mm->mmap, vm_list) {
+        if (addr < vma->vm_end) {
+            if (addr >= vma->vm_start) {
+                mm->mmap_cache = vma;
+                return vma;
+            }
+            return NULL;
+        }
+    }
+    return NULL;
+}

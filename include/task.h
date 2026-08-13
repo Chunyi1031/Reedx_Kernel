@@ -2,6 +2,7 @@
 #define _TASK_H_
 
 #include <klib.h>
+#include <mm/vmm.h>
 
 #define TASK_READY      0
 #define TASK_RUNNING    1
@@ -33,6 +34,7 @@ typedef struct task_struct {
     pid_t               tgid;       //线程组ID
     int                 state;      //进程状态
     char                name[16];   //进程名
+    mm_struct*          mm;         //用户任务内存信息
     void*               kernel_stack;//内核栈指针
     uint64_t            stack_size; //内核栈大小
     struct list_node    list;       //就绪链表节点

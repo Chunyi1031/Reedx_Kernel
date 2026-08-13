@@ -165,3 +165,18 @@ void print_to_console(int count){
 	console_read += to_print;
 	sti();
 }
+
+void panic(const char* fmt, ...){
+	char buf[256];
+	__builtin_va_list args;
+	__builtin_va_start(args, fmt);
+	vsprintf(buf, fmt, args);
+	printk(PRINTK_EMERG"%s",buf);
+	printk(PRINTK_EMERG":( Kernel Panic!");
+	printk(PRINTK_EMERG"The system will terminate, and then you can restart it.");
+	__builtin_va_end(args);
+	cli();
+	print_to_console(PRINTK_COUNT_MAX);
+	cli();
+	SYSTEM_STOP();
+}

@@ -72,7 +72,7 @@ int vmm_map_page(uintptr_t pml4_phys, uintptr_t vaddr, uintptr_t paddr, uint64_t
     uintptr_t *pte = get_pte(pml4_phys, vaddr, 1);
     if (!pte) return 3;
     if((*pte & PTE_PRESENT) && (!(*pte & PTE_CAN_COVERED)))return 4;//检查是否覆盖
-    *pte = (paddr & PAGE_MASK) | (flags & 0xFFF) | PTE_PRESENT;//设置页表项
+    *pte = (paddr & PAGE_MASK) | (flags & (0xFFFULL | PTE_NO_EXECUTE)) | PTE_PRESENT;//设置页表项
     __asm__ volatile("invlpg (%0)" :: "r"(vaddr) : "memory");//刷新TLB
     return 0;
 }

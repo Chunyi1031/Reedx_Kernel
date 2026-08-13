@@ -52,9 +52,9 @@ typedef struct PRINTK_LOG_INFO {
 extern char*              PRINTK_text_buffer;
 extern PRINTK_LOG_INFO_t* PRINTK_log_info;
 
-/* —— printk API —— */
 int  InitPrintk(void);
 int  printk(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void print_to_console(int count);
+void panic(const char* fmt, ...);
 
 #endif

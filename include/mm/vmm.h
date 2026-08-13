@@ -9,6 +9,11 @@
 #define PHYS_TO_VIRT(paddr) (((uintptr_t)(paddr) >= KERNEL_VIRTUAL_ADDR_START) ? (uintptr_t)(paddr) : ((uintptr_t)(paddr) + KERNEL_VIRTUAL_ADDR_START))
 #define VIRT_TO_PHYS(vaddr) (((uintptr_t)(vaddr) >= KERNEL_VIRTUAL_ADDR_START) ? ((uintptr_t)(vaddr) - KERNEL_VIRTUAL_ADDR_START) : (uintptr_t)(vaddr))
 
+#define VM_READ      0x01
+#define VM_WRITE     0x02
+#define VM_EXEC      0x04
+#define VM_SHARED    0x08
+
 void InitKernelMapping();//初始化内核高半映射
 void switch_kernel_stack_to_high(void);//切换内核栈到高半
 void switch_kernel_info_to_high(void);//设置栈信息到高地址
@@ -50,5 +55,12 @@ void vmm_destroy_address_space(mm_struct *mm);//销毁地址空间
  * @return 新的地址空间
  */
 mm_struct* vmm_clone_address_space(mm_struct *src_mm);
+/**
+ * 查找包含addr的VMA
+ * @param mm: 地址空间
+ * @param addr: 虚拟地址
+ * @return 找到返回 VMA 指针，否则返回 NULL
+ */
+vm_area_t* find_vma(mm_struct *mm, uintptr_t addr);
 
 #endif
