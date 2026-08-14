@@ -2,8 +2,8 @@ build/
 kernel.elf
 mnt/
 include/config/
-# .vscode/
 Copy
 System.img
 kernel.elf
 ./OVMF.fd
+./qemu.log

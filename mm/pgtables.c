@@ -16,8 +16,9 @@ void set_cr3(uintptr_t cr3){
     __asm__ volatile("mov %0, %%cr3" :: "r"(cr3));
 }
 
-uintptr_t* get_pte(uintptr_t pml4_phys, uintptr_t vaddr, int alloc) {
+uintptr_t* get_pte(uintptr_t pml4_phys, uintptr_t vaddr, int alloc, int user) {
     if(!pml4_phys) return NULL;
+    uint64_t mid_flags = PTE_PRESENT | PTE_WRITABLE | (user ? PTE_USER : 0);//中间页表项标志
     uintptr_t *pml4 = (uint64_t*)PHYS_TO_VIRT_TEMP(pml4_phys);//PML4物理地址转换为虚拟地址
     //PML4
     uint64_t pml4_idx = PML4_INDEX(vaddr);
@@ -30,7 +31,7 @@ uintptr_t* get_pte(uintptr_t pml4_phys, uintptr_t vaddr, int alloc) {
         if (!pdpt_phys) return NULL;
         uintptr_t *pdpt = (uintptr_t*)PHYS_TO_VIRT_TEMP(pdpt_phys);
         memset(pdpt, 0, PAGE_SIZE);
-        pml4[pml4_idx] = pdpt_phys | PTE_PRESENT | PTE_WRITABLE;
+        pml4[pml4_idx] = pdpt_phys | mid_flags;
     }
     uintptr_t *pdpt = (uintptr_t*)PHYS_TO_VIRT_TEMP(pte_get_paddr(pml4[pml4_idx]));
     //PDPT
@@ -43,7 +44,7 @@ uintptr_t* get_pte(uintptr_t pml4_phys, uintptr_t vaddr, int alloc) {
         if (!pd_phys) return NULL;
         uintptr_t *pd = (uintptr_t*)PHYS_TO_VIRT_TEMP(pd_phys);
         memset(pd, 0, PAGE_SIZE);
-        pdpt[pdpt_idx] = pd_phys | PTE_PRESENT | PTE_WRITABLE;
+        pdpt[pdpt_idx] = pd_phys | mid_flags;
     }
     uintptr_t *pd = (uintptr_t*)PHYS_TO_VIRT_TEMP(pte_get_paddr(pdpt[pdpt_idx]));
     //PD（2MB 大页检测）
@@ -56,7 +57,7 @@ uintptr_t* get_pte(uintptr_t pml4_phys, uintptr_t vaddr, int alloc) {
         if (!pt_phys) return NULL;
         uintptr_t *pt = (uintptr_t*)PHYS_TO_VIRT_TEMP(pt_phys);
         memset(pt, 0, PAGE_SIZE);
-        pd[pd_idx] = pt_phys | PTE_PRESENT | PTE_WRITABLE;
+        pd[pd_idx] = pt_phys | mid_flags;
     }
     uint64_t *pt = (uint64_t*)PHYS_TO_VIRT_TEMP(pte_get_paddr(pd[pd_idx]));
     //PT
@@ -69,7 +70,7 @@ int vmm_map_page(uintptr_t pml4_phys, uintptr_t vaddr, uintptr_t paddr, uint64_t
     if (!pml4_phys) return 1;
     if ((vaddr & (PAGE_SIZE - 1)) || (paddr & (PAGE_SIZE - 1))) return 2;
     //获取PTE
-    uintptr_t *pte = get_pte(pml4_phys, vaddr, 1);
+    uintptr_t *pte = get_pte(pml4_phys, vaddr, 1, (flags & PTE_USER) ? 1 : 0);
     if (!pte) return 3;
     if((*pte & PTE_PRESENT) && (!(*pte & PTE_CAN_COVERED)))return 4;//检查是否覆盖
     *pte = (paddr & PAGE_MASK) | (flags & (0xFFFULL | PTE_NO_EXECUTE)) | PTE_PRESENT;//设置页表项
@@ -81,7 +82,7 @@ int vmm_unmap_page(uintptr_t pml4_phys, uintptr_t vaddr, uintptr_t *out_paddr) {
     if (!pml4_phys) return 1;
     if (vaddr & (PAGE_SIZE - 1)) return 2;
     //获取PTE（不分配新页表）
-    uint64_t *pte = get_pte(pml4_phys, vaddr, 0);
+    uint64_t *pte = get_pte(pml4_phys, vaddr, 0, 0);
     if (!pte) return 3;
     if (!(*pte & PTE_PRESENT)) return 4;//检查是否分配
     if(out_paddr)*out_paddr = pte_get_paddr(*pte);//保存物理地址

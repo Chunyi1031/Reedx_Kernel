@@ -50,6 +50,17 @@ void InitKernelMapping() {
             vmm_map_page(KERNEL_PML4, PHYS_TO_VIRT(pa), pa, PTE_PRESENT | PTE_WRITABLE | PTE_CAN_COVERED);
         }
     }
+    //映射帧缓冲（高半地址，确保用户页表下内核也能输出）
+    if (bp && bp->ScreenInfo.FrameBuffer && bp->ScreenInfo.FrameBuffer_Size) {
+        uintptr_t fb_phys = (uintptr_t)bp->ScreenInfo.FrameBuffer & PAGE_MASK;
+        uint64_t fb_pages = (bp->ScreenInfo.FrameBuffer_Size + PAGE_SIZE - 1) / PAGE_SIZE;
+        for (uint64_t j = 0; j < fb_pages; j++) {
+            uintptr_t pa = fb_phys + j * PAGE_SIZE;
+            vmm_map_page(KERNEL_PML4, PHYS_TO_VIRT(pa), pa, PTE_PRESENT | PTE_WRITABLE | PTE_CAN_COVERED);
+        }
+        //高半映射就绪后，帧缓冲统一改用高半地址（用户页表复制了高半映射）
+        SYSTEM_FrameBuffer = (uint32_t*)PHYS_TO_VIRT((uintptr_t)bp->ScreenInfo.FrameBuffer);
+    }
 }
 
 __attribute__((noinline, naked))
@@ -78,7 +89,7 @@ void switch_kernel_info_to_high(void) {
     uintptr_t cur_page = old_rsp & PAGE_MASK;
     for (int i = 0; i < 2; i++) {
         uintptr_t pa = cur_page - i * PAGE_SIZE;
-        uintptr_t *pte = (uintptr_t*)get_pte(KERNEL_PML4, PHYS_TO_VIRT(pa), 0);
+        uintptr_t *pte = (uintptr_t*)get_pte(KERNEL_PML4, PHYS_TO_VIRT(pa), 0, 0);
         if (!pte || !pte_is_present(*pte)) {
             vmm_map_page(KERNEL_PML4, PHYS_TO_VIRT(pa), pa, PTE_PRESENT | PTE_WRITABLE | PTE_CAN_COVERED);
         }
@@ -398,4 +409,27 @@ vm_area_t* find_vma(mm_struct *mm, uintptr_t addr) {
         }
     }
     return NULL;
+}
+
+void* vmm_mmap(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t flags) {
+    if (!mm || !length) return NULL;
+    vaddr &= PAGE_MASK;
+    uint64_t pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+    vm_area_t *vma = vma_create(mm, vaddr, vaddr + pages * PAGE_SIZE, flags);
+    if (!vma) return NULL;
+    for (uint64_t i = 0; i < pages; i++) {
+        void *pa = Pmm_Malloc(1);
+        if (!pa) return NULL;
+        memset((void*)PHYS_TO_VIRT((uintptr_t)pa), 0, PAGE_SIZE);
+        uint64_t pte_flags = PTE_PRESENT | PTE_USER;
+        if (flags & VM_WRITE) pte_flags |= PTE_WRITABLE;
+        if (!(flags & VM_EXEC)) pte_flags |= PTE_NO_EXECUTE;
+        if (vmm_map_page((uintptr_t)mm->pgd, vaddr + i * PAGE_SIZE, (uintptr_t)pa, pte_flags) != 0) {
+            Pmm_Free(pa, 1);
+            return NULL;
+        }
+        mm->rss++;
+    }
+    vma_insert(mm, vma);
+    return (void*)vaddr;
 }

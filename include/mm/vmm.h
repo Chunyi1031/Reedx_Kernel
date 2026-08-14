@@ -62,5 +62,15 @@ mm_struct* vmm_clone_address_space(mm_struct *src_mm);
  * @return 找到返回 VMA 指针，否则返回 NULL
  */
 vm_area_t* find_vma(mm_struct *mm, uintptr_t addr);
+/**
+ * 在用户地址空间映射一段匿名内存（立即分配物理页）
+ * @param mm: 地址空间
+ * @param vaddr: 虚拟地址（自动页对齐）
+ * @param length: 长度（字节）
+ * @param flags: VM_READ/VM_WRITE/VM_EXEC
+ * @return 成功返回映射的虚拟地址，失败返回 NULL
+ * @author DeepSeek V4 Pro
+ */
+void* vmm_mmap(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t flags);
 
 #endif

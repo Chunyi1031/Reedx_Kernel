@@ -46,9 +46,10 @@ void set_cr3(uintptr_t cr3);
  * @param pml4_phys  PML4 的物理地址
  * @param vaddr      虚拟地址
  * @param alloc      是否自动分配缺失的中间页表（1=分配，0=不分配）
+ * @param user       新分配的中间页表是否设置 U/S=1（1=用户可访问）
  * @return           PTE 的虚拟地址指针，失败返回 NULL
  */
-uintptr_t* get_pte(uintptr_t pml4_phys, uintptr_t vaddr, int alloc);
+uintptr_t* get_pte(uintptr_t pml4_phys, uintptr_t vaddr, int alloc, int user);
 
 /**
  * 建立虚拟地址到物理地址的映射
