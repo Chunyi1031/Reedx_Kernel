@@ -5,5 +5,5 @@ include/config/
 Copy
 System.img
 kernel.elf
-./OVMF.fd
-./qemu.log
+OVMF.fd
+qemu.log

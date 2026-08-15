@@ -20,6 +20,7 @@
  * 参考：Linux 7.1.3 arch/x86/kernel/cpu/common.c 中的 GDT 初始化
  */
 #include <desc.h>
+#include <kstring.h>
 
 /*
  * GDT 表 — 必须在全局数据段中定义，确保 lgdt 时地址有效
@@ -140,4 +141,46 @@ void setup_gdt(void)
 		: "memory"
 	);
 #endif
+}
+
+/*
+ * setup_tss — 初始化 TSS 并加载 TR
+ *
+ * 原理：
+ *   ring3 → ring0 的中断/异常需要从 TSS.RSP0 读取内核栈指针。
+ *   内核此前没有自己的 TSS，TR 指向 UEFI 的 TSS（低物理地址，
+ *   用户页表不可见），导致 ring3 异常在栈切换阶段就三重错误。
+ *
+ * 步骤：
+ *   1. 清零 TSS，设置 rsp0 为专用内核栈顶（高半地址）
+ *   2. 将 16 字节 TSS 描述符写入 GDT 第 7 项（占用 7、8 两个槽位）
+ *   3. ltr 加载任务寄存器
+ */
+static struct tss_struct cpu_tss __attribute__((aligned(16)));
+static u8 tss_rsp0_stack[4096] __attribute__((aligned(16)));
+
+void setup_tss(void)
+{
+	memset(&cpu_tss, 0, sizeof(cpu_tss));
+	cpu_tss.rsp0 = (uint64_t)(tss_rsp0_stack + sizeof(tss_rsp0_stack));
+
+	struct tss_desc *td = (struct tss_desc *)&gdt_table[GDT_ENTRY_TSS];
+	uint64_t base = (uint64_t)&cpu_tss;
+	uint32_t limit = sizeof(cpu_tss) - 1;
+	td->limit0  = limit & 0xFFFF;
+	td->base0   = base & 0xFFFF;
+	td->base1   = (base >> 16) & 0xFF;
+	td->type    = 0x9;      /* 64-bit TSS (available) */
+	td->zero    = 0;
+	td->dpl     = 0;
+	td->p       = 1;
+	td->limit1  = (limit >> 16) & 0xF;
+	td->avl     = 0;
+	td->zero2   = 0;
+	td->g       = 0;
+	td->base2   = (base >> 24) & 0xFF;
+	td->base3   = (base >> 32);
+	td->reserved = 0;
+
+	__asm__ volatile ("ltr %0" : : "r"((u16)__TSS) : "memory");
 }

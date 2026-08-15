@@ -76,6 +76,7 @@ static void user_main_end(void) {
 
 void KernelMain(){
     setup_gdt();
+    setup_tss();
     setup_idt();
     setup_exceptions();
     tsc_calibrate();

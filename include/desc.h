@@ -69,6 +69,37 @@ struct desc_ptr {
 	uintptr_t address; /* 表线性基址 */
 } __attribute__((packed));
 
+/*
+ * 64 位 TSS 描述符（16 字节，系统段，type=0x9）
+ * 与 desc_struct 不同：base 是 64 位（高 32 位存在 base3）
+ */
+struct tss_desc {
+	u16 limit0;
+	u16 base0;
+	u16 base1 : 8, type : 4, zero : 1, dpl : 2, p : 1;
+	u16 limit1 : 4, avl : 1, zero2 : 2, g : 1, base2 : 8;
+	u32 base3;      /* base[63:32] */
+	u32 reserved;   /* 必须为 0 */
+} __attribute__((packed));
+
+/*
+ * x86_64 任务状态段（Intel SDM Vol.3 图 7-11）
+ * 关键字段 rsp0：ring3 → ring0 中断/异常时内核栈指针
+ */
+struct tss_struct {
+	u32 reserved1;
+	u64 rsp0;       /* ring0 内核栈 */
+	u64 rsp1;       /* ring1 栈（未用） */
+	u64 rsp2;       /* ring2 栈（未用） */
+	u64 reserved2;
+	u64 ist[7];     /* 中断栈表 */
+	u64 reserved3;
+	u16 reserved4;
+	u16 io_map_base;
+} __attribute__((packed));
+
+void setup_tss(void);//初始化 TSS（写描述符 + ltr）
+
 /* ========== GDT 入口索引 ========== */
 #if defined(ARCH_X86_64) || defined(ARCH_AMD64)
 /*
@@ -82,6 +113,7 @@ struct desc_ptr {
 #define GDT_ENTRY_USER32_CS     4   /* 用户 32 位代码段 */
 #define GDT_ENTRY_USER_DS       5   /* 用户数据段 */
 #define GDT_ENTRY_USER_CS       6   /* 用户 64 位代码段 */
+#define GDT_ENTRY_TSS           7   /* 内核 TSS（16 字节描述符，占用 7、8 两个槽位） */
 #elif defined(ARCH_X86_32) || defined(ARCH_AMD32)
 /*
  * x86_32 布局——无长模式，仅 32 位保护模式。
@@ -106,6 +138,7 @@ struct desc_ptr {
 #define __USER_DS       (GDT_ENTRY_USER_DS * 8 + 3)
 #define __USER32_CS     (GDT_ENTRY_USER32_CS * 8 + 3)
 #define __KERNEL32_CS   (GDT_ENTRY_KERNEL32_CS * 8)
+#define __TSS           (GDT_ENTRY_TSS * 8)
 #elif defined(ARCH_X86_32) || defined(ARCH_AMD32)
 #define __KERNEL_CS     (GDT_ENTRY_KERNEL_CS * 8)
 #define __KERNEL_DS     (GDT_ENTRY_KERNEL_DS * 8)
