@@ -2,57 +2,46 @@
  * kernel/asm/syscall.S — syscall 指令入口（ring3 → ring0）
  *
  * 由DeepSeek V4 Pro生成
+ *
+ * 栈布局（进入内核栈后，从栈顶向下 push 16 个槽位）：
+ *   +0   r15 ... +56  r8
+ *   +64  rbp  +72  rdi(参数1)  +80  rsi(参数2)  +88  rdx(参数3)
+ *   +96  rcx(用户返回RIP)  +104 rbx  +112 rax(调用号/返回值)
+ *   +120 用户RSP（切栈前保存，恢复时 pop %rsp 还原）
+ * 16 push = 128 字节，call 前 rsp 保持 16 字节对齐。
  */
-
-.section .bss
-.align 4096
-/* 单一用户任务时期的全局内核栈（后续集成调度器后改为 per-task） */
-syscall_kernel_stack:
-    .skip 4096
-syscall_kernel_stack_top:
-/* 保存用户 RSP（进入内核栈前） */
-user_rsp_save:
-    .skip 8
 
 .section .text, "ax"
 .globl syscall_entry
 .type syscall_entry, @function
 syscall_entry:
-    /* 保存用户 RSP，切换到内核栈 */
-    movq %rsp, user_rsp_save(%rip)
-    leaq syscall_kernel_stack_top(%rip), %rsp
-
-    /* 压入全部通用寄存器（含 syscall 硬件修改过的 rcx/r11） */
-    pushq %rax
-    pushq %rbx
-    pushq %rcx
-    pushq %rdx
-    pushq %rsi
-    pushq %rdi
-    pushq %rbp
-    pushq %r8
-    pushq %r9
-    pushq %r10
-    pushq %r11
-    pushq %r12
-    pushq %r13
-    pushq %r14
-    pushq %r15
-
-    /* 栈布局（rsp 指向 r15）：
-     *   +0   r15 ... +32  r11(用户RFLAGS) +40  r10
-     *   +72  rdi(参数1) +80 rsi(参数2) +88 rdx(参数3)
-     *   +96  rcx(用户返回RIP) +104 rbx +112 rax(调用号)
-     */
+    /* r10 中转用户 RSP，切换到当前用户任务的内核栈顶
+       （由调度器在切到用户任务时写入 user_kernel_stack_top） */
+    movq %rsp, %r10
+    movq user_kernel_stack_top(%rip), %rsp
+    pushq %r10               /* +120 用户RSP */
+    pushq %rax               /* +112 调用号 */
+    pushq %rbx               /* +104 */
+    pushq %rcx               /* +96  用户返回RIP */
+    pushq %rdx               /* +88  参数3 */
+    pushq %rsi               /* +80  参数2 */
+    pushq %rdi               /* +72  参数1 */
+    pushq %rbp               /* +64 */
+    pushq %r8                /* +56 */
+    pushq %r9                /* +48 */
+    pushq %r10               /* +40  r10 已被中转占用，槽位无意义（r10 为 caller-saved） */
+    pushq %r11               /* +32  用户RFLAGS */
+    pushq %r12               /* +24 */
+    pushq %r13               /* +16 */
+    pushq %r14               /* +8 */
+    pushq %r15               /* +0 */
 
     /* 按 SysV ABI 传参给 C 分发器 */
     movq 112(%rsp), %rdi    /* rax = 调用号 */
     movq 72(%rsp), %rsi     /* rdi = 参数1 */
     movq 80(%rsp), %rdx     /* rsi = 参数2 */
     movq 88(%rsp), %rcx     /* rdx = 参数3 */
-    subq $8, %rsp           /* 保持 16 字节栈对齐（call 前） */
     call syscall_dispatch
-    addq $8, %rsp
 
     /* 返回值写回 rax 槽位 */
     movq %rax, 112(%rsp)
@@ -74,6 +63,6 @@ syscall_entry:
     popq %rbx
     popq %rax               /* 返回值 */
 
-    /* 恢复用户 RSP，返回 ring3 */
-    movq user_rsp_save(%rip), %rsp
+    /* rsp 现在指向用户 RSP 槽位，直接恢复并返回 ring3 */
+    popq %rsp
     sysretq

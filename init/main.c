@@ -32,8 +32,6 @@ void KernelMain();//内核主函数
 void test_thread();
 spinlock_t lock_test;
 
-__attribute__((noreturn)) static void enter_user_mode(uintptr_t entry, uintptr_t stack_top, uintptr_t pgd);
-
 //内核入口
 void KernelStart(BootParam* boot_param){
     memset(__bss_start, 0, __bss_end - __bss_start);
@@ -57,14 +55,14 @@ static void user_main(void) {
     __asm__ volatile(
         "movq $1, %rax\n\t"                    //write(1, "Hello", 5)
         "movq $1, %rdi\n\t"
-        "leaq 6f(%rip), %rsi\n\t"
+        "leaq 8f(%rip), %rsi\n\t"
         "movq $5, %rdx\n\t"
         "syscall\n\t"
-        "jmp 7f\n\t"                            //跳过字符串数据
-        "6:\n\t"
-        ".ascii \"Hello\"\n\t"
-        "7:\n\t"
-        "jmp 7b\n\t"                            //死循环
+        "movq $60, %rax\n\t"                   //exit(0)
+        "xorq %rdi, %rdi\n\t"
+        "syscall\n\t"
+        "jmp .\n\t"
+        "8: .ascii \"Hello\"\n"
     );
 }
 
@@ -101,31 +99,20 @@ void KernelMain(){
     if(!code_pte || !pte_is_present(*code_pte))SYSTEM_STOP();
     memcpy((void*)PHYS_TO_VIRT(pte_get_paddr(*code_pte)), (void*)user_main,
            (uintptr_t)user_main_end - (uintptr_t)user_main);
-    early_printk("Entering user mode...\n");
-    enter_user_mode(0x400000, umm->start_stack + PAGE_SIZE, (uintptr_t)umm->pgd);
+    early_printk("Creating user task...\n");
+    CreateProcess(0x400000, umm, "User Test");//创建用户任务（时钟中断后调度运行）
+    CreateKernelThread(test_thread,4096,"test");
+    task_struct* list[10];
+    int count;
+    count = TaskGetAll(list,10);
+    for(int i = 0;i < count;i ++){
+        printk("PID:%d  Stack:%p  Name:%s\n",list[i]->pid,list[i]->kernel_stack,list[i]->name);
+    }
     msleep(5000);
     printk(PRINTK_INFO"Type 'r' to reboot or type 's' to shutdown.");
     char key = GetKey();
     if(key == 's')SYSTEM_Shutdown();
     else SYSTEM_Restart();
-}
-
-__attribute__((noreturn))
-static void enter_user_mode(uintptr_t entry, uintptr_t stack_top, uintptr_t pgd) {
-    __asm__ volatile(
-        "cli\n\t"
-        "pushq %3\n\t"      //ss = __USER_DS
-        "pushq %1\n\t"      //rsp = 用户栈顶
-        "pushq $0x2\n\t"    //rflags = 0x2 (IF=0)
-        "pushq %2\n\t"      //cs = __USER_CS
-        "pushq %0\n\t"      //rip = 用户代码入口
-        "mov %4, %%cr3\n\t" //切换到用户页表（高半内核映射仍存在）
-        "iretq\n\t"
-        :
-        : "r"(entry), "r"(stack_top), "r"((uint64_t)__USER_CS), "r"((uint64_t)__USER_DS), "r"(pgd)
-        : "memory"
-    );
-    __builtin_unreachable();
 }
 
 void test_thread(){

@@ -3,11 +3,18 @@
 #include <idt.h>
 #include <irq.h>
 #include <spinlock.h>
+#include <desc.h>
 
 static struct list_node task_list_head = {&task_list_head, &task_list_head};//任务链表头
 task_struct* current_task = NULL;//当前运行的任务
 task_struct* kernel_task = NULL;//内核任务
 task_struct* idle_task = NULL;//idle任务
+uint64_t user_kernel_stack_top = 0;//当前用户任务的内核栈顶
+//PID分配器
+static pid_t next_pid = 1;
+pid_t AllocPid(void){
+    return next_pid++;
+}
 
 //在head后面插入节点（头插法）
 static inline void list_add(struct list_node *node, struct list_node *head) {
@@ -166,6 +173,7 @@ void TaskKill(task_struct* t){
     cli();
     TaskListRemove(t);//从就绪队列移除
     if(t->kernel_stack)Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)t->kernel_stack),t->stack_size / 4096);
+    if(t->mm){ mmput(t->mm); t->mm = NULL; }//释放用户地址空间
     Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)t),1);
     memset(t,0,4096);
     sti();
@@ -528,8 +536,30 @@ void schedule(){
     sched_prev = current_task;
     next->state = TASK_RUNNING;
     if(next != sched_prev){
+        //切换地址空间
+        uintptr_t prev_pgd = sched_prev->mm ? (uintptr_t)sched_prev->mm->pgd : (uintptr_t)KERNEL_PML4;
+        uintptr_t next_pgd = next->mm ? (uintptr_t)next->mm->pgd : (uintptr_t)KERNEL_PML4;
+        if(prev_pgd != next_pgd)set_cr3(next_pgd);
+        //更新用户任务TSS.rsp0与syscall内核栈顶
+        if(next->mm){
+            user_kernel_stack_top = (uint64_t)next->kernel_stack + next->stack_size;
+            cpu_tss.rsp0 = user_kernel_stack_top;
+        }
         current_task = next;
-        switch_to(&sched_prev->context.rsp, &next->context.rsp);
+        switch_to(&sched_prev->context.rsp, &next->context.rsp);//切换任务上下文
     }
     if(sched_prev->state == TASK_TERMINATED)TaskKill(sched_prev);
+}
+
+//构造iretq帧返回ring3
+__attribute__((naked))
+void user_trampoline(void){
+    __asm__ volatile(
+        "pushq %rbx\n\t"    // ss
+        "pushq %r15\n\t"    // 用户 rsp
+        "pushq %r14\n\t"    // 用户 rflags
+        "pushq %r13\n\t"    // cs
+        "pushq %r12\n\t"    // rip
+        "iretq\n\t"
+    );
 }

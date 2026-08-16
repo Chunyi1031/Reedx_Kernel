@@ -5,6 +5,8 @@
 
 #define KERNEL_VIRTUAL_ADDR_START 0xFFFF800000000000ULL
 #define KERNEL_VIRTUAL_ADDR_END   0xFFFFFFFFFFFFFFFFULL
+/* 用户地址空间上界（x86_64 规范，低于此地址为合法用户地址） */
+#define USER_VADDR_MAX            0x0000800000000000ULL
 
 #define PHYS_TO_VIRT(paddr) (((uintptr_t)(paddr) >= KERNEL_VIRTUAL_ADDR_START) ? (uintptr_t)(paddr) : ((uintptr_t)(paddr) + KERNEL_VIRTUAL_ADDR_START))
 #define VIRT_TO_PHYS(vaddr) (((uintptr_t)(vaddr) >= KERNEL_VIRTUAL_ADDR_START) ? ((uintptr_t)(vaddr) - KERNEL_VIRTUAL_ADDR_START) : (uintptr_t)(vaddr))

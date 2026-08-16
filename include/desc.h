@@ -100,6 +100,8 @@ struct tss_struct {
 
 void setup_tss(void);//初始化 TSS（写描述符 + ltr）
 
+extern struct tss_struct cpu_tss;//调度器在切换用户任务时更新 rsp0
+
 /* ========== GDT 入口索引 ========== */
 #if defined(ARCH_X86_64) || defined(ARCH_AMD64)
 /*

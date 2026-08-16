@@ -156,9 +156,8 @@ void setup_gdt(void)
  *   2. 将 16 字节 TSS 描述符写入 GDT 第 7 项（占用 7、8 两个槽位）
  *   3. ltr 加载任务寄存器
  */
-static struct tss_struct cpu_tss __attribute__((aligned(16)));
+struct tss_struct cpu_tss __attribute__((aligned(16)));
 static u8 tss_rsp0_stack[4096] __attribute__((aligned(16)));
-
 void setup_tss(void)
 {
 	memset(&cpu_tss, 0, sizeof(cpu_tss));

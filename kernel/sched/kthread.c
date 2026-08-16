@@ -3,8 +3,6 @@
 #include <mm/vmm.h>
 #include <idt.h>
 
-static pid_t next_pid = 1;
-
 task_struct* CreateKernelThread(void (*entry)(void),uint64_t stack_size,const char* name) {
     //参数检查
     if(!entry || stack_size == 0)return NULL;
@@ -23,7 +21,7 @@ task_struct* CreateKernelThread(void (*entry)(void),uint64_t stack_size,const ch
     memset(stack,0,stack_size);
     cli();
     //初始化任务结构体
-    task->pid = next_pid++;
+    task->pid = AllocPid();
     task->tgid = 0;
     task->state = TASK_READY;
     task->kernel_stack = stack;

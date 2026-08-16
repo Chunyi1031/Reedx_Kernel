@@ -29,9 +29,30 @@
 #define EINVAL              22
 #define ENOSYS              38
 
+//POSIX timespec
+typedef struct timespec {
+    long tv_sec;//秒
+    long tv_nsec;//纳秒（0 ~ 999999999）
+} timespec_t;
+
 extern void syscall_entry(void);//汇编入口（kernel/asm/syscall.S）
 
 void InitSyscall(void);//初始化SYSCALL机制
+
+/**
+ * @brief 内核从用户空间拷贝（返回未拷贝字节数，0 = 成功）
+ * @param to   用户目标地址
+ * @param from 内核源地址
+ * @param n    字节数
+ */
+uint64_t copy_from_user(void *to, const void *from, uint64_t n);
+/**
+ * @brief 用户从内核拷贝（返回未拷贝字节数，0 = 成功）
+ * @param to   内核目标地址
+ * @param from 用户源地址
+ * @param n    字节数
+ */
+uint64_t copy_to_user(void *to, const void *from, uint64_t n);
 
 /**
  * @brief 系统调用分发器（由汇编入口调用）

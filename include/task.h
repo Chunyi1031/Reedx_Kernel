@@ -68,10 +68,14 @@ extern task_struct* current_task;//当前运行的任务
 extern task_struct* kernel_task;//内核任务
 extern task_struct* idle_task;//空闲任务
 
+void TaskExit(void) __attribute__((noreturn));//退出当前任务（标记终止并调度）
+
 void timeout_wake_check(void);//检查并唤醒超时任务
 #define DEFINE_WAIT_QUEUE(name)  wait_queue_head_t name = {&(name), &(name)}
 
 void TaskInit();//初始化多任务环境
+pid_t AllocPid(void);//分配新的PID
+void user_trampoline(void);//从内核栈iretq回ring3
 void TaskListAdd(task_struct* t);//将任务加入任务链表
 void TaskListRemove(task_struct* t);//将任务从任务链表中移除
 task_struct* TaskFind(pid_t pid);//根据PID查找任务
@@ -180,5 +184,13 @@ void TaskKill(task_struct* t);
  * @author Liu Chunyi
  */
 task_struct* CreateKernelThread(void (*entry)(void),uint64_t stack_size,const char* name);//创建内核线程
+/**
+ * @brief 创建进程
+ * @param entry 用户入口虚拟地址
+ * @param mm    用户地址空间（已 mmap 代码/栈，由任务接管引用）
+ * @param name  任务名
+ * @return 任务结构体，失败返回 NULL
+ */
+task_struct* CreateProcess(uintptr_t entry, mm_struct* mm, const char* name);
 
 #endif
