@@ -3,6 +3,7 @@
 #include <mm/vmm.h>
 #include <idt.h>
 #include <desc.h>
+#include <print.h>
 
 //创建进程
 task_struct* CreateProcess(uintptr_t entry, mm_struct* mm, const char* name) {
@@ -31,7 +32,7 @@ task_struct* CreateProcess(uintptr_t entry, mm_struct* mm, const char* name) {
     uint64_t stack_bottom = (uint64_t)stack + 4096;
     uint64_t* f = (uint64_t*)(stack_bottom - 17 * 8);
     memset(f, 0, 17 * 8);
-    f[0]  = mm->start_stack + PAGE_SIZE;//用户栈顶
+    f[0]  = mm->start_stack + PAGE_SIZE - 16;//用户栈顶
     f[1]  = 0x202;//用户rflags
     f[2]  = (uint64_t)__USER_CS;//用户代码段
     f[3]  = entry;//用户入口 RIP

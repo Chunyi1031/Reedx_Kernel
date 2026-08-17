@@ -8,6 +8,7 @@
 #include <drives/tty.h>
 #include <drives/ps2kbd.h>
 #include <idt.h>
+#include <fork.h>
 
 static inline uint64_t rdmsr(uint32_t msr){
 	uint32_t low, high;
@@ -57,9 +58,8 @@ static long sys_write(long fd, long buf, long count){
 	long written = 0;
 	while (written < count) {
 		long chunk = count - written;
-		if (chunk > (long)sizeof(kbuf)) chunk = sizeof(kbuf);
-		if (copy_from_user(kbuf, (const char*)buf + written, (unsigned long)chunk))
-			return -EFAULT;
+		if(chunk > (long)sizeof(kbuf)) chunk = sizeof(kbuf);
+		if(copy_from_user(kbuf, (const char*)buf + written, (unsigned long)chunk))return -EFAULT;
 		for (long i = 0; i < chunk; i++) {
 			TTY_PrintChar(kbuf[i], CurrentConsoleStyle.TextColor);
 		}
@@ -76,7 +76,7 @@ static long sys_read(long fd, long buf, long count){
 	if (fd != 0) return -EBADF;
 	if (count <= 0) return 0;
 	if (!buf) return -EFAULT;
-	sti();//GetKey 内部 hlt 等待，必须允许键盘中断
+	sti();
 	char c = GetKey();//阻塞等待按键
 	if (copy_to_user((void*)buf, &c, 1)) return -EFAULT;
 	return 1;
@@ -102,12 +102,13 @@ static long sys_nanosleep(long req, long rem, long unused){
 
 //进程退出
 static long __attribute__((noreturn)) do_exit(long status){
-	if (current_task && current_task->mm) TaskExit();//不返回
+	if(current_task && current_task->mm)TaskExit();//退出任务
 	SYSTEM_STOP();
 }
 
 /*
- * void _exit(int status)  — 退出当前线程
+ * void _exit(int status)
+ * 退出当前线程
  */
 static long sys_exit(long status, long b, long c){
 	(void)b; (void)c;
@@ -115,7 +116,8 @@ static long sys_exit(long status, long b, long c){
 }
 
 /*
- * void exit_group(int status) — 退出整个线程组
+ * void exit_group(int status)
+ * 退出整个线程组
  */
 static long sys_exit_group(long status, long b, long c){
 	(void)b; (void)c;
@@ -123,8 +125,8 @@ static long sys_exit_group(long status, long b, long c){
 }
 
 /*
-    pid_t getpid(void)
-    系统调用:getpid
+ * pid_t getpid(void)
+ * 系统调用:getpid
 */
 static long sys_getpid(long a, long b, long c){
 	(void)a; (void)b; (void)c;
@@ -153,6 +155,7 @@ void InitSyscall(void){
 	syscall_table[SYS_WRITE]      = sys_write;
 	syscall_table[SYS_NANOSLEEP]  = sys_nanosleep;
 	syscall_table[SYS_GETPID]     = sys_getpid;
+	syscall_table[SYS_FORK]       = sys_fork;
 	syscall_table[SYS_EXIT]       = sys_exit;
 	syscall_table[SYS_EXIT_GROUP] = sys_exit_group;
 	wrmsr(IA32_EFER, rdmsr(IA32_EFER) | (1ULL << 0));//启用SYSCALL/SYSRET

@@ -67,6 +67,7 @@ typedef struct condition {
 extern task_struct* current_task;//当前运行的任务
 extern task_struct* kernel_task;//内核任务
 extern task_struct* idle_task;//空闲任务
+extern uint64_t user_kernel_stack_top;//当前用户任务的内核栈顶
 
 void TaskExit(void) __attribute__((noreturn));//退出当前任务（标记终止并调度）
 

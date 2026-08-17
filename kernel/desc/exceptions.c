@@ -77,6 +77,46 @@ void exc_dispatch(uint32_t vector,uintptr_t rip){
 #define PF_ERR_RSVD     (1ULL << 3)//保留位被置位
 #define PF_ERR_EXEC     (1ULL << 4)//取指访问
 
+//写时复制处理
+static int do_wp_page(mm_struct *mm, uintptr_t fault_addr){
+	if (!mm || !mm->pgd) return -1;
+	uintptr_t vaddr = fault_addr & PAGE_MASK;
+	//逐级定位并修复路径上的 COW/只读中间条目
+	uint64_t *table = (uint64_t*)PHYS_TO_VIRT((uintptr_t)mm->pgd);
+	int index = (int)PML4_INDEX(vaddr);
+	uint64_t entry = table[index];
+	if (!(entry & PTE_PRESENT) || (entry & PTE_HUGE)) return -1;
+	if (entry & PTE_COW) table[index] = (entry & ~PTE_COW) | PTE_WRITABLE;
+	table = (uint64_t*)PHYS_TO_VIRT(pte_get_paddr(table[index]));
+	index = (int)PDPT_INDEX(vaddr);
+	entry = table[index];
+	if (!(entry & PTE_PRESENT) || (entry & PTE_HUGE)) return -1;
+	if (entry & PTE_COW) table[index] = (entry & ~PTE_COW) | PTE_WRITABLE;
+	table = (uint64_t*)PHYS_TO_VIRT(pte_get_paddr(table[index]));
+	index = (int)PD_INDEX(vaddr);
+	entry = table[index];
+	if (!(entry & PTE_PRESENT) || (entry & PTE_HUGE)) return -1;
+	if (entry & PTE_COW) table[index] = (entry & ~PTE_COW) | PTE_WRITABLE;
+	table = (uint64_t*)PHYS_TO_VIRT(pte_get_paddr(table[index]));
+	//叶子PTE
+	index = (int)PT_INDEX(vaddr);
+	uint64_t *pte = &table[index];
+	entry = *pte;
+	if (!(entry & PTE_PRESENT)) return -1;
+	if (!(entry & PTE_COW)) return -1;//非COW页
+	//分配新物理页并拷贝旧内容
+	void *new_paddr = Pmm_Malloc(1);
+	if (!new_paddr) return -1;
+	memcpy((void*)PHYS_TO_VIRT((uintptr_t)new_paddr),(void*)PHYS_TO_VIRT(pte_get_paddr(entry)), PAGE_SIZE);
+	//更新叶子PTE
+	uint64_t new_pte = (uintptr_t)new_paddr | ((entry & 0xFFFULL) & ~PTE_COW) | PTE_WRITABLE;
+	new_pte |= entry & PTE_NO_EXECUTE;
+	*pte = new_pte;
+	__asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
+	mm->rss++;//新页计入常驻集
+	return 0;
+}
+
 void interrupt_PF(uint64_t fault_addr, uint64_t error_code, uintptr_t rip){
 	//按需分页：用户态、页不存在、非保留位错误
 	if ((error_code & PF_ERR_USER) && !(error_code & PF_ERR_PRESENT) && !(error_code & PF_ERR_RSVD)) {
@@ -95,14 +135,22 @@ void interrupt_PF(uint64_t fault_addr, uint64_t error_code, uintptr_t rip){
 				uint64_t flags = PTE_PRESENT | PTE_USER;
 				if (vma->vm_flags & VM_WRITE) flags |= PTE_WRITABLE;
 				if (!(vma->vm_flags & VM_EXEC)) flags |= PTE_NO_EXECUTE;
-				//映射
-				if (vmm_map_page((uintptr_t)current_task->mm->pgd, page_vaddr, (uintptr_t)paddr, flags) != 0) {
+				//映射（用户页表 CR3 下安全：页表遍历经高半，不用 get_pte/vmm_map_page）
+				if (vmm_map_user_page(current_task->mm, page_vaddr, (uintptr_t)paddr, flags) != 0) {
 					Pmm_Free(paddr, 1);
 					goto pf_error;
 				}
 				current_task->mm->rss++;
 				return;
 			}
+		}
+	}
+	//写时复制
+	if ((error_code & PF_ERR_USER) && (error_code & PF_ERR_PRESENT) && (error_code & PF_ERR_WRITE)) {
+		if (current_task && current_task->mm) {
+			vm_area_t *vma = find_vma(current_task->mm, fault_addr);
+			if (vma && (vma->vm_flags & VM_WRITE) &&
+			    do_wp_page(current_task->mm, fault_addr) == 0) return;
 		}
 	}
 pf_error:

@@ -15,6 +15,7 @@
 #include <print.h>
 #include <delay.h>
 #include <klib.h>
+#include <mm/vmm.h>
 
 //LAPIC基址（xAPIC MMIO 模式），x2APIC模式下不使用MMIO但保留此变量
 static uintptr_t lapic_base = 0;
@@ -78,21 +79,18 @@ uintptr_t lapic_get_base(void){
 }
 
 //使能本地APIC
-//原理：优先尝试切换到x2APIC模式（需要CPUID支持 + MADT中存在x2APIC条目），
-//      否则退回到xAPIC MMIO模式。x2APIC模式通过MSR访问寄存器，更快且支持32位APIC ID。
 void lapic_enable(void){
 	uint64_t msr;
-	_Bool use_x2apic = false;
 	lapic_base = lapic_get_base();
+	//MMIO基址转高半
+	if (!lapic_x2apic_mode) lapic_base = PHYS_TO_VIRT(lapic_base);
 	msr = rdmsr(MSR_IA32_APICBASE);
-	//尝试x2APIC：硬件支持 && MADT有x2APIC条目
-	if (cpu_has_x2apic() && APIC_MADT.has_x2apic_entries) {
+	//尝试x2APIC：硬件支持即启用
+	if (cpu_has_x2apic()) {
 		msr |= MSR_IA32_APICBASE_X2APIC;
 		wrmsr(MSR_IA32_APICBASE, msr);
 		lapic_x2apic_mode = true;
-		use_x2apic = true;
-	}
-	if (!use_x2apic) {
+	}else{
 		msr |= MSR_IA32_APICBASE_ENABLE;
 		wrmsr(MSR_IA32_APICBASE, msr);
 	}
@@ -263,6 +261,7 @@ void ioapic_init(void){
 	uint16_t flags;
 	if (APIC_MADT.num_ioapics == 0)ioapic_base = IO_APIC_DEFAULT_PHYS_BASE;
 	else ioapic_base = APIC_MADT.ioapics[0].mmio_base;
+	ioapic_base = PHYS_TO_VIRT(ioapic_base);//MMIO基址转高半
 	for (i = 0; i < 16; i++) {
 		uint32_t gsi = APIC_MADT.gsi_map[i];
 		uint8_t vector = IRQ_VECTOR_BASE + (uint8_t)i;

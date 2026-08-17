@@ -79,6 +79,7 @@ exc_common_handler:
 	popq %rcx
 	popq %rbx
 	popq %rax
+	addq $16, %rsp
 	iretq
 	sti
 
@@ -143,5 +144,6 @@ int_14_handler:
 	popq %rdx
 	popq %rcx
 	popq %rax
+	addq $8, %rsp
 	iretq
 	sti

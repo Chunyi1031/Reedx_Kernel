@@ -41,5 +41,6 @@ void* Pmm_Malloc(int pages);
  * @param pages 要回收的页数
  */
 void Pmm_Free(void* addr,int pages);
+void PmmSwitchToHigh(void);//将PMM描述符/位图指针切换为高半地址
 
 #endif

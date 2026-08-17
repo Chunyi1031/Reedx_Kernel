@@ -29,7 +29,7 @@ typedef uintptr_t pdpt_t[512];
 typedef uintptr_t pd_t[512];
 typedef uintptr_t pt_t[512];
 
-#define pte_get_paddr(pte)   (pte & ~0xFFFULL)
+#define pte_get_paddr(pte)   ((pte) & 0x000FFFFFFFFFF000ULL)
 #define pte_get_flags(pte)  (pte & 0xFFFULL)
 #define pte_is_present(pte) ((pte & PTE_PRESENT) != 0)
 #define pte_is_huge(pte)    ((pte & PTE_HUGE) != 0)

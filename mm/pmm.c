@@ -1,9 +1,11 @@
 #include <mm/pmm.h>
+#include <mm/vmm.h>
 #include <print.h>
 
 OS_MEMORY_DESCRIPTOR* MemDescAddr = NULL;
 int MemDescNum = 0;
 uint64_t MemDescSize = 0;
+static uintptr_t memdesc_phys_base = 0;//MemDesc 区域物理基址（用于与 UEFI 物理地址比较）
 
 //检查内存映射
 static int CheckMemoryMap(UEFI_MEMORY_MAP* MemoryMap){
@@ -18,7 +20,7 @@ static int CheckMemoryMap(UEFI_MEMORY_MAP* MemoryMap){
 
 static _Bool IsMemoryAvailable(UEFI_MEMORY_DESCRIPTOR *Desc) {
     UEFI_MEMORY_MAP* MemoryMap = SYSTEM_MemoryMap;
-    if(Desc->PhysicalStart == (uintptr_t)MemDescAddr) return false;
+    if(Desc->PhysicalStart == memdesc_phys_base) return false;
     if((Desc->Type==CONVENTIONAL_MEMORY) || (Desc->Type==BOOT_SERVICES_CODE) || (Desc->Type==BOOT_SERVICES_DATA) || (Desc->Type==LOADER_CODE)) return true;
     return false;
 }
@@ -43,6 +45,7 @@ void find_addr_in_bitmap(uintptr_t addr,OS_MEMORY_DESCRIPTOR **desc,uint64_t *of
 //获取某个内存描述符
 UEFI_MEMORY_DESCRIPTOR* AnalysisMemoryMap(const uint32_t num){
     UEFI_MEMORY_MAP* MemoryMap = SYSTEM_MemoryMap;
+    //注意：仅在 PMM 初始化期调用（高半映射未建立，UEFI identity 映射下直接用物理地址）
     UEFI_MEMORY_DESCRIPTOR* DescriptorAddr = (UEFI_MEMORY_DESCRIPTOR*)((uint8_t*)MemoryMap->Buffer + MemoryMap->DescriptorSize * num);//描述符的位置
     uint32_t maxDescriptors = MemoryMap->MapSize / MemoryMap->DescriptorSize;//计算描述符数量
     if (num >= maxDescriptors)return NULL;
@@ -57,8 +60,12 @@ int Init_Physical_Memory_Manager() {
         return 1;
     }
     //设置位置 —— KernelAddress 替代旧 KernelStartAddress
-    MemDescAddr = (OS_MEMORY_DESCRIPTOR*)(SYSTEM_BootParam->KernelAddress+SYSTEM_BootParam->KernelSize);
-    MemDescAddr = (OS_MEMORY_DESCRIPTOR*)(((uintptr_t)MemDescAddr + PAGE_SIZE - 1)& ~(PAGE_SIZE - 1));
+    memdesc_phys_base = SYSTEM_BootParam->KernelAddress + SYSTEM_BootParam->KernelSize;
+    memdesc_phys_base = (memdesc_phys_base + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    //注意：此刻高半映射尚未建立（InitKernelMapping 之后才可用），
+    //先用物理地址访问（UEFI 页表低半区 identity 映射），
+    //InitKernelMapping 完成后由 PmmSwitchToHigh 切换为高半地址。
+    MemDescAddr = (OS_MEMORY_DESCRIPTOR*)memdesc_phys_base;
     if (!MemDescAddr) {
         print_error();
         early_printk("Physical Memory Manager initialization failed: UEFI Memory Desc not found\n");
@@ -99,7 +106,7 @@ int Init_Physical_Memory_Manager() {
     MemDescSize = desc_size + bm_size;
     //将描述符空间标记为已占用
     uint64_t remain_allocsize = MemDescSize;//剩余需分配大小
-    uintptr_t allocaddr = (uintptr_t)MemDescAddr;//分配区域的地址
+    uintptr_t allocaddr = memdesc_phys_base;//分配区域的地址（物理，用于位图查找）
     uint32_t desc_pagesize = (((remain_allocsize + 4095) / 4096) * 4096) / PAGE_SIZE;//分配区域页数
     while(desc_pagesize > 0){
         OS_MEMORY_DESCRIPTOR* desc_bmaddr_desc = NULL;//分配区域的描述符
@@ -140,6 +147,22 @@ uint64_t GetMemoryTotalSize() {
     uint64_t total = 0;
     for(int i = 0;i < MemDescNum;i ++) total += MemDescAddr[i].PageSize * PAGE_SIZE;
     return total;
+}
+
+/*
+ * PmmSwitchToHigh — 内核高半映射建立后，将 PMM 描述符/位图指针切换为高半地址。
+ * 此后代码可能运行在用户页表下（低半区无映射），必须经高半访问。
+ * 由 InitKernelMapping 末尾调用。
+ */
+void PmmSwitchToHigh(void){
+    if (!MemDescAddr) return;
+    //先转换各描述符内的位图指针（当前 MemDescAddr 仍为物理地址，identity 映射下可读）
+    for (int i = 0; i < MemDescNum; i++) {
+        if (MemDescAddr[i].bitmap.bits)
+            MemDescAddr[i].bitmap.bits = (uint8_t*)PHYS_TO_VIRT((uintptr_t)MemDescAddr[i].bitmap.bits);
+    }
+    //最后转换描述符数组基址
+    MemDescAddr = (OS_MEMORY_DESCRIPTOR*)PHYS_TO_VIRT((uintptr_t)MemDescAddr);
 }
 
 void* Pmm_Malloc(int pages) {

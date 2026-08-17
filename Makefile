@@ -239,7 +239,7 @@ run: system
 
 .PHONY: run-debug
 run-debug: system
-	qemu-system-x86_64 -D qemu.log -d cpu_reset -m 1G -bios ./OVMF.fd -hda $(SYSTEM_DISK) -s -S -serial stdio
+	qemu-system-x86_64 -D qemu.log -d int -m 1G -bios ./OVMF.fd -hda $(SYSTEM_DISK) -s -S -serial stdio
 
 #帮助
 .PHONY: help

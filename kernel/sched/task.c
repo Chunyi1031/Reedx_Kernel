@@ -174,8 +174,8 @@ void TaskKill(task_struct* t){
     TaskListRemove(t);//从就绪队列移除
     if(t->kernel_stack)Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)t->kernel_stack),t->stack_size / 4096);
     if(t->mm){ mmput(t->mm); t->mm = NULL; }//释放用户地址空间
-    Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)t),1);
     memset(t,0,4096);
+    Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)t),1);
     sti();
 }
 

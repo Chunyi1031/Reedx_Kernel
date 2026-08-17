@@ -10,6 +10,7 @@
 #define SYS_CLOSE           3
 #define SYS_NANOSLEEP       35
 #define SYS_GETPID          39
+#define SYS_FORK            57
 #define SYS_EXIT            60
 #define SYS_EXIT_GROUP      231
 #define SYSCALL_TABLE_SIZE  256
@@ -61,5 +62,26 @@ uint64_t copy_to_user(void *to, const void *from, uint64_t n);
  * @return 系统调用返回值（负数 = -errno）
  */
 long syscall_dispatch(long num, long a1, long a2, long a3);
+
+/**
+ * @brief 系统调用
+ * @param num 调用号
+ * @param arg1/arg2/arg3 参数 1~3
+ * @return 系统调用返回值
+ */
+#define syscall(num, arg1, arg2, arg3) ({ \
+    long __ret; \
+    __asm__ volatile( \
+        "syscall" \
+        : "=a" (__ret) \
+        : "a" (num), \
+          "D" (arg1), \
+          "S" (arg2), \
+          "d" (arg3) \
+        : "rcx", "r11", "memory" \
+    ); \
+    __ret; \
+})
+
 
 #endif

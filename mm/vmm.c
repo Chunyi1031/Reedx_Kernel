@@ -50,7 +50,7 @@ void InitKernelMapping() {
             vmm_map_page(KERNEL_PML4, PHYS_TO_VIRT(pa), pa, PTE_PRESENT | PTE_WRITABLE | PTE_CAN_COVERED);
         }
     }
-    //映射帧缓冲（高半地址，确保用户页表下内核也能输出）
+    //映射帧缓冲
     if (bp && bp->ScreenInfo.FrameBuffer && bp->ScreenInfo.FrameBuffer_Size) {
         uintptr_t fb_phys = (uintptr_t)bp->ScreenInfo.FrameBuffer & PAGE_MASK;
         uint64_t fb_pages = (bp->ScreenInfo.FrameBuffer_Size + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -58,9 +58,12 @@ void InitKernelMapping() {
             uintptr_t pa = fb_phys + j * PAGE_SIZE;
             vmm_map_page(KERNEL_PML4, PHYS_TO_VIRT(pa), pa, PTE_PRESENT | PTE_WRITABLE | PTE_CAN_COVERED);
         }
-        //高半映射就绪后，帧缓冲统一改用高半地址（用户页表复制了高半映射）
-        SYSTEM_FrameBuffer = (uint32_t*)PHYS_TO_VIRT((uintptr_t)bp->ScreenInfo.FrameBuffer);
+        SYSTEM_FrameBuffer = (uint32_t*)PHYS_TO_VIRT((uintptr_t)bp->ScreenInfo.FrameBuffer);//更新帧缓冲区地址
     }
+    //映射LAPIC/IOAPIC MMIO到高半
+    vmm_map_page(KERNEL_PML4, PHYS_TO_VIRT(0xFEE00000), 0xFEE00000, PTE_PRESENT | PTE_WRITABLE);
+    vmm_map_page(KERNEL_PML4, PHYS_TO_VIRT(0xFEC00000), 0xFEC00000, PTE_PRESENT | PTE_WRITABLE);
+    PmmSwitchToHigh();//设置PMM到高半区
 }
 
 __attribute__((noinline, naked))
@@ -151,7 +154,7 @@ mm_struct* vmm_create_address_space(void){
     uintptr_t* pml4 = (uintptr_t*)PHYS_TO_VIRT(pml4_phys);
     memset(pml4,0,PAGE_SIZE);
     //复制内核高半区映射
-    uintptr_t* kernel_pml4 = (uintptr_t*)KERNEL_PML4;
+    uintptr_t* kernel_pml4 = (uintptr_t*)PHYS_TO_VIRT((uintptr_t)KERNEL_PML4);
     for(int i = 256;i < 512;i++)pml4[i] = kernel_pml4[i];
     //初始化结构体
     mm->pgd = (pml4_t*)pml4_phys;//保存物理地址，用于加载 CR3
@@ -168,7 +171,7 @@ mm_struct* vmm_create_address_space(void){
     mm->end_data   = 0x600000;
     mm->start_brk  = 0x700000;
     mm->brk        = 0x700000;
-    mm->start_stack = 0x7FFFFFFFFFF000ULL;
+    mm->start_stack = 0x7FFFFFFFF000ULL;
     mm->total_vm = 0;
     mm->rss = 0;
     return mm;
@@ -213,7 +216,7 @@ static void vmm_free_user_pagetable(uint64_t table_phys, int level) {
     for(int i = 0; i < 512; i++) {
         uint64_t entry = table[i];
         if (!(entry & PTE_PRESENT)) continue;
-        uint64_t child_phys = entry & ~0xFFFULL;
+        uint64_t child_phys = pte_get_paddr(entry);
         if (level < 3 && !(entry & PTE_HUGE)) {
             vmm_free_user_pagetable(child_phys, level + 1);
         } else {
@@ -231,7 +234,7 @@ void vmm_destroy_address_space(mm_struct *mm){
         for(int i = 0; i < 256; i++) {
             uintptr_t entry = pml4[i];
             if(!(entry & PTE_PRESENT))continue;//检查页是否存在
-            uint64_t pdpt_phys = entry & ~0xFFFULL;//获取PDPT
+            uint64_t pdpt_phys = pte_get_paddr(entry);//获取PDPT
             vmm_free_user_pagetable(pdpt_phys, 1);//递归释放PDPT及其子页表
             pml4[i] = 0;//清除PML4表项
         }
@@ -262,7 +265,7 @@ static void vmm_clone_pagetable(uintptr_t src_table, uintptr_t dst_table, int le
     for (int i = 0; i < 512; i++) {
         uintptr_t entry = src_virt[i];
         if (!(entry & PTE_PRESENT)) continue;
-        uintptr_t child_phys = entry & ~0xFFFULL;
+        uintptr_t child_phys = pte_get_paddr(entry);
         uint64_t flags = entry & 0xFFFULL;
         if (level < 3 && !(entry & PTE_HUGE)) {
             uintptr_t new_child_phys = (uintptr_t)Pmm_Malloc(1);
@@ -355,7 +358,7 @@ mm_struct* vmm_clone_address_space(mm_struct *src_mm){
     for(int i = 0; i < 256; i++) {
         uintptr_t entry = src_pml4[i];
         if(!(entry & PTE_PRESENT)) continue;
-        uintptr_t child_phys = entry & ~0xFFFULL;
+        uintptr_t child_phys = pte_get_paddr(entry);
         uint64_t flags = entry & 0xFFFULL;
         //分配新的PDPT页
         uintptr_t new_pdpt_phys = (uintptr_t)Pmm_Malloc(1);
@@ -369,8 +372,6 @@ mm_struct* vmm_clone_address_space(mm_struct *src_mm){
         dst_pml4[i] = new_pdpt_phys | (flags & ~PTE_WRITABLE) | PTE_COW;//设置COW标志
     }
     //复制父进程的元数据
-    spin_lock(&src_mm->mm_lock);
-    spin_lock(&dst_mm->mm_lock);
     dst_mm->start_code = src_mm->start_code;
     dst_mm->end_code   = src_mm->end_code;
     dst_mm->start_data = src_mm->start_data;
@@ -385,8 +386,6 @@ mm_struct* vmm_clone_address_space(mm_struct *src_mm){
         vmm_destroy_address_space(dst_mm);
         return NULL;
     }
-    spin_unlock(&dst_mm->mm_lock);
-    spin_unlock(&src_mm->mm_lock);
     return dst_mm;
 }
 
@@ -432,4 +431,30 @@ void* vmm_mmap(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t flags) 
     }
     vma_insert(mm, vma);
     return (void*)vaddr;
+}
+
+int vmm_map_user_page(mm_struct *mm, uintptr_t vaddr, uintptr_t paddr, uint64_t flags) {
+    if (!mm || !mm->pgd) return -1;
+    vaddr &= PAGE_MASK;
+    uint64_t *table = (uint64_t*)PHYS_TO_VIRT((uintptr_t)mm->pgd);
+    //遍历并分配中间页表（PML4→PDPT→PD）
+    for (int level = 0; level < 3; level++) {
+        int index = (int)((vaddr >> (39 - level * 9)) & 0x1FF);
+        uint64_t entry = table[index];
+        if (!(entry & PTE_PRESENT)) {
+            uintptr_t new_phys = (uintptr_t)Pmm_Malloc(1);
+            if (!new_phys) return -1;
+            uint64_t *new_table = (uint64_t*)PHYS_TO_VIRT(new_phys);
+            memset(new_table, 0, PAGE_SIZE);
+            table[index] = new_phys | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+            entry = table[index];
+        }
+        if (entry & PTE_HUGE) return -1;//不支持大页
+        table = (uint64_t*)PHYS_TO_VIRT(pte_get_paddr(entry));
+    }
+    //设置叶子 PTE
+    int index = (int)PT_INDEX(vaddr);
+    table[index] = (paddr & PAGE_MASK) | flags;
+    __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
+    return 0;
 }

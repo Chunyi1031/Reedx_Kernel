@@ -50,23 +50,29 @@ void KernelStart(BootParam* boot_param){
 }
 
 //用户态测试程序
-__attribute__((naked, noinline, section(".text.user")))
+extern char msg1[], msg2[], msg3[];
+__attribute__((noinline, section(".text.user")))
 static void user_main(void) {
-    __asm__ volatile(
-        "movq $1, %rax\n\t"                    //write(1, "Hello", 5)
-        "movq $1, %rdi\n\t"
-        "leaq 8f(%rip), %rsi\n\t"
-        "movq $5, %rdx\n\t"
-        "syscall\n\t"
-        "movq $60, %rax\n\t"                   //exit(0)
-        "xorq %rdi, %rdi\n\t"
-        "syscall\n\t"
-        "jmp .\n\t"
-        "8: .ascii \"Hello\"\n"
-    );
+    //write(1,msg,len)
+    syscall(SYS_WRITE,1,(uintptr_t)msg1,22);
+    //fork()
+    pid_t pid = syscall(SYS_FORK,0,0,0);
+    if(!pid){
+        syscall(SYS_WRITE,1,(uintptr_t)msg2,14);
+        syscall(SYS_EXIT,0,0,0);//exit(0)
+    }else{
+        syscall(SYS_WRITE,1,(uintptr_t)msg3,15);
+        syscall(SYS_EXIT,0,0,0);//exit(0)
+    }
 }
-
-//结束标记函数：与 user_main 同节相邻，用于计算用户代码长度
+__asm__(
+    ".pushsection .text.user, \"ax\", @progbits\n"
+    "msg1: .ascii \"Hello World in ring3!\\n\"\n"
+    "msg2: .ascii \"Child process\\n\"\n"
+    "msg3: .ascii \"Parent process\\n\"\n"
+    ".popsection\n"
+);
+//结束标记函数
 __attribute__((naked, noinline, section(".text.user")))
 static void user_main_end(void) {
     __asm__ volatile("ud2\n\t");
@@ -90,7 +96,6 @@ void KernelMain(){
     rtc_time_t time;
     rtc_get_local(&time);
     printk(PRINTK_INFO"UEFI PML4 at 0x%llx,Kernel PML4 at 0x%llx",UEFI_PML4,KERNEL_PML4);
-    // ==== 用户态测试：跳到 ring3 ====
     mm_struct* umm = vmm_create_address_space();
     if(!umm)SYSTEM_STOP();
     if(!vmm_mmap(umm, 0x400000, PAGE_SIZE, VM_READ | VM_EXEC | VM_WRITE))SYSTEM_STOP();
