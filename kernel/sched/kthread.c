@@ -24,6 +24,7 @@ task_struct* CreateKernelThread(void (*entry)(void),uint64_t stack_size,const ch
     task->pid = AllocPid();
     task->tgid = 0;
     task->state = TASK_READY;
+    waitq_init(&task->child_wq);
     task->kernel_stack = stack;
     task->stack_size = stack_size;
     strcpy(task->name, name);

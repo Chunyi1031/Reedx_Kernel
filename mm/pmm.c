@@ -97,11 +97,13 @@ int Init_Physical_Memory_Manager() {
     //分配位图并计算描述符大小+位图大小
     uint64_t desc_size = sizeof(OS_MEMORY_DESCRIPTOR) * MemDescNum;
     uint64_t bm_size = 0;
+    uint64_t total_pages = 0;
     for(uint32_t i = 0;i < MemDescNum;i ++){
         OS_MEMORY_DESCRIPTOR* memdesc = &MemDescAddr[i];
         if(!memdesc)continue;
         BitmapInit(&memdesc->bitmap,(uint8_t *)((uintptr_t)MemDescAddr+desc_size+bm_size),memdesc->PageSize,PMM_FREE);
         bm_size += ((memdesc->PageSize + 7)& ~7) / 8;
+        total_pages += memdesc->PageSize;
     }
     MemDescSize = desc_size + bm_size;
     //将描述符空间标记为已占用
@@ -138,6 +140,17 @@ int Init_Physical_Memory_Manager() {
         uint32_t page_count = (ov_end - ov_start) / PAGE_SIZE;
         BitmapSetBits(&desc->bitmap,start_bit,page_count,PMM_USED);
     }
+    //分配每页引用计数数组
+    uint64_t refs_pages = (total_pages * sizeof(uint32_t) + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint32_t* refs_base = (uint32_t*)Pmm_Malloc((int)refs_pages);
+    if(refs_base){
+        memset(refs_base, 0, total_pages * sizeof(uint32_t));
+        uint32_t* refs_cur = refs_base;
+        for(uint32_t i = 0;i < MemDescNum;i ++){
+            MemDescAddr[i].refs = refs_cur;
+            refs_cur += MemDescAddr[i].PageSize;
+        }
+    }
     print_ok();
     early_printk("Physical Memory Manager initialization successful\n");
     return 0;
@@ -160,6 +173,8 @@ void PmmSwitchToHigh(void){
     for (int i = 0; i < MemDescNum; i++) {
         if (MemDescAddr[i].bitmap.bits)
             MemDescAddr[i].bitmap.bits = (uint8_t*)PHYS_TO_VIRT((uintptr_t)MemDescAddr[i].bitmap.bits);
+        if (MemDescAddr[i].refs)
+            MemDescAddr[i].refs = (uint32_t*)PHYS_TO_VIRT((uintptr_t)MemDescAddr[i].refs);
     }
     //最后转换描述符数组基址
     MemDescAddr = (OS_MEMORY_DESCRIPTOR*)PHYS_TO_VIRT((uintptr_t)MemDescAddr);
@@ -170,9 +185,21 @@ void* Pmm_Malloc(int pages) {
     for(int i = 0;i < MemDescNum;i ++){
         OS_MEMORY_DESCRIPTOR* desc = &MemDescAddr[i];
         int index = BitmapAllocBits(&desc->bitmap,PMM_FREE,pages);
-        if(index >= 0)return (void*)(desc->Address + index * PAGE_SIZE);
+        if(index >= 0){
+            if(desc->refs)for(int j = 0;j < pages;j ++)desc->refs[index + j] = 1;
+            return (void*)(desc->Address + index * PAGE_SIZE);
+        }
     }
     return NULL;
+}
+
+//增加物理页引用计数
+void Pmm_RefInc(void* addr){
+    OS_MEMORY_DESCRIPTOR* desc = NULL;
+    uint64_t offset = 0;
+    find_addr_in_bitmap((uintptr_t)addr,&desc,&offset);
+    if(!desc || !desc->refs)return;
+    desc->refs[offset] ++;
 }
 
 void Pmm_Free(void* addr,int pages) {
@@ -181,5 +208,13 @@ void Pmm_Free(void* addr,int pages) {
     uint64_t offset = 0;
     find_addr_in_bitmap((uintptr_t)addr,&desc,&offset);
     if(!desc)return;
-    BitmapSetBits(&desc->bitmap,offset,pages,PMM_FREE);
+    for(int i = 0;i < pages;i ++){
+        uint64_t bit = offset + i;
+        if(!desc->refs || desc->refs[bit] == 0){
+            BitmapSetBits(&desc->bitmap,bit,1,PMM_FREE);//无计数信息则直接释放
+            continue;
+        }
+        desc->refs[bit] --;//引用-1
+        if(desc->refs[bit] == 0)BitmapSetBits(&desc->bitmap,bit,1,PMM_FREE);//归零才真正释放
+    }
 }

@@ -22,6 +22,12 @@ typedef struct task_context {
 
 typedef struct list_node wait_queue_head_t;//等待队列头
 
+//初始化等待队列头
+static inline void waitq_init(wait_queue_head_t *wq){
+    wq->prev = wq;
+    wq->next = wq;
+}
+
 typedef struct semaphore {
 	int count;//信号量计数值(>0有资源,<=0无资源且|count|=等待者数)
 	wait_queue_head_t wq;//等待队列
@@ -34,6 +40,9 @@ typedef struct task_struct {
     pid_t               tgid;       //线程组ID
     int                 state;      //进程状态
     char                name[16];   //进程名
+    pid_t               parent;     //父进程PID(0=无父进程)
+    int                 exit_code;  //退出码(waitpid读取)
+    wait_queue_head_t   child_wq;   //等待子进程退出的队列
     mm_struct*          mm;         //用户任务内存信息
     void*               kernel_stack;//内核栈指针
     uint64_t            stack_size; //内核栈大小
@@ -80,6 +89,20 @@ void user_trampoline(void);//从内核栈iretq回ring3
 void TaskListAdd(task_struct* t);//将任务加入任务链表
 void TaskListRemove(task_struct* t);//将任务从任务链表中移除
 task_struct* TaskFind(pid_t pid);//根据PID查找任务
+/**
+ * @brief 查找指定父进程的指定子进程
+ * @param parent_pid 父进程PID
+ * @param child_pid 子进程PID
+ * @return 找到返回任务指针,否则NULL
+ */
+task_struct* TaskFindChild(pid_t parent_pid, pid_t child_pid);
+/**
+ * @brief 查找指定父进程的僵尸子进程
+ * @param parent_pid 父进程PID
+ * @param child_pid 子进程PID(<=0表示任意子进程)
+ * @return 找到返回僵尸任务指针,否则NULL
+ */
+task_struct* TaskFindZombie(pid_t parent_pid, pid_t child_pid);
 task_struct* TaskPickNext(void);//从任务链表中取出下一个就绪任务
 task_struct* TaskPeekNext(void);//查看下一个就绪任务
 /**

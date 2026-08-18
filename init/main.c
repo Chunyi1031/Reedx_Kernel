@@ -50,7 +50,7 @@ void KernelStart(BootParam* boot_param){
 }
 
 //用户态测试程序
-extern char msg1[], msg2[], msg3[];
+extern char msg1[], msg2[], msg3[], msg4[];
 __attribute__((noinline, section(".text.user")))
 static void user_main(void) {
     //write(1,msg,len)
@@ -59,9 +59,15 @@ static void user_main(void) {
     pid_t pid = syscall(SYS_FORK,0,0,0);
     if(!pid){
         syscall(SYS_WRITE,1,(uintptr_t)msg2,14);
-        syscall(SYS_EXIT,0,0,0);//exit(0)
+        syscall(SYS_EXIT,42,0,0);//exit(42):退出码42
     }else{
         syscall(SYS_WRITE,1,(uintptr_t)msg3,15);
+        //waitpid(pid,&status,0):回收子进程
+        int status = -1;
+        long w = syscall(SYS_WAIT4,pid,(uintptr_t)&status,0);
+        if(w == pid && status == 42){
+            syscall(SYS_WRITE,1,(uintptr_t)msg4,20);//"waitpid got code 42\n"
+        }
         syscall(SYS_EXIT,0,0,0);//exit(0)
     }
 }
@@ -70,6 +76,7 @@ __asm__(
     "msg1: .ascii \"Hello World in ring3!\\n\"\n"
     "msg2: .ascii \"Child process\\n\"\n"
     "msg3: .ascii \"Parent process\\n\"\n"
+    "msg4: .ascii \"waitpid got code 42\\n\"\n"
     ".popsection\n"
 );
 //结束标记函数
@@ -105,7 +112,7 @@ void KernelMain(){
     memcpy((void*)PHYS_TO_VIRT(pte_get_paddr(*code_pte)), (void*)user_main,
            (uintptr_t)user_main_end - (uintptr_t)user_main);
     early_printk("Creating user task...\n");
-    CreateProcess(0x400000, umm, "User Test");//创建用户任务（时钟中断后调度运行）
+    CreateProcess(0x400000, umm, "User Test");//创建用户任务
     CreateKernelThread(test_thread,4096,"test");
     task_struct* list[10];
     int count;

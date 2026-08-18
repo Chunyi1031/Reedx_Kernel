@@ -114,6 +114,8 @@ static int do_wp_page(mm_struct *mm, uintptr_t fault_addr){
 	*pte = new_pte;
 	__asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
 	mm->rss++;//新页计入常驻集
+	//解除当前mm对旧COW页的引用(仍有共享者时保留,归零才释放)
+	Pmm_Free((void*)pte_get_paddr(entry),1);
 	return 0;
 }
 

@@ -275,6 +275,7 @@ static void vmm_clone_pagetable(uintptr_t src_table, uintptr_t dst_table, int le
             vmm_clone_pagetable(child_phys, new_child_phys, level + 1);
             dst_virt[i] = new_child_phys | (flags & ~PTE_WRITABLE) | PTE_COW;
         } else {
+            Pmm_RefInc((void*)child_phys);//父子共享叶子页,引用计数+1
             dst_virt[i] = child_phys | (flags & ~PTE_WRITABLE) | PTE_COW;
         }
     }

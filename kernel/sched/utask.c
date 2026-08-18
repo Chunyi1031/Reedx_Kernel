@@ -24,6 +24,7 @@ task_struct* CreateProcess(uintptr_t entry, mm_struct* mm, const char* name) {
     task->pid = AllocPid();
     task->tgid = task->pid;
     task->state = TASK_READY;
+    waitq_init(&task->child_wq);
     task->mm = mm;
     task->kernel_stack = stack;
     task->stack_size = 4096;

@@ -11,6 +11,7 @@ typedef struct OS_MEMORY_DESCRIPTOR{
     uint64_t Address;
     uint64_t PageSize;
     bitmap_t bitmap;
+    uint32_t *refs;//每页引用计数(COW共享页保护)
 }OS_MEMORY_DESCRIPTOR;
 
 enum MemType {
@@ -35,8 +36,9 @@ uint64_t GetMemoryTotalSize();
  * @return 返回分配的物理内存地址
  */
 void* Pmm_Malloc(int pages);
+void Pmm_RefInc(void* addr);//增加物理页引用计数
 /**
- * @brief 物理内存内存回收
+ * @brief 物理内存回收(引用计数-1,归零才真正释放)
  * @param addr 要回收的物理内存地址
  * @param pages 要回收的页数
  */

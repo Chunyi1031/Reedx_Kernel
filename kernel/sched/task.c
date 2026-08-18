@@ -70,6 +70,7 @@ void TaskInit(){
     kernel_task->pid = 0;
     kernel_task->tgid = 0;
     kernel_task->state = TASK_READY;
+    waitq_init(&kernel_task->child_wq);
     strcpy(kernel_task->name, "Reedx Kernel");
     kernel_task->kernel_stack = (void*)PHYS_TO_VIRT((uintptr_t)SYSTEM_BootParam->KernelStackAddress);
     kernel_task->stack_size = SYSTEM_BootParam->KernelStackSize;
@@ -99,7 +100,41 @@ task_struct* TaskFind(pid_t pid){
         task = container_of(pos, task_struct, list);
         if (task->pid == pid) return task;
     }
+    if (current_task && current_task->pid == pid) return current_task;
+    if (kernel_task && kernel_task->pid == pid) return kernel_task;
     return NULL;
+}
+
+//查找指定父进程的指定子进程
+task_struct* TaskFindChild(pid_t parent_pid, pid_t child_pid){
+    if(parent_pid <= 0 || child_pid <= 0)return NULL;
+    struct list_node *pos;
+    task_struct *task;
+    list_for_each(pos, &task_list_head) {
+        task = container_of(pos, task_struct, list);
+        if(task->parent == parent_pid && task->pid == child_pid)return task;
+    }
+    if(current_task && current_task->parent == parent_pid && current_task->pid == child_pid)return current_task;
+    return NULL;
+}
+
+//查找指定父进程的僵尸子进程
+static task_struct* find_zombie_child(pid_t parent_pid, pid_t child_pid){
+    if(parent_pid <= 0)return NULL;
+    struct list_node *pos;
+    task_struct *task;
+    list_for_each(pos, &task_list_head) {
+        task = container_of(pos, task_struct, list);
+        if(task->parent != parent_pid)continue;
+        if(task->state != TASK_TERMINATED)continue;
+        if(child_pid > 0 && task->pid != child_pid)continue;
+        return task;
+    }
+    return NULL;
+}
+
+task_struct* TaskFindZombie(pid_t parent_pid, pid_t child_pid){
+    return find_zombie_child(parent_pid, child_pid);
 }
 
 
@@ -114,6 +149,7 @@ task_struct* TaskPickNext(void) {
     task_struct *task;
     list_for_each_safe(pos, safe_next, &task_list_head) {
         task = container_of(pos, task_struct, list);
+        if(task->state != TASK_READY)continue;//僵尸/阻塞任务跳过
         list_del(pos);//从链表中移除该任务
         return task;
     }
@@ -160,7 +196,18 @@ int TaskGetAll(task_struct **buf, int max){
 }
 
 void TaskExit(){
-    current_task->state = TASK_TERMINATED;
+    current_task->state = TASK_TERMINATED;//标记为僵尸
+    //僵尸重新挂回任务链表
+    if(list_has_node(&current_task->list))list_del(&current_task->list);
+    list_add_tail(&current_task->list, &task_list_head);
+    //先回收自己的僵尸子进程
+    task_struct *zombie;
+    while((zombie = find_zombie_child(current_task->pid, 0)) != NULL)TaskKill(zombie);
+    //唤醒父进程(若存在且活着,僵尸父进程不算)
+    if(current_task->parent > 0){
+        task_struct *parent = TaskFind(current_task->parent);
+        if(parent && parent->state != TASK_TERMINATED)wake_up(&parent->child_wq);
+    }
     schedule();
     SYSTEM_STOP();
 }
@@ -548,7 +595,11 @@ void schedule(){
         current_task = next;
         switch_to(&sched_prev->context.rsp, &next->context.rsp);//切换任务上下文
     }
-    if(sched_prev->state == TASK_TERMINATED)TaskKill(sched_prev);
+    //清理已终止任务
+    if(sched_prev->state == TASK_TERMINATED){
+        task_struct *parent = (sched_prev->parent > 0) ? TaskFind(sched_prev->parent) : NULL;
+        if(!parent || parent->state == TASK_TERMINATED)TaskKill(sched_prev);//有存活的父进程则保留为僵尸进程，否则清理
+    }
 }
 
 //构造iretq帧返回ring3

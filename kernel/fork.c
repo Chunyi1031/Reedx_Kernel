@@ -42,7 +42,7 @@ pid_t do_fork(void){
 	uintptr_t child_top = (uintptr_t)stack + 4096;
 	memcpy((void*)(child_top - (parent_top - cur_rsp)), (void*)cur_rsp, parent_top - cur_rsp);
 	//构造子进程首次调度的伪帧
-	uint64_t *f = (uint64_t*)(child_top - 152);
+	uint64_t *f = (uint64_t*)(child_top - 160);
 	uint64_t *p = (uint64_t*)(parent_top - 128);
 	f[0]  = p[0];//r15
 	f[1]  = p[1];//r14
@@ -69,6 +69,9 @@ pid_t do_fork(void){
 	child->pid = AllocPid();
 	child->tgid = child->pid;
 	child->state = TASK_READY;
+	child->parent = parent->pid;//记录父子关系
+	child->exit_code = 0;
+	waitq_init(&child->child_wq);
 	child->mm = child_mm;
 	child->kernel_stack = stack;
 	child->stack_size = 4096;

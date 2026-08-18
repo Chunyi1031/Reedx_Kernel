@@ -102,7 +102,10 @@ static long sys_nanosleep(long req, long rem, long unused){
 
 //进程退出
 static long __attribute__((noreturn)) do_exit(long status){
-	if(current_task && current_task->mm)TaskExit();//退出任务
+	if(current_task && current_task->mm){
+		current_task->exit_code = (int)status;//保存退出码
+		TaskExit();//退出任务
+	}
 	SYSTEM_STOP();
 }
 
@@ -134,6 +137,53 @@ static long sys_getpid(long a, long b, long c){
 	return (long)current_task->pid;
 }
 
+/*
+ * pid_t wait4(pid_t pid, int *wstatus, int options, struct rusage *ru)
+ * 等待子进程退出并回收其资源
+ */
+long sys_waitpid(long pid, long wstatus, long options){
+	if(!current_task || !current_task->mm)return -ECHILD;
+	pid_t child_pid = (pid_t)pid;
+	if(child_pid == 0 || child_pid < -1)return -EINVAL;
+	task_struct *zombie;
+	for(;;){
+		//1.先扫描已退出的僵尸子进程
+		zombie = TaskFindZombie(current_task->pid, child_pid);
+		if(zombie)break;
+		//2.指定子进程不存在则报错
+		if(child_pid > 0 && !TaskFindChild(current_task->pid, child_pid))return -ECHILD;
+		//3.WNOHANG:不阻塞
+		if(options & WNOHANG)return 0;
+		//4.挂到当前任务的子进程等待队列
+		wait_queue_head_t *wq = &current_task->child_wq;
+		current_task->wait_node.prev = wq->prev;
+		current_task->wait_node.next = wq;
+		wq->prev->next = &current_task->wait_node;
+		wq->prev = &current_task->wait_node;
+		current_task->state = TASK_BLOCKED;
+		//5.双检:挂队列期间子进程可能恰好退出(wake_up已错过)
+		zombie = TaskFindZombie(current_task->pid, child_pid);
+		if(zombie){
+			//自摘除等待队列
+			current_task->wait_node.prev->next = current_task->wait_node.next;
+			current_task->wait_node.next->prev = current_task->wait_node.prev;
+			current_task->wait_node.prev = NULL;
+			current_task->wait_node.next = NULL;
+			current_task->state = TASK_RUNNING;
+			break;
+		}
+		schedule();//让出CPU,被子进程退出唤醒后重新扫描
+	}
+	//回收僵尸:先复制退出码再释放资源
+	int code = zombie->exit_code;
+	pid_t ret = zombie->pid;
+	if(wstatus){
+		if(copy_to_user((void*)wstatus, &code, sizeof(code)))return -EFAULT;
+	}
+	TaskKill(zombie);//释放内核栈/mm/task_struct
+	return ret;
+}
+
 //系统调用表
 typedef long (*syscall_fn)(long, long, long);
 static syscall_fn syscall_table[SYSCALL_TABLE_SIZE];
@@ -157,6 +207,7 @@ void InitSyscall(void){
 	syscall_table[SYS_GETPID]     = sys_getpid;
 	syscall_table[SYS_FORK]       = sys_fork;
 	syscall_table[SYS_EXIT]       = sys_exit;
+	syscall_table[SYS_WAIT4]      = sys_waitpid;
 	syscall_table[SYS_EXIT_GROUP] = sys_exit_group;
 	wrmsr(IA32_EFER, rdmsr(IA32_EFER) | (1ULL << 0));//启用SYSCALL/SYSRET
 	wrmsr(IA32_STAR, ((uint64_t)__USER32_CS << 48) | ((uint64_t)__KERNEL_CS << 32));//设置段选择子

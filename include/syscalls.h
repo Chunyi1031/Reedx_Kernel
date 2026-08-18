@@ -12,6 +12,7 @@
 #define SYS_GETPID          39
 #define SYS_FORK            57
 #define SYS_EXIT            60
+#define SYS_WAIT4           61
 #define SYS_EXIT_GROUP      231
 #define SYSCALL_TABLE_SIZE  256
 
@@ -27,8 +28,12 @@
 #define EFAULT              14
 #define EBUSY               16
 #define EEXIST              17
-#define EINVAL              22
-#define ENOSYS              38
+#define ECHILD             10
+#define EINVAL             22
+#define ENOSYS             38
+
+//waitpid选项
+#define WNOHANG             1//不阻塞,没有已退出的子进程时立即返回0
 
 //POSIX timespec
 typedef struct timespec {
@@ -62,6 +67,16 @@ uint64_t copy_to_user(void *to, const void *from, uint64_t n);
  * @return 系统调用返回值（负数 = -errno）
  */
 long syscall_dispatch(long num, long a1, long a2, long a3);
+
+/**
+ * @brief 系统调用wait4处理函数
+ * @param pid 子进程PID(<0=任意子进程)
+ * @param wstatus 输出退出状态(原始退出码)
+ * @param options WNOHANG等选项
+ * @return 回收的子进程PID,失败返回-errno
+ * @author DeepSeek V4 Pro
+ */
+long sys_waitpid(long pid, long wstatus, long options);
 
 /**
  * @brief 系统调用
