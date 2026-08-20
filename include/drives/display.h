@@ -22,5 +22,7 @@ void DrawPiexl(uint16_t x,uint16_t y,uint32_t color);//画点
 void fillRect(uint16_t x,uint16_t y,uint16_t w,uint16_t h,uint32_t color);//填充矩形
 void DrawChar(char c,int x,int y,uint32_t color);//显示字符
 void DrawString(char *s,int x,int y,uint32_t color);//显示字符串
+int ScreenFbMappedAt(uintptr_t fb);//检查地址在当前CR3页表中是否已映射
+int ScreenFbMapped(void);//检查全局帧缓冲SYSTEM_FrameBuffer是否已映射
 
 #endif

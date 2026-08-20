@@ -136,7 +136,7 @@ void interrupt_PF(uint64_t fault_addr, uint64_t error_code, uintptr_t rip){
 				uintptr_t page_vaddr = fault_addr & PAGE_MASK;
 				uint64_t flags = PTE_PRESENT | PTE_USER;
 				if (vma->vm_flags & VM_WRITE) flags |= PTE_WRITABLE;
-				if (!(vma->vm_flags & VM_EXEC)) flags |= PTE_NO_EXECUTE;
+				if (!(vma->vm_flags & VM_EXEC) && cpu_nx_enabled) flags |= PTE_NO_EXECUTE;
 				//映射（用户页表 CR3 下安全：页表遍历经高半，不用 get_pte/vmm_map_page）
 				if (vmm_map_user_page(current_task->mm, page_vaddr, (uintptr_t)paddr, flags) != 0) {
 					Pmm_Free(paddr, 1);
@@ -167,7 +167,15 @@ pf_error:
 	SYSTEM_STOP();
 }
 
+//#GP容忍探测:x2APIC等MSR能力探针使用。
+volatile uintptr_t gp_recover_ip = 0;
+volatile uint64_t gp_probe_active = 0;
+
 void interrupt_GP(uint64_t error_code, uint64_t rip){
+    if(gp_probe_active && gp_recover_ip){
+        gp_probe_active = 0;//汇编handler检测gp_recover_ip非零后跳转恢复
+        return;
+    }
     print_error();
 	early_printk("%s\nError Code=%p RIP=%p\n",exception_names[INT_GATE_GP],error_code,rip);
 	DrawString("The machine needs to restart\n",SYSTEM_ScreenInfo.Width/2-145,SYSTEM_ScreenInfo.Height/2-8,COLOR_YELLOW);

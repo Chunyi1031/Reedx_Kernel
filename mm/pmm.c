@@ -1,6 +1,7 @@
 #include <mm/pmm.h>
 #include <mm/vmm.h>
 #include <print.h>
+#include <boot.h>
 
 OS_MEMORY_DESCRIPTOR* MemDescAddr = NULL;
 int MemDescNum = 0;
@@ -78,7 +79,7 @@ int Init_Physical_Memory_Manager() {
         if(!curr_efidesc)continue;
         if(!IsMemoryAvailable(curr_efidesc))continue;
         //第一块，直接创建
-        if(n == 0){
+        if(MemDescNum == 0){
             MemDescAddr[MemDescNum].Address = curr_efidesc->PhysicalStart;
             MemDescAddr[MemDescNum].PageSize = curr_efidesc->NumberOfPages;
             MemDescNum ++;
@@ -101,6 +102,8 @@ int Init_Physical_Memory_Manager() {
     for(uint32_t i = 0;i < MemDescNum;i ++){
         OS_MEMORY_DESCRIPTOR* memdesc = &MemDescAddr[i];
         if(!memdesc)continue;
+        //预留区内存未被bss清零,refs字段可能是垃圾值,必须显式初始化
+        memdesc->refs = NULL;
         BitmapInit(&memdesc->bitmap,(uint8_t *)((uintptr_t)MemDescAddr+desc_size+bm_size),memdesc->PageSize,PMM_FREE);
         bm_size += ((memdesc->PageSize + 7)& ~7) / 8;
         total_pages += memdesc->PageSize;
@@ -139,6 +142,34 @@ int Init_Physical_Memory_Manager() {
         uint32_t start_bit = (ov_start - desc->Address) / PAGE_SIZE;
         uint32_t page_count = (ov_end - ov_start) / PAGE_SIZE;
         BitmapSetBits(&desc->bitmap,start_bit,page_count,PMM_USED);
+    }
+    //标记内核与内核栈区域为已占用
+    {
+        uintptr_t starts[2];
+        uint64_t sizes[2];
+        starts[0] = SYSTEM_BootParam->KernelAddress;
+        sizes[0]  = SYSTEM_BootParam->KernelSize;
+        starts[1] = SYSTEM_BootParam->KernelStackAddress;
+        sizes[1]  = SYSTEM_BootParam->KernelStackSize;
+        for(int r = 0; r < 2; r ++){
+            uintptr_t addr = starts[r];
+            uint64_t left = sizes[r];
+            if(!addr || !left)continue;
+            while(left > 0){
+                OS_MEMORY_DESCRIPTOR *d = NULL;
+                uint64_t off = 0;
+                find_addr_in_bitmap(addr, &d, &off);
+                if(!d)break;//不在可管理内存内
+                uint64_t remain = (uint64_t)(d->bitmap.bit_size - off) * PAGE_SIZE;
+                uint64_t chunk = left < remain ? left : remain;
+                if(chunk == 0)break;
+                uint32_t pages = (uint32_t)(chunk / PAGE_SIZE);
+                if(pages == 0)break;
+                BitmapSetBits(&d->bitmap, (uint32_t)off, pages, PMM_USED);
+                left -= pages * (uint64_t)PAGE_SIZE;
+                addr += pages * (uint64_t)PAGE_SIZE;
+            }
+        }
     }
     //分配每页引用计数数组
     uint64_t refs_pages = (total_pages * sizeof(uint32_t) + PAGE_SIZE - 1) / PAGE_SIZE;

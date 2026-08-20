@@ -6,6 +6,7 @@
 
 uintptr_t UEFI_PML4 = 0;
 uintptr_t KERNEL_PML4 = 0;
+volatile int kernel_high_ready = 0;
 
 uintptr_t get_cr3(){
     uintptr_t cr3;

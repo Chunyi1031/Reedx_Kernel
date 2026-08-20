@@ -26,6 +26,8 @@ static inline void wrmsr(uint32_t msr, uint64_t val){
 #define IA32_LSTAR  0xC0000082
 #define IA32_FMASK  0xC0000084
 
+volatile int cpu_nx_enabled = 0;
+
 //从用户空间复制
 uint64_t copy_from_user(void *to, const void *from, uint64_t n){
     uintptr_t uaddr = (uintptr_t)from;
@@ -209,7 +211,17 @@ void InitSyscall(void){
 	syscall_table[SYS_EXIT]       = sys_exit;
 	syscall_table[SYS_WAIT4]      = sys_waitpid;
 	syscall_table[SYS_EXIT_GROUP] = sys_exit_group;
-	wrmsr(IA32_EFER, rdmsr(IA32_EFER) | (1ULL << 0));//启用SYSCALL/SYSRET
+	//启用SYSCALL/SYSRET
+	{
+		uint64_t efer = rdmsr(IA32_EFER) | (1ULL << 0);//SCE
+		uint32_t eax, ebx, ecx, edx;
+		__asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0x80000001));
+		if (edx & (1U << 20)) {
+			efer |= (1ULL << 11);//CPU支持NX则启用NXE
+			cpu_nx_enabled = 1;
+		}
+		wrmsr(IA32_EFER, efer);
+	}
 	wrmsr(IA32_STAR, ((uint64_t)__USER32_CS << 48) | ((uint64_t)__KERNEL_CS << 32));//设置段选择子
 	wrmsr(IA32_LSTAR, (uint64_t)syscall_entry);//入口RIP
 	wrmsr(IA32_FMASK, 0x700);//进入内核时清除TF|IF|DF

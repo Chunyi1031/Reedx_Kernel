@@ -1,8 +1,35 @@
 #include <drives/display.h>
 #include <font.h>
+#include <mm/pgtables.h>
+#include <mm/vmm.h>
 
 ScreenInfo SYSTEM_ScreenInfo;
 uint32_t*  SYSTEM_FrameBuffer = NULL;
+
+int ScreenFbMappedAt(uintptr_t fb){
+    if(!fb)return 0;
+    uintptr_t cr3 = get_cr3() & ~0xFFFULL;
+    int use_high = kernel_high_ready;
+#define TBL_PTR(p) (use_high ? (uint64_t*)PHYS_TO_VIRT(p) : (uint64_t*)(uintptr_t)(p))
+    uint64_t e = TBL_PTR(cr3)[PML4_INDEX(fb)];
+    if(!(e & PTE_PRESENT))return 0;
+    uint64_t *next = TBL_PTR(e & 0x000FFFFFFFFFF000ULL);
+    e = next[PDPT_INDEX(fb)];
+    if(!(e & PTE_PRESENT))return 0;
+    if(e & PTE_HUGE)return 1;//1GB大页
+    next = TBL_PTR(e & 0x000FFFFFFFFFF000ULL);
+    e = next[PD_INDEX(fb)];
+    if(!(e & PTE_PRESENT))return 0;
+    if(e & PTE_HUGE)return 1;//2MB大页
+    next = TBL_PTR(e & 0x000FFFFFFFFFF000ULL);
+    e = next[PT_INDEX(fb)];
+    return (e & PTE_PRESENT) ? 1 : 0;
+#undef TBL_PTR
+}
+
+int ScreenFbMapped(void){
+    return ScreenFbMappedAt((uintptr_t)SYSTEM_FrameBuffer);
+}
 
 //字体列表
 static const char fontlist[94] = {
@@ -21,6 +48,7 @@ uint32_t rgb(uint8_t red, uint8_t green, uint8_t blue){
 
 //画点
 void DrawPiexl(uint16_t x,uint16_t y,uint32_t color){
+    if(!ScreenFbMapped())return;
     int index = y * SYSTEM_ScreenInfo.Width + x;
     if(index < SYSTEM_ScreenInfo.FrameBufferSize && index >= 0){
         SYSTEM_FrameBuffer[index] = color;

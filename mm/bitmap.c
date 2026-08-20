@@ -25,22 +25,20 @@ void BitmapInit(bitmap_t *bitmap,uint8_t *bits,uint32_t bit_size,_Bool value){
 
 //分配连续size个值为value的位
 int BitmapAllocBits(bitmap_t *bitmap,_Bool value,uint32_t size){
-    int sidx = 0;
-    while(sidx < bitmap->bit_size){
-        if(BitmapGetBit(bitmap,sidx) != value){
-            sidx ++;
-            continue;
+    if(size == 0)return -1;
+    uint32_t run = 0;
+    uint32_t start = 0;
+    for(uint32_t i = 0;i < bitmap->bit_size;i ++){
+        if(BitmapGetBit(bitmap,i) == value){
+            if(run == 0)start = i;
+            run ++;
+            if(run >= size){
+                BitmapSetBits(bitmap,start,size,1);
+                return (int)start;
+            }
+        }else{
+            run = 0;
         }
-        int ridx = sidx;
-        int i;
-        for(i = 1;i < size && sidx + 1 < bitmap->bit_size;i ++){
-            if(BitmapGetBit(bitmap,++sidx) != value)break;
-        }
-        if(i >= size){
-            BitmapSetBits(bitmap,ridx,size,1);
-            return ridx;
-        }
-        sidx = ridx + 1;
     }
     return -1;
 }

@@ -64,6 +64,7 @@ void InitKernelMapping() {
     vmm_map_page(KERNEL_PML4, PHYS_TO_VIRT(0xFEE00000), 0xFEE00000, PTE_PRESENT | PTE_WRITABLE);
     vmm_map_page(KERNEL_PML4, PHYS_TO_VIRT(0xFEC00000), 0xFEC00000, PTE_PRESENT | PTE_WRITABLE);
     PmmSwitchToHigh();//设置PMM到高半区
+    kernel_high_ready = 1;//高半区映射建立完成
 }
 
 __attribute__((noinline, naked))
@@ -423,7 +424,7 @@ void* vmm_mmap(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t flags) 
         memset((void*)PHYS_TO_VIRT((uintptr_t)pa), 0, PAGE_SIZE);
         uint64_t pte_flags = PTE_PRESENT | PTE_USER;
         if (flags & VM_WRITE) pte_flags |= PTE_WRITABLE;
-        if (!(flags & VM_EXEC)) pte_flags |= PTE_NO_EXECUTE;
+        if (!(flags & VM_EXEC) && cpu_nx_enabled) pte_flags |= PTE_NO_EXECUTE;
         if (vmm_map_page((uintptr_t)mm->pgd, vaddr + i * PAGE_SIZE, (uintptr_t)pa, pte_flags) != 0) {
             Pmm_Free(pa, 1);
             return NULL;

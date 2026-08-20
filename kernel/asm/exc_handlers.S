@@ -104,6 +104,30 @@ int_13_handler:
 	movq 128(%rsp), %rdi
 	movq 136(%rsp), %rsi
 	call interrupt_GP
+	movq gp_recover_ip(%rip), %rax
+	testq %rax, %rax
+	jz 1f
+	movq %rax, 136(%rsp)
+	movq $0, gp_recover_ip(%rip)
+	addq $8, %rsp
+	popq %r15
+	popq %r14
+	popq %r13
+	popq %r12
+	popq %r11
+	popq %r10
+	popq %r9
+	popq %r8
+	popq %rdi
+	popq %rsi
+	popq %rbp
+	popq %rbx
+	popq %rdx
+	popq %rcx
+	popq %rax
+	addq $8, %rsp
+	iretq
+1:
 	ud2
 
 int_14_handler:

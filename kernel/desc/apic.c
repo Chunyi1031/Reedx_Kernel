@@ -11,6 +11,7 @@
 
 #include <apic.h>
 #include <irq.h>
+#include <idt.h>
 #include <drives/timer.h>
 #include <print.h>
 #include <delay.h>
@@ -78,22 +79,36 @@ uintptr_t lapic_get_base(void){
 	return msr & MSR_IA32_APICBASE_BASE_MASK;
 }
 
+static volatile uintptr_t apic_saved_rsp = 0;
+static volatile uintptr_t apic_saved_rbp = 0;
+
 //使能本地APIC
 void lapic_enable(void){
+	__label__ probe_recover;
 	uint64_t msr;
+	__asm__ volatile("movq %%rsp, %0\n\tmovq %%rbp, %1" : "=r"(apic_saved_rsp), "=r"(apic_saved_rbp) : : "memory");////保存本函数栈帧
 	lapic_base = lapic_get_base();
-	//MMIO基址转高半
 	if (!lapic_x2apic_mode) lapic_base = PHYS_TO_VIRT(lapic_base);
 	msr = rdmsr(MSR_IA32_APICBASE);
-	//尝试x2APIC：硬件支持即启用
-	if (cpu_has_x2apic()) {
-		msr |= MSR_IA32_APICBASE_X2APIC;
-		wrmsr(MSR_IA32_APICBASE, msr);
-		lapic_x2apic_mode = true;
-	}else{
+	gp_recover_ip = (uintptr_t)&&probe_recover;
+	gp_probe_active = 1;
+	//若hypervisor预启用了x2APIC(bit10),先关闭它
+	if (msr & MSR_IA32_APICBASE_X2APIC) {
+		wrmsr(MSR_IA32_APICBASE, msr & ~MSR_IA32_APICBASE_X2APIC);
+		msr &= ~MSR_IA32_APICBASE_X2APIC;
+	}
+	//确保xAPIC使能(bit11)
+	if (!(msr & MSR_IA32_APICBASE_ENABLE)) {
 		msr |= MSR_IA32_APICBASE_ENABLE;
 		wrmsr(MSR_IA32_APICBASE, msr);
 	}
+
+probe_recover:
+	__asm__ volatile("movq %0, %%rsp\n\tmovq %1, %%rbp"
+		: : "r"(apic_saved_rsp), "r"(apic_saved_rbp) : "memory");
+	gp_probe_active = 0;
+	gp_recover_ip = 0;
+	lapic_x2apic_mode = false;//始终使用xAPIC MMIO
 	lapic_write(LAPIC_SPURIOUS,SPURIOUS_APIC_VECTOR | LAPIC_SPURIOUS_ENABLE | LAPIC_SPURIOUS_FOCUS_DISABLE);
 }
 
