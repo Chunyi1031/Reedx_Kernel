@@ -8,6 +8,7 @@
 #define SYS_WRITE           1
 #define SYS_OPEN            2
 #define SYS_CLOSE           3
+#define SYS_LSEEK           8
 #define SYS_NANOSLEEP       35
 #define SYS_GETPID          39
 #define SYS_FORK            57
@@ -15,6 +16,19 @@
 #define SYS_WAIT4           61
 #define SYS_EXIT_GROUP      231
 #define SYSCALL_TABLE_SIZE  256
+
+//POSIX open标志
+#define O_RDONLY    0       //只读打开
+#define O_WRONLY    1       //只写打开
+#define O_RDWR      2       //读写打开
+#define O_CREAT     0x40    //文件不存在则创建
+#define O_TRUNC     0x200   //打开时截断文件长度为0
+#define O_APPEND    0x400   //每次写入追加到文件末尾
+
+//lseek whence
+#define SEEK_SET    0
+#define SEEK_CUR    1
+#define SEEK_END    2
 
 //errno值（POSIX）
 #define EPERM               1
@@ -31,7 +45,8 @@
 #define ECHILD             10
 #define EINVAL             22
 #define ENOSYS             38
-
+#define ENFILE             23
+#define ENOSPC             28
 //waitpid选项
 #define WNOHANG             1//不阻塞,没有已退出的子进程时立即返回0
 

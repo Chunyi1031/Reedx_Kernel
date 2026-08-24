@@ -17,6 +17,7 @@
 #include <task.h>
 #include <spinlock.h>
 #include <syscalls.h>
+#include <fs.h>
 
 BootParam *SYSTEM_BootParam = NULL;
 uint64_t SYSTEM_CPU_Fquency = 0;
@@ -50,11 +51,29 @@ void KernelStart(BootParam* boot_param){
 }
 
 //用户态测试程序
-extern char msg1[], msg2[], msg3[], msg4[];
+extern char msg1[], msg2[], msg3[], msg4[], msg_path1[], msg_path2[], msg_filedata[];
 __attribute__((noinline, section(".text.user")))
 static void user_main(void) {
     //write(1,msg,len)
     syscall(SYS_WRITE,1,(uintptr_t)msg1,22);
+    //文件测试:读预置的/hello.txt
+    int fd = syscall(SYS_OPEN,(uintptr_t)msg_path1,O_RDONLY,0);
+    if(fd >= 3){
+        char rbuf[64];
+        long n = syscall(SYS_READ,fd,(uintptr_t)rbuf,63);
+        if(n > 0) syscall(SYS_WRITE,1,(uintptr_t)rbuf,n);
+        syscall(SYS_CLOSE,fd,0,0);
+    }
+    //文件测试:创建/note.txt并写读回
+    fd = syscall(SYS_OPEN,(uintptr_t)msg_path2,O_CREAT|O_RDWR,0);
+    if(fd >= 3){
+        syscall(SYS_WRITE,fd,(uintptr_t)msg_filedata,16);
+        syscall(SYS_LSEEK,fd,0,0);//SEEK_SET
+        char wbuf[64];
+        long n = syscall(SYS_READ,fd,(uintptr_t)wbuf,63);
+        if(n > 0) syscall(SYS_WRITE,1,(uintptr_t)wbuf,n);
+        syscall(SYS_CLOSE,fd,0,0);
+    }
     //fork()
     pid_t pid = syscall(SYS_FORK,0,0,0);
     if(!pid){
@@ -77,6 +96,9 @@ __asm__(
     "msg2: .ascii \"Child process\\n\"\n"
     "msg3: .ascii \"Parent process\\n\"\n"
     "msg4: .ascii \"waitpid got code 42\\n\"\n"
+    "msg_path1: .asciz \"/hello.txt\"\n"
+    "msg_path2: .asciz \"/note.txt\"\n"
+    "msg_filedata: .ascii \"user file data!\\n\"\n"
     ".popsection\n"
 );
 //结束标记函数
@@ -96,6 +118,7 @@ void KernelMain(){
     TaskInit();
     InitPrintk();
     KeyboardInit();
+    FsInit();//初始化文件系统(ramfs)
     InitSyscall();
     switch_kernel_info_to_high();
     switch_kernel_stack_to_high();

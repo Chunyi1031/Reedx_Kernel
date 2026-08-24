@@ -9,6 +9,7 @@
 #include <drives/ps2kbd.h>
 #include <idt.h>
 #include <fork.h>
+#include <fs.h>
 
 static inline uint64_t rdmsr(uint32_t msr){
 	uint32_t low, high;
@@ -49,39 +50,123 @@ uint64_t copy_to_user(void *to, const void *from, uint64_t n){
 }
 
 /*
- * ssize_t write(int fd, const void *buf, size_t count)
- * fd=1(stdout)/fd=2(stderr)：拷贝用户缓冲区后输出到串口 + 屏幕。
+ * ssize_t read(int fd, void *buf, size_t count)
+ * 系统调用:read
+ * 读取键盘或文件
  */
-static long sys_write(long fd, long buf, long count){
-	if ((fd != 1) && (fd != 2)) return -EBADF;
-	if (count < 0) return -EINVAL;
-	if (!buf) return -EFAULT;
-	char kbuf[512];
-	long written = 0;
-	while (written < count) {
-		long chunk = count - written;
-		if(chunk > (long)sizeof(kbuf)) chunk = sizeof(kbuf);
-		if(copy_from_user(kbuf, (const char*)buf + written, (unsigned long)chunk))return -EFAULT;
-		for (long i = 0; i < chunk; i++) {
-			TTY_PrintChar(kbuf[i], CurrentConsoleStyle.TextColor);
-		}
-		written += chunk;
+static long sys_read(long fd, long buf, long count){
+	if(count < 0)return -EINVAL;
+	if(!buf)return -EFAULT;
+	//键盘读取
+	if(fd == 0) {
+		if(count == 0)return 0;
+		sti();
+		char c = GetKey();//读取按键
+		if(copy_to_user((void*)buf, &c, 1))return -EFAULT;//复制到用户空间
+		return 1;
 	}
-	return written;
+	//文件读取
+	if(!current_task)return -EBADF;
+	if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+	long total = 0;
+	char kbuf[512];
+	while(total < count) {
+		long chunk = count - total;
+		if(chunk > (long)sizeof(kbuf))chunk = sizeof(kbuf);
+		uint64_t n = FsRead(&current_task->files[fd], kbuf, (uint64_t)chunk);//读取内容
+		if(n == 0)break;//EOF
+		if(copy_to_user((char*)buf + total, kbuf, n))return -EFAULT;//复制到用户空间
+		total += (long)n;
+	}
+	return total;
 }
 
 /*
- * ssize_t read(int fd, void *buf, size_t count)
- * fd=0(stdin)：阻塞等待键盘输入一个字符写入用户缓冲区。
+ * ssize_t write(int fd, const void *buf, size_t count)
+ * 系统调用：write
+ * 写入到TTY或文件
  */
-static long sys_read(long fd, long buf, long count){
-	if (fd != 0) return -EBADF;
-	if (count <= 0) return 0;
-	if (!buf) return -EFAULT;
-	sti();
-	char c = GetKey();//阻塞等待按键
-	if (copy_to_user((void*)buf, &c, 1)) return -EFAULT;
-	return 1;
+static long sys_write(long fd, long buf, long count){
+	if(count < 0) return -EINVAL;
+	if(!buf) return -EFAULT;
+	//输出到用户缓冲区和TTY
+	if((fd == 1) || (fd == 2)) {
+		char kbuf[512];
+		long written = 0;
+		while (written < count) {
+			long chunk = count - written;
+			if(chunk > (long)sizeof(kbuf))chunk = sizeof(kbuf);
+			if(copy_from_user(kbuf, (const char*)buf + written, (unsigned long)chunk))return -EFAULT;
+			for(long i = 0; i < chunk; i++){
+				TTY_PrintChar(kbuf[i], CurrentConsoleStyle.TextColor);
+			}
+			written += chunk;
+		}
+		return written;
+	}
+	//文件写入
+	if(!current_task)return -EBADF;
+	if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+	long total = 0;
+	char kbuf[512];
+	while(total < count){
+		long chunk = count - total;
+		if(chunk > (long)sizeof(kbuf))chunk = sizeof(kbuf);
+		if(copy_from_user(kbuf, (const char*)buf + total, (unsigned long)chunk))return -EFAULT;//复制到内核空间
+		uint64_t n = FsWrite(&current_task->files[fd], kbuf, (uint64_t)chunk);//写入文件
+		if(n == 0)return -ENOSPC;
+		total += (long)n;
+	}
+	return total;
+}
+
+/*
+ * int open(const char *pathname, int flags, mode_t mode)
+ * 系统调用：open
+ * 打开文件
+ */
+static long sys_open(long path, long flags, long mode){
+	(void)mode;
+	if(!current_task)return -ENOENT;
+	//复制路径
+	char kpath[256];
+	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
+	kpath[255] = 0;
+	//分配文件描述符
+	int fd;
+	for(fd = 3; fd < MAX_FD; fd++) {
+		if(!current_task->files[fd].used)break;
+	}
+	if (fd >= MAX_FD)return -ENFILE;
+	fs_file_t *f = &current_task->files[fd];
+	if (FsOpen(kpath, (int)flags, f) != 0)return -ENOENT;//打开文件
+	return fd;
+}
+
+/*
+ * int close(int fd)
+ * 系统调用:close
+ * 关闭文件
+ */
+static long sys_close(long fd, long b, long c){
+	(void)b; (void)c;
+	if (!current_task) return -EBADF;
+	if (fd < 3 || fd >= MAX_FD || !current_task->files[fd].used) return -EBADF;
+	FsClose(&current_task->files[fd]);
+	return 0;
+}
+
+/*
+ * off_t lseek(int fd, off_t offset, int whence)
+ * 系统调用:lseek
+ * 移动文件指针
+ */
+static long sys_lseek(long fd, long off, long whence){
+	if (!current_task) return -EBADF;
+	if (fd < 3 || fd >= MAX_FD || !current_task->files[fd].used) return -EBADF;
+	int r = FsSeek(&current_task->files[fd], off, (int)whence);
+	if (r < 0) return -EINVAL;
+	return r;
 }
 
 /*
@@ -205,6 +290,9 @@ void InitSyscall(void){
 	memset(syscall_table, 0, sizeof(syscall_table));
 	syscall_table[SYS_READ]       = sys_read;
 	syscall_table[SYS_WRITE]      = sys_write;
+	syscall_table[SYS_OPEN]       = sys_open;
+	syscall_table[SYS_CLOSE]      = sys_close;
+	syscall_table[SYS_LSEEK]      = sys_lseek;
 	syscall_table[SYS_NANOSLEEP]  = sys_nanosleep;
 	syscall_table[SYS_GETPID]     = sys_getpid;
 	syscall_table[SYS_FORK]       = sys_fork;

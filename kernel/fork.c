@@ -76,6 +76,11 @@ pid_t do_fork(void){
 	child->kernel_stack = stack;
 	child->stack_size = 4096;
 	strcpy(child->name, parent->name);
+	//继承父进程文件描述符表
+	for (int i = 0; i < MAX_FD; i++) {
+		child->files[i] = parent->files[i];
+		if (child->files[i].used && child->files[i].node) child->files[i].node->refs++;
+	}
 	TaskListAdd(child);
 	sti();
 	return child->pid;

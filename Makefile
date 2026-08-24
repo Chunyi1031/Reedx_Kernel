@@ -70,7 +70,7 @@ include $(script-dir)/Kbuild.include
 
 # ========== 源码目录列表（链接顺序即遍历顺序）==========
 # 注意：init 必须在最前面，因为 KernelStart() 入口点在其中
-core-dirs := init kernel lib drives mm
+core-dirs := init kernel lib drives mm fs
 
 # ========== 读取各目录 Makefile 收集目标文件 ==========
 # 每个子目录 Makefile 定义 obj-y := file1.o file2.o ...
@@ -96,8 +96,12 @@ obj-y :=
 include mm/Makefile
 mm-objs := $(addprefix $(build-dir)/mm/, $(obj-y))
 
+obj-y :=
+include fs/Makefile
+fs-objs := $(addprefix $(build-dir)/fs/, $(obj-y))
+
 # 所有目标文件
-all-objs := $(init-objs) $(kernel-objs) $(lib-objs) $(drives-objs) $(mm-objs)
+all-objs := $(init-objs) $(kernel-objs) $(lib-objs) $(drives-objs) $(mm-objs) $(fs-objs)
 
 # 每个目录的 built-in.o（局部链接产物）
 builtin-all := $(addprefix $(build-dir)/, \
@@ -169,6 +173,9 @@ $(build-dir)/drives/built-in.o: $(drives-objs)
 	$(call cmd,ld_builtin)
 
 $(build-dir)/mm/built-in.o: $(mm-objs)
+	$(call cmd,ld_builtin)
+
+$(build-dir)/fs/built-in.o: $(fs-objs)
 	$(call cmd,ld_builtin)
 
 # ========== 最终链接：kernel.elf ==========
