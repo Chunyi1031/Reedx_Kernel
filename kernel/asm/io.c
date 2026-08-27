@@ -24,6 +24,12 @@ void outw(uint16_t port, uint16_t val) {
 void outl(uint16_t port, uint32_t val) {
     __asm__ volatile ("outl %1, %0" : : "Nd"(port), "a"(val));
 }
+void insw(uint16_t port, void *dst, uint32_t count) {
+    __asm__ volatile("rep insw" : "+D"(dst), "+c"(count) : "d"(port) : "memory");
+}
+void outsw(uint16_t port, const void *src, uint32_t count) {
+    __asm__ volatile("rep outsw" : "+S"(src), "+c"(count) : "d"(port) : "memory");
+}
 void io_wait(void) {
     outb(0x80, 0);
 }

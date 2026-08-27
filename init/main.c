@@ -2,9 +2,6 @@
 #include <desc.h>
 #include <idt.h>
 #include <irq.h>
-#include <drives/display.h>
-#include <drives/tty.h>
-#include <drives/ps2kbd.h>
 #include <efi.h>
 #include <print.h>
 #include <mm/pmm.h>
@@ -17,6 +14,11 @@
 #include <task.h>
 #include <spinlock.h>
 #include <syscalls.h>
+#include <drives/display.h>
+#include <drives/tty.h>
+#include <drives/ps2kbd.h>
+#include <drives/drive_path.h>
+#include <drives/disk.h>
 #include <fs.h>
 
 BootParam *SYSTEM_BootParam = NULL;
@@ -137,11 +139,52 @@ void KernelMain(){
     early_printk("Creating user task...\n");
     CreateProcess(0x400000, umm, "User Test");//创建用户任务
     CreateKernelThread(test_thread,4096,"test");
-    task_struct* list[10];
-    int count;
-    count = TaskGetAll(list,10);
-    for(int i = 0;i < count;i ++){
-        printk("PID:%d  Stack:%p  Name:%s\n",list[i]->pid,list[i]->kernel_stack,list[i]->name);
+    msleep(3000);
+    //解析UEFI设备路径,定位启动磁盘所在PCI控制器
+    device_path_info_t Device;
+    ParseDevicePath(SYSTEM_BootParam->DiskInfo.DevicePath,&Device);
+    early_printk("[DISK] path: pci=%x.%x ata=%d/%d sata=%u nvme=%u part=%u lba=%llu\n",
+        Device.pci_device, Device.pci_function,
+        Device.found_ata ? Device.ata_channel : -1,
+        Device.found_ata ? Device.ata_slave : -1,
+        Device.found_sata ? Device.sata_port : 0xFFFF,
+        Device.found_nvme ? Device.nvme_namespace : 0,
+        Device.found_partition ? Device.partition_number : 0,
+        Device.found_partition ? Device.partition_start_lba : 0);
+    //注册磁盘驱动(ATA PIO;后续SATA/AHCI驱动同样注册)
+    AtaRegisterDriver();
+    disk_info_t disk;
+    if(DiskDetect(&Device,&disk) == 0){
+        if(disk.ctrl_type == DISK_CTRL_AHCI){
+            early_printk("[DISK] AHCI controller %02x:%02x.%x abar=%llx port=%u part_start=%llu part_size=%llu\n",
+                disk.pci_bus, disk.pci_dev, disk.pci_func,
+                disk.abar, disk.sata_port,
+                disk.partition_start_lba, disk.partition_size_lba);
+        }else if(disk.ctrl_type == DISK_CTRL_ATA){
+            early_printk("[DISK] ATA controller %02x:%02x.%x cmd=%x ctrl=%x channel=%d slave=%d part_start=%llu part_size=%llu\n",
+                disk.pci_bus, disk.pci_dev, disk.pci_func,
+                disk.cmd_base, disk.ctrl_base,
+                disk.ata_channel, disk.ata_slave,
+                disk.partition_start_lba, disk.partition_size_lba);
+        }
+        //初始化磁盘设备(软复位+IDENTIFY),并读分区第一个扇区验证
+        if(DiskInit(&disk) == 0){
+            early_printk("[DISK] %s model=%s sectors=%llu lba48=%d\n",
+                disk.ops->name, disk.model, disk.total_sectors, disk.lba48);
+            uint8_t sector[512];
+            if(DiskRead(&disk, disk.partition_start_lba, 1, sector) == 0){
+                early_printk("[DISK] read lba=%llu OK, first bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                    disk.partition_start_lba,
+                    sector[0], sector[1], sector[2], sector[3],
+                    sector[4], sector[5], sector[6], sector[7]);
+            }else{
+                early_printk("[DISK] read lba=%llu failed\n", disk.partition_start_lba);
+            }
+        }else{
+            early_printk("[DISK] driver not ready\n");
+        }
+    }else{
+        early_printk("[DISK] controller not found\n");
     }
     msleep(5000);
     printk(PRINTK_INFO"Type 'r' to reboot or type 's' to shutdown.");

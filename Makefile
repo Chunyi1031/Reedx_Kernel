@@ -242,11 +242,11 @@ update-disk:
 # ========== QEMU 运行 ==========
 .PHONY: run
 run: system
-	qemu-system-x86_64 -m 1G -bios ./OVMF.fd -hda $(SYSTEM_DISK) -serial stdio
+	qemu-system-x86_64 -m 1G -bios ./OVMF.fd -drive file=$(SYSTEM_DISK),if=ide,format=raw -serial stdio
 
 .PHONY: run-debug
 run-debug: system
-	qemu-system-x86_64 -D qemu.log -d int -m 1G -bios ./OVMF.fd -hda $(SYSTEM_DISK) -s -S -serial stdio
+	qemu-system-x86_64 -D qemu.log -d int -m 1G -bios ./OVMF.fd -drive file=$(SYSTEM_DISK),if=ide,format=raw -s -S -serial stdio
 
 #帮助
 .PHONY: help
