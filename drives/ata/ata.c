@@ -1,7 +1,9 @@
 #include <drives/disk.h>
 #include <drives/ata.h>
+#include <drives/timer.h>
 #include <io.h>
 #include <print.h>
+#include <delay.h>
 
 //ATA命令块寄存器偏移
 #define ATA_REG_DATA        0x00//数据寄存器(16位)
@@ -28,24 +30,48 @@
 #define ATA_CMD_IDENTIFY       0xEC//识别设备
 #define ATA_CMD_FLUSH_CACHE    0xE7//写回缓存
 
-#define ATA_TIMEOUT   200000//BSY/DRQ轮询上限
+#define ATA_TIMEOUT   200000//BSY/DRQ轮询上限(无TSC时的回退)
+#define ATA_TIMEOUT_MS 2000//BSY/DRQ轮询超时(毫秒,基于TSC)
+
+//计算TSC截止时刻
+static uint64_t ata_deadline(void){
+    return rdtsc() + (tsc_freq_hz * ATA_TIMEOUT_MS) / 1000;
+}
 
 //等待BSY清除
 static int ata_wait_bsy(disk_info_t *d){
-    for(int i = 0; i < ATA_TIMEOUT; i++){
+    if(!tsc_freq_hz){//无TSC频率:回退到IO轮询
+        for(int i = 0; i < ATA_TIMEOUT; i++){
+            if(!(inb(d->cmd_base + ATA_REG_STATUS) & ATA_SR_BSY)) return 0;
+            io_wait();
+        }
+        return -1;
+    }
+    uint64_t deadline = ata_deadline();
+    while(rdtsc() < deadline){
         if(!(inb(d->cmd_base + ATA_REG_STATUS) & ATA_SR_BSY)) return 0;
-        io_wait();
     }
     return -1;
 }
 
 //等待DRQ(数据就绪)
 static int ata_wait_drq(disk_info_t *d){
-    for(int i = 0; i < ATA_TIMEOUT; i++){
+    if(!tsc_freq_hz){//无TSC频率:回退到IO轮询
+        for(int i = 0; i < ATA_TIMEOUT; i++){
+            uint8_t st = inb(d->cmd_base + ATA_REG_STATUS);
+            if(st & ATA_SR_BSY){ io_wait(); continue; }//设备忙,继续等待
+            if(st & ATA_SR_ERR) return -1;
+            if(st & ATA_SR_DRQ) return 0;
+            io_wait();
+        }
+        return -1;
+    }
+    uint64_t deadline = ata_deadline();
+    while(rdtsc() < deadline){
         uint8_t st = inb(d->cmd_base + ATA_REG_STATUS);
+        if(st & ATA_SR_BSY) continue;//设备忙,继续等待
         if(st & ATA_SR_ERR) return -1;
         if(st & ATA_SR_DRQ) return 0;
-        io_wait();
     }
     return -1;
 }
@@ -85,6 +111,7 @@ static int ata_identify(disk_info_t *d, uint16_t *id){
 
 //PIO传输
 static int ata_pio_transfer(disk_info_t *d, uint64_t lba, uint32_t count,uint8_t *buf, int write){
+    if(ata_wait_bsy(d)) return -1;//发命令前等设备空闲
     //传输count个扇区
     while(count){
         //检查是否超过LBA28单次最大扇区数
@@ -124,6 +151,7 @@ static int ata_pio_transfer(disk_info_t *d, uint64_t lba, uint32_t count,uint8_t
 
 //缓存刷新
 static int ata_flush(disk_info_t *d){
+    if(ata_wait_bsy(d)) return -1;//等设备空闲再发命令
     outb(d->cmd_base + ATA_REG_COMMAND, ATA_CMD_FLUSH_CACHE);
     if(ata_wait_bsy(d)) return -1;
     return (inb(d->cmd_base + ATA_REG_STATUS) & ATA_SR_ERR) ? -1 : 0;

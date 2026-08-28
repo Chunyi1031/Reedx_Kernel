@@ -21,6 +21,7 @@
 #define O_RDONLY    0       //只读打开
 #define O_WRONLY    1       //只写打开
 #define O_RDWR      2       //读写打开
+#define O_ACCMODE   3       //访问模式掩码
 #define O_CREAT     0x40    //文件不存在则创建
 #define O_TRUNC     0x200   //打开时截断文件长度为0
 #define O_APPEND    0x400   //每次写入追加到文件末尾

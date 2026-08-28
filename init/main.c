@@ -53,29 +53,38 @@ void KernelStart(BootParam* boot_param){
 }
 
 //用户态测试程序
-extern char msg1[], msg2[], msg3[], msg4[], msg_path1[], msg_path2[], msg_filedata[];
+extern char msg1[], msg2[], msg3[], msg4[], msg5[],msg_path1[], msg_path2[], msg_path3[], msg_filedata[];
 __attribute__((noinline, section(".text.user")))
 static void user_main(void) {
     //write(1,msg,len)
     syscall(SYS_WRITE,1,(uintptr_t)msg1,22);
-    //文件测试:读预置的/hello.txt
-    int fd = syscall(SYS_OPEN,(uintptr_t)msg_path1,O_RDONLY,0);
+    //文件测试
+    int fd = syscall(SYS_OPEN,(uintptr_t)msg_path3,O_RDWR,0);//覆盖写入+读取
     if(fd >= 3){
-        char rbuf[64];
-        long n = syscall(SYS_READ,fd,(uintptr_t)rbuf,63);
+        char rbuf[128];
+        uint64_t n = syscall(SYS_READ,fd,(uintptr_t)rbuf,127);
+        if(n > 0) syscall(SYS_WRITE,1,(uintptr_t)rbuf,n);
+        syscall(SYS_LSEEK,fd,0,0);//SEEK_SET:回文件开头
+        syscall(SYS_WRITE,fd,(uintptr_t)msg5,3);//覆盖前3字节
+        syscall(SYS_LSEEK,fd,0,0);//回开头再读,应看到覆盖后的内容
+        n = syscall(SYS_READ,fd,(uintptr_t)rbuf,127);
         if(n > 0) syscall(SYS_WRITE,1,(uintptr_t)rbuf,n);
         syscall(SYS_CLOSE,fd,0,0);
     }
-    //文件测试:创建/note.txt并写读回
-    fd = syscall(SYS_OPEN,(uintptr_t)msg_path2,O_CREAT|O_RDWR,0);
+    fd = syscall(SYS_OPEN,(uintptr_t)msg_path3,O_WRONLY|O_APPEND,0);//追加写测试
     if(fd >= 3){
-        syscall(SYS_WRITE,fd,(uintptr_t)msg_filedata,16);
-        syscall(SYS_LSEEK,fd,0,0);//SEEK_SET
-        char wbuf[64];
-        long n = syscall(SYS_READ,fd,(uintptr_t)wbuf,63);
-        if(n > 0) syscall(SYS_WRITE,1,(uintptr_t)wbuf,n);
+        syscall(SYS_WRITE,fd,(uintptr_t)msg5,3);
         syscall(SYS_CLOSE,fd,0,0);
+        fd = syscall(SYS_OPEN,(uintptr_t)msg_path3,O_RDONLY,0);
+        if(fd >= 3){
+            char rbuf[128];
+            uint64_t n = syscall(SYS_READ,fd,(uintptr_t)rbuf,127);
+            if(n > 0) syscall(SYS_WRITE,1,(uintptr_t)rbuf,n);
+            syscall(SYS_CLOSE,fd,0,0);
+        }
     }
+    char ln = '\n';
+    syscall(SYS_WRITE,1,&ln,1);
     //fork()
     pid_t pid = syscall(SYS_FORK,0,0,0);
     if(!pid){
@@ -98,10 +107,12 @@ __asm__(
     "msg2: .ascii \"Child process\\n\"\n"
     "msg3: .ascii \"Parent process\\n\"\n"
     "msg4: .ascii \"waitpid got code 42\\n\"\n"
+    "msg5: .ascii \"ABC\"\n"
     "msg_path1: .asciz \"/hello.txt\"\n"
     "msg_path2: .asciz \"/note.txt\"\n"
-    "msg_filedata: .ascii \"user file data!\\n\"\n"
+    "msg_path3: .asciz \"/SYS/TEST.TXT\"\n"
     ".popsection\n"
+    "msg_filedata: .ascii \"user file data!\\n\"\n"
 );
 //结束标记函数
 __attribute__((naked, noinline, section(".text.user")))
@@ -120,7 +131,6 @@ void KernelMain(){
     TaskInit();
     InitPrintk();
     KeyboardInit();
-    FsInit();//初始化文件系统(ramfs)
     InitSyscall();
     switch_kernel_info_to_high();
     switch_kernel_stack_to_high();
@@ -128,19 +138,9 @@ void KernelMain(){
     rtc_time_t time;
     rtc_get_local(&time);
     printk(PRINTK_INFO"UEFI PML4 at 0x%llx,Kernel PML4 at 0x%llx",UEFI_PML4,KERNEL_PML4);
-    mm_struct* umm = vmm_create_address_space();
-    if(!umm)SYSTEM_STOP();
-    if(!vmm_mmap(umm, 0x400000, PAGE_SIZE, VM_READ | VM_EXEC | VM_WRITE))SYSTEM_STOP();
-    if(!vmm_mmap(umm, umm->start_stack, PAGE_SIZE, VM_READ | VM_WRITE))SYSTEM_STOP();
-    uintptr_t *code_pte = (uintptr_t*)get_pte((uintptr_t)umm->pgd, 0x400000, 0, 0);
-    if(!code_pte || !pte_is_present(*code_pte))SYSTEM_STOP();
-    memcpy((void*)PHYS_TO_VIRT(pte_get_paddr(*code_pte)), (void*)user_main,
-           (uintptr_t)user_main_end - (uintptr_t)user_main);
-    early_printk("Creating user task...\n");
-    CreateProcess(0x400000, umm, "User Test");//创建用户任务
-    CreateKernelThread(test_thread,4096,"test");
-    msleep(3000);
-    //解析UEFI设备路径,定位启动磁盘所在PCI控制器
+    //磁盘检测+文件系统挂载(必须在创建用户任务之前,用户程序依赖根文件系统)
+    AtaRegisterDriver();
+    disk_info_t disk = {0};
     device_path_info_t Device;
     ParseDevicePath(SYSTEM_BootParam->DiskInfo.DevicePath,&Device);
     early_printk("[DISK] path: pci=%x.%x ata=%d/%d sata=%u nvme=%u part=%u lba=%llu\n",
@@ -151,41 +151,50 @@ void KernelMain(){
         Device.found_nvme ? Device.nvme_namespace : 0,
         Device.found_partition ? Device.partition_number : 0,
         Device.found_partition ? Device.partition_start_lba : 0);
-    //注册磁盘驱动(ATA PIO;后续SATA/AHCI驱动同样注册)
-    AtaRegisterDriver();
-    disk_info_t disk;
     if(DiskDetect(&Device,&disk) == 0){
         if(disk.ctrl_type == DISK_CTRL_AHCI){
-            early_printk("[DISK] AHCI controller %02x:%02x.%x abar=%llx port=%u part_start=%llu part_size=%llu\n",
+            printk("[DISK] AHCI controller %02x:%02x.%x abar=%llx port=%u part_start=%llu part_size=%llu\n",
                 disk.pci_bus, disk.pci_dev, disk.pci_func,
                 disk.abar, disk.sata_port,
                 disk.partition_start_lba, disk.partition_size_lba);
         }else if(disk.ctrl_type == DISK_CTRL_ATA){
-            early_printk("[DISK] ATA controller %02x:%02x.%x cmd=%x ctrl=%x channel=%d slave=%d part_start=%llu part_size=%llu\n",
+            printk("[DISK] ATA controller %02x:%02x.%x cmd=%x ctrl=%x channel=%d slave=%d part_start=%llu part_size=%llu\n",
                 disk.pci_bus, disk.pci_dev, disk.pci_func,
                 disk.cmd_base, disk.ctrl_base,
                 disk.ata_channel, disk.ata_slave,
                 disk.partition_start_lba, disk.partition_size_lba);
         }
-        //初始化磁盘设备(软复位+IDENTIFY),并读分区第一个扇区验证
+        //初始化磁盘设备
         if(DiskInit(&disk) == 0){
-            early_printk("[DISK] %s model=%s sectors=%llu lba48=%d\n",
+            printk("[DISK] %s model=%s sectors=%llu lba48=%d\n",
                 disk.ops->name, disk.model, disk.total_sectors, disk.lba48);
             uint8_t sector[512];
             if(DiskRead(&disk, disk.partition_start_lba, 1, sector) == 0){
-                early_printk("[DISK] read lba=%llu OK, first bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                printk("[DISK] read lba=%llu OK, first bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n",
                     disk.partition_start_lba,
                     sector[0], sector[1], sector[2], sector[3],
                     sector[4], sector[5], sector[6], sector[7]);
             }else{
-                early_printk("[DISK] read lba=%llu failed\n", disk.partition_start_lba);
+                printk("[DISK] read lba=%llu failed\n", disk.partition_start_lba);
             }
         }else{
-            early_printk("[DISK] driver not ready\n");
+            printk("[DISK] driver not ready\n");
         }
     }else{
-        early_printk("[DISK] controller not found\n");
+        printk("[DISK] controller not found\n");
     }
+    FsInit(&disk);//FAT32优先挂载到根目录,失败回退ramfs
+    mm_struct* umm = vmm_create_address_space();
+    if(!umm)SYSTEM_STOP();
+    if(!vmm_mmap(umm, 0x400000, PAGE_SIZE, VM_READ | VM_EXEC | VM_WRITE))SYSTEM_STOP();
+    if(!vmm_mmap(umm, umm->start_stack, PAGE_SIZE, VM_READ | VM_WRITE))SYSTEM_STOP();
+    uintptr_t *code_pte = (uintptr_t*)get_pte((uintptr_t)umm->pgd, 0x400000, 0, 0);
+    if(!code_pte || !pte_is_present(*code_pte))SYSTEM_STOP();
+    memcpy((void*)PHYS_TO_VIRT(pte_get_paddr(*code_pte)), (void*)user_main,
+           (uintptr_t)user_main_end - (uintptr_t)user_main);
+    printk("Creating user task...\n");
+    CreateProcess(0x400000, umm, "User Test");//创建用户任务
+    CreateKernelThread(test_thread,4096,"test");
     msleep(5000);
     printk(PRINTK_INFO"Type 'r' to reboot or type 's' to shutdown.");
     char key = GetKey();

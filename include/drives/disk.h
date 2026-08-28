@@ -21,7 +21,7 @@ typedef struct disk_ops {
 
 #define DISK_CTRL_MAX 3//支持的最大控制器类型数
 
-//磁盘描述:由设备路径解析结果+PCI枚举共同确定
+//磁盘描述
 typedef struct disk_info {
     int      present;
     int      ctrl_type;      //DISK_CTRL_*

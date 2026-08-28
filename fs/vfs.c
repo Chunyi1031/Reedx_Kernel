@@ -1,8 +1,3 @@
-/*
- * fs/vfs.c — 虚拟文件系统层
- * 路径解析 + 打开文件描述操作。后端当前为ramfs。
- */
-
 #include <fs.h>
 #include <syscalls.h>
 
@@ -86,6 +81,7 @@ void FsClose(fs_file_t *f){
 
 uint64_t FsRead(fs_file_t *f, void *buf, uint64_t len){
     if(!f || !f->used || !f->node || !f->node->ops->read) return 0;
+    if((f->flags & O_ACCMODE) == O_WRONLY)return 0;//只写打开的文件不可读
     uint64_t n = f->node->ops->read(f->node, f->off, buf, len);
     f->off += n;
     return n;
@@ -93,6 +89,8 @@ uint64_t FsRead(fs_file_t *f, void *buf, uint64_t len){
 
 uint64_t FsWrite(fs_file_t *f, const void *buf, uint64_t len){
     if(!f || !f->used || !f->node || !f->node->ops->write) return 0;
+    if((f->flags & O_ACCMODE) == O_RDONLY)return 0;//只读打开的文件不可写
+    if(f->flags & O_APPEND) f->off = f->node->size;//追加模式每次写强制写到文件末尾
     uint64_t n = f->node->ops->write(f->node, f->off, buf, len);
     f->off += n;
     return n;
@@ -116,13 +114,17 @@ uint64_t FsSize(fs_file_t *f){
     return f->node->size;
 }
 
-void FsInit(void){
-    fs_root = ramfs_init();
-    //预置一个测试文件
-    fs_file_t f;
-    if(FsOpen("/hello.txt", O_CREAT | O_RDWR, &f) == 0){
-        static const char *s = "Hello from ramfs!\n";
-        FsWrite(&f, s, strlen(s));
-        FsClose(&f);
+void FsInit(struct disk_info *disk){
+    //优先挂载FAT32,失败则回退ramfs
+    if(disk && (fat32_mount(disk) == 0)){
+        fs_root = fat32_root();
+    }else{
+        fs_root = ramfs_init();
+        fs_file_t f;
+        if(FsOpen("/hello.txt", O_CREAT | O_RDWR, &f) == 0){
+            static const char *s = "Hello from ramfs!\n";
+            FsWrite(&f, s, strlen(s));
+            FsClose(&f);
+        }
     }
 }

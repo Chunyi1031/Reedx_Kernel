@@ -68,6 +68,7 @@ static long sys_read(long fd, long buf, long count){
 	//文件读取
 	if(!current_task)return -EBADF;
 	if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+	if((current_task->files[fd].flags & O_ACCMODE) == O_WRONLY)return -EBADF;
 	long total = 0;
 	char kbuf[512];
 	while(total < count) {
@@ -107,6 +108,7 @@ static long sys_write(long fd, long buf, long count){
 	//文件写入
 	if(!current_task)return -EBADF;
 	if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+	if((current_task->files[fd].flags & O_ACCMODE) == O_RDONLY)return -EBADF;
 	long total = 0;
 	char kbuf[512];
 	while(total < count){

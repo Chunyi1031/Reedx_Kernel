@@ -11,6 +11,7 @@
 #define MAX_NAME 32
 
 typedef struct fs_node fs_node_t;
+struct disk_info;//磁盘信息(定义在drives/disk.h,此处仅前置声明)
 
 //节点操作集
 typedef struct fs_node_ops{
@@ -41,14 +42,19 @@ typedef struct fs_file{
     _Bool      used;
 } fs_file_t;
 
-void FsInit(void);//初始化文件系统
+void FsInit(struct disk_info *disk);//初始化文件系统
 fs_node_t *FsRoot(void);//文件系统根目录节点
-fs_node_t *ramfs_init(void);//初始化ramfs
 int FsOpen(const char *path, int flags, fs_file_t *out);//打开文件
 void FsClose(fs_file_t *f);//关闭文件
 uint64_t FsRead(fs_file_t *f, void *buf, uint64_t len);//读取文件
 uint64_t FsWrite(fs_file_t *f, const void *buf, uint64_t len);//写入文件
 int FsSeek(fs_file_t *f, int64_t off, int whence);//移动文件指针
 uint64_t FsSize(fs_file_t *f);//获取文件大小
+
+//FAT32
+int fat32_mount(struct disk_info *disk);//挂载FAT32分区
+fs_node_t *fat32_root(void);//FAT32根目录节点
+//RamFS
+fs_node_t *ramfs_init(void);//初始化ramfs
 
 #endif
