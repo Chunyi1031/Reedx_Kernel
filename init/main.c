@@ -54,6 +54,7 @@ void KernelStart(BootParam* boot_param){
 
 //用户态测试程序
 extern char msg1[], msg2[], msg3[], msg4[], msg5[],msg_path1[], msg_path2[], msg_path3[], msg_filedata[];
+extern char msg_exec_path[], msg_exec_arg0[];
 __attribute__((noinline, section(".text.user")))
 static void user_main(void) {
     //write(1,msg,len)
@@ -85,6 +86,11 @@ static void user_main(void) {
     }
     char ln = '\n';
     syscall(SYS_WRITE,1,&ln,1);
+    //execve测试
+    uintptr_t eargv[2];
+    eargv[0] = (uintptr_t)msg_exec_arg0;
+    eargv[1] = 0;
+    syscall(SYS_EXECVE,(uintptr_t)msg_exec_path,(uintptr_t)eargv,0);
     //fork()
     pid_t pid = syscall(SYS_FORK,0,0,0);
     if(!pid){
@@ -111,6 +117,8 @@ __asm__(
     "msg_path1: .asciz \"/hello.txt\"\n"
     "msg_path2: .asciz \"/note.txt\"\n"
     "msg_path3: .asciz \"/SYS/TEST.TXT\"\n"
+    "msg_exec_path: .asciz \"/SYS/TEST.ELF\"\n"
+    "msg_exec_arg0: .asciz \"test\"\n"
     ".popsection\n"
     "msg_filedata: .ascii \"user file data!\\n\"\n"
 );

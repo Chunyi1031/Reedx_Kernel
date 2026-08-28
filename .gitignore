@@ -7,3 +7,4 @@ System.img
 kernel.elf
 OVMF.fd
 qemu.log
+app/

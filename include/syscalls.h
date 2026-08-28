@@ -13,6 +13,7 @@
 #define SYS_GETPID          39
 #define SYS_FORK            57
 #define SYS_EXIT            60
+#define SYS_EXECVE          59
 #define SYS_WAIT4           61
 #define SYS_EXIT_GROUP      231
 #define SYSCALL_TABLE_SIZE  256
@@ -45,6 +46,8 @@
 #define EEXIST              17
 #define ECHILD             10
 #define EINVAL             22
+#define ENOEXEC             8
+#define E2BIG               7
 #define ENOSYS             38
 #define ENFILE             23
 #define ENOSPC             28
@@ -93,6 +96,15 @@ long syscall_dispatch(long num, long a1, long a2, long a3);
  * @author DeepSeek V4 Pro
  */
 long sys_waitpid(long pid, long wstatus, long options);
+
+/**
+ * @brief 系统调用execve处理函数:加载并执行新程序
+ * @param path 程序路径(用户指针)
+ * @param argv 参数指针数组(用户指针,以NULL结尾)
+ * @param envp 环境变量指针数组(用户指针,可为NULL)
+ * @return 成功不返回,失败返回-errno
+ */
+long sys_execve(long path, long argv, long envp);
 
 /**
  * @brief 系统调用

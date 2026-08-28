@@ -1,12 +1,15 @@
 #include <mm/pgtables.h>
 #include <mm/pmm.h>
 
-#define PHYS_TO_VIRT_TEMP(paddr)  ((void*)(uintptr_t)(paddr))
-#define VIRT_TO_PHYS_TEMP(vaddr)  ((uintptr_t)(vaddr))
+volatile int kernel_high_ready = 0;
+#define KERNEL_HIGH_HALF 0xFFFF800000000000ULL
+static inline void *phys_to_virt_temp(uintptr_t paddr){
+    return (void*)(uintptr_t)(kernel_high_ready ? paddr + KERNEL_HIGH_HALF : paddr);
+}
+#define PHYS_TO_VIRT_TEMP(paddr) phys_to_virt_temp((uintptr_t)(paddr))
 
 uintptr_t UEFI_PML4 = 0;
 uintptr_t KERNEL_PML4 = 0;
-volatile int kernel_high_ready = 0;
 
 uintptr_t get_cr3(){
     uintptr_t cr3;

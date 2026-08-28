@@ -298,6 +298,7 @@ void InitSyscall(void){
 	syscall_table[SYS_NANOSLEEP]  = sys_nanosleep;
 	syscall_table[SYS_GETPID]     = sys_getpid;
 	syscall_table[SYS_FORK]       = sys_fork;
+	syscall_table[SYS_EXECVE]     = sys_execve;
 	syscall_table[SYS_EXIT]       = sys_exit;
 	syscall_table[SYS_WAIT4]      = sys_waitpid;
 	syscall_table[SYS_EXIT_GROUP] = sys_exit_group;

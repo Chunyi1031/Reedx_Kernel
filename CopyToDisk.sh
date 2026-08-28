@@ -30,6 +30,12 @@ echo "挂载到: $MOUNT_POINT"
 echo "更新内核..."
 cp "$KERNEL" "$MOUNT_POINT/SYS/KERNEL.ELF"
 
+# 复制execve测试程序
+if [ -f "build/app/test.elf" ]; then
+    echo "更新测试程序..."
+    cp "build/app/test.elf" "$MOUNT_POINT/SYS/TEST.ELF"
+fi
+
 # 卸载
 echo "卸载..."
 udisksctl unmount -b "$LOOP"

@@ -108,8 +108,12 @@ builtin-all := $(addprefix $(build-dir)/, \
                 $(addsuffix /built-in.o, $(core-dirs)))
 
 # ========== 默认目标 ==========
-.PHONY: all
-all: kernel.elf
+.PHONY: all app
+all: kernel.elf app
+
+# 用户测试程序(execve加载的裸ELF)
+app:
+	@$(MAKE) -C app
 
 # ========== 构建输出宏 ==========
 # 每个构建步骤定义一对变量：
