@@ -85,4 +85,23 @@ void* vmm_mmap(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t flags);
  */
 int vmm_map_user_page(mm_struct *mm, uintptr_t vaddr, uintptr_t paddr, uint64_t flags);
 
+/**
+ * @brief 取消一段用户内存映射并释放物理页
+ * @param mm 地址空间
+ * @param vaddr 起始虚拟地址
+ * @param length 长度(字节)
+ * @return 0成功,负数失败
+ */
+int vmm_munmap(mm_struct *mm, uintptr_t vaddr, uint64_t length);
+
+/**
+ * @brief 修改一段用户内存的访问权限
+ * @param mm 地址空间
+ * @param vaddr 起始虚拟地址
+ * @param length 长度
+ * @param prot 新权限(VM_READ/VM_WRITE/VM_EXEC)
+ * @return 0成功,负数失败
+ */
+int vmm_mprotect(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t prot);
+
 #endif

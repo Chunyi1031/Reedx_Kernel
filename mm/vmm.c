@@ -460,3 +460,53 @@ int vmm_map_user_page(mm_struct *mm, uintptr_t vaddr, uintptr_t paddr, uint64_t 
     __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
     return 0;
 }
+
+//取消一段用户内存映射并释放物理页
+int vmm_munmap(mm_struct *mm, uintptr_t vaddr, uint64_t length){
+    if(!mm || !length)return -1;
+    vaddr &= PAGE_MASK;
+    uint64_t pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+    //解除映射并释放物理页
+    for(uint64_t i = 0; i < pages; i++){
+        uintptr_t va = vaddr + i * PAGE_SIZE;
+        uintptr_t pa = 0;
+        if(vmm_unmap_page((uintptr_t)mm->pgd, va, &pa) == 0){
+            if(pa){
+                Pmm_Free((void*)pa, 1);
+                if(mm->rss > 0)mm->rss--;
+            }
+        }
+    }
+    //删除覆盖该范围的VMA
+    vm_area_t *vma = find_vma(mm, vaddr);
+    if(vma){
+        list_del(&vma->vm_list);
+        mm->total_vm -= vma->vm_page_count;
+        mm->mmap_cache = NULL;
+        Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)vma), 1);
+    }
+    return 0;
+}
+
+//修改一段用户内存的访问权限
+int vmm_mprotect(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t prot) {
+    if (!mm || !length) return -1;
+    vaddr &= PAGE_MASK;
+    uint64_t pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+    //逐页修改权限
+    for (uint64_t i = 0; i < pages; i++) {
+        uintptr_t va = vaddr + i * PAGE_SIZE;
+        uint64_t *pte = (uint64_t*)get_pte((uintptr_t)mm->pgd, va, 0, 0);
+        if (!pte || !pte_is_present(*pte)) return -1;
+        uintptr_t paddr = pte_get_paddr(*pte);
+        uint64_t pte_flags = PTE_PRESENT | PTE_USER;
+        if (prot & VM_WRITE) pte_flags |= PTE_WRITABLE;
+        if (!(prot & VM_EXEC) && cpu_nx_enabled) pte_flags |= PTE_NO_EXECUTE;
+        *pte = paddr | pte_flags;
+        __asm__ volatile("invlpg (%0)" : : "r"(va) : "memory");
+    }
+    //更新VMA标志
+    vm_area_t *vma = find_vma(mm, vaddr);
+    if (vma) vma->vm_flags = prot;
+    return 0;
+}

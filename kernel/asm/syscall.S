@@ -15,8 +15,9 @@
 .globl syscall_entry
 .type syscall_entry, @function
 syscall_entry:
-    /* r10 中转用户 RSP，切换到当前用户任务的内核栈顶
-       （由调度器在切到用户任务时写入 user_kernel_stack_top） */
+    /* 保存参数4(r10)到全局变量,再用 r10 中转用户 RSP
+       (r10 是 caller-saved,mmap 等 6 参数系统调用会用到它) */
+    movq %r10, syscall_arg6(%rip)
     movq %rsp, %r10
     movq user_kernel_stack_top(%rip), %rsp
     pushq %r10               /* +120 用户RSP */
@@ -41,6 +42,8 @@ syscall_entry:
     movq 72(%rsp), %rsi     /* rdi = 参数1 */
     movq 80(%rsp), %rdx     /* rsi = 参数2 */
     movq 88(%rsp), %rcx     /* rdx = 参数3 */
+    movq 56(%rsp), %r8      /* r8 = 参数5 */
+    movq 48(%rsp), %r9      /* r9 = 参数6 */
     call syscall_dispatch
 
     /* 返回值写回 rax 槽位 */
@@ -66,3 +69,9 @@ syscall_entry:
     /* rsp 现在指向用户 RSP 槽位，直接恢复并返回 ring3 */
     popq %rsp
     sysretq
+
+/* 参数4(r10)保存区:6 参数系统调用(mmap等)的第4个参数 */
+.section .data
+.globl syscall_arg6
+syscall_arg6:
+    .quad 0

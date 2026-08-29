@@ -19,6 +19,10 @@
 #define SYS_MKDIR           83
 #define SYS_RMDIR           84
 #define SYS_UNLINK          87
+#define SYS_MMAP            9
+#define SYS_MPROTECT        10
+#define SYS_MUNMAP          11
+#define SYS_BRK             12
 #define SYSCALL_TABLE_SIZE  256
 
 //POSIX open标志
@@ -34,6 +38,18 @@
 #define SEEK_SET    0
 #define SEEK_CUR    1
 #define SEEK_END    2
+
+//mmap保护位
+#define PROT_NONE   0x0
+#define PROT_READ   0x1
+#define PROT_WRITE  0x2
+#define PROT_EXEC   0x4
+
+//mmap标志位
+#define MAP_SHARED    0x01
+#define MAP_PRIVATE   0x02
+#define MAP_FIXED     0x10
+#define MAP_ANONYMOUS 0x20
 
 //errno值（POSIX）
 #define EPERM               1
@@ -54,6 +70,7 @@
 #define ENOSYS             38
 #define ENFILE             23
 #define ENOSPC             28
+#define ENODEV             19
 //waitpid选项
 #define WNOHANG             1//不阻塞,没有已退出的子进程时立即返回0
 
@@ -86,9 +103,11 @@ uint64_t copy_to_user(void *to, const void *from, uint64_t n);
  * @brief 系统调用分发器（由汇编入口调用）
  * @param num 调用号
  * @param a1/a2/a3 参数 1~3
+ * @param a5/a6 参数 5~6(参数4在syscall_arg6全局变量中)
  * @return 系统调用返回值（负数 = -errno）
  */
-long syscall_dispatch(long num, long a1, long a2, long a3);
+long syscall_dispatch(long num, long a1, long a2, long a3, long a5, long a6);
+extern long syscall_arg6;//参数4(r10)保存区
 
 /**
  * @brief 系统调用wait4处理函数
@@ -98,7 +117,7 @@ long syscall_dispatch(long num, long a1, long a2, long a3);
  * @return 回收的子进程PID,失败返回-errno
  * @author DeepSeek V4 Pro
  */
-long sys_waitpid(long pid, long wstatus, long options);
+long sys_waitpid(long pid, long wstatus, long options, long a4, long a5, long a6);
 
 /**
  * @brief 系统调用execve处理函数:加载并执行新程序
@@ -107,7 +126,7 @@ long sys_waitpid(long pid, long wstatus, long options);
  * @param envp 环境变量指针数组(用户指针,可为NULL)
  * @return 成功不返回,失败返回-errno
  */
-long sys_execve(long path, long argv, long envp);
+long sys_execve(long path, long argv, long envp, long a4, long a5, long a6);
 
 /**
  * @brief 系统调用

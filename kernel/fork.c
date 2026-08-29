@@ -86,8 +86,8 @@ pid_t do_fork(void){
 	return child->pid;
 }
 
-long sys_fork(long a, long b, long c){
-	(void)a; (void)b; (void)c;
+long sys_fork(long a, long b, long c, long a4, long a5, long a6){
+	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
 	if (!current_task || !current_task->mm) return -ENOSYS;//检查当前任务是否存在或为内核任务
 	pid_t pid = do_fork();//执行fork
 	return pid < 0 ? -EAGAIN : (long)pid;

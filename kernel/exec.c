@@ -231,7 +231,8 @@ fail:
 }
 
 //系统调用入口
-long sys_execve(long path, long argv, long envp){
+long sys_execve(long path, long argv, long envp, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
     if(!current_task || !current_task->mm)return -ENOSYS;
     //拷贝路径
     char kpath[256];

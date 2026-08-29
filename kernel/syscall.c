@@ -54,7 +54,8 @@ uint64_t copy_to_user(void *to, const void *from, uint64_t n){
  * 系统调用:read
  * 读取键盘或文件
  */
-static long sys_read(long fd, long buf, long count){
+static long sys_read(long fd, long buf, long count, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
 	if(count < 0)return -EINVAL;
 	if(!buf)return -EFAULT;
 	//键盘读取
@@ -87,7 +88,8 @@ static long sys_read(long fd, long buf, long count){
  * 系统调用：write
  * 写入到TTY或文件
  */
-static long sys_write(long fd, long buf, long count){
+static long sys_write(long fd, long buf, long count, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
 	if(count < 0) return -EINVAL;
 	if(!buf) return -EFAULT;
 	//输出到用户缓冲区和TTY
@@ -127,8 +129,8 @@ static long sys_write(long fd, long buf, long count){
  * 系统调用：open
  * 打开文件
  */
-static long sys_open(long path, long flags, long mode){
-	(void)mode;
+static long sys_open(long path, long flags, long mode, long a4, long a5, long a6){
+	(void)mode; (void)a4; (void)a5; (void)a6;
 	if(!current_task)return -ENOENT;
 	//复制路径
 	char kpath[256];
@@ -150,8 +152,8 @@ static long sys_open(long path, long flags, long mode){
  * 系统调用:close
  * 关闭文件
  */
-static long sys_close(long fd, long b, long c){
-	(void)b; (void)c;
+static long sys_close(long fd, long b, long c, long a4, long a5, long a6){
+	(void)b; (void)c; (void)a4; (void)a5; (void)a6;
 	if (!current_task) return -EBADF;
 	if (fd < 3 || fd >= MAX_FD || !current_task->files[fd].used) return -EBADF;
 	FsClose(&current_task->files[fd]);
@@ -161,8 +163,8 @@ static long sys_close(long fd, long b, long c){
 /*
  * int mkdir(const char *pathname, mode_t mode)
  */
-static long sys_mkdir(long path, long mode, long unused){
-	(void)unused;
+static long sys_mkdir(long path, long mode, long unused, long a4, long a5, long a6){
+	(void)unused; (void)a4; (void)a5; (void)a6;
 	if(!current_task)return -ENOENT;
 	char kpath[256];
 	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
@@ -173,8 +175,8 @@ static long sys_mkdir(long path, long mode, long unused){
 /*
  * int rmdir(const char *pathname)
  */
-static long sys_rmdir(long path, long b, long c){
-	(void)b; (void)c;
+static long sys_rmdir(long path, long b, long c, long a4, long a5, long a6){
+	(void)b; (void)c; (void)a4; (void)a5; (void)a6;
 	if(!current_task)return -ENOENT;
 	char kpath[256];
 	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
@@ -185,8 +187,8 @@ static long sys_rmdir(long path, long b, long c){
 /*
  * int unlink(const char *pathname)
  */
-static long sys_unlink(long path, long b, long c){
-	(void)b; (void)c;
+static long sys_unlink(long path, long b, long c, long a4, long a5, long a6){
+	(void)b; (void)c; (void)a4; (void)a5; (void)a6;
 	if(!current_task)return -ENOENT;
 	char kpath[256];
 	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
@@ -199,7 +201,8 @@ static long sys_unlink(long path, long b, long c){
  * 系统调用:lseek
  * 移动文件指针
  */
-static long sys_lseek(long fd, long off, long whence){
+static long sys_lseek(long fd, long off, long whence, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
 	if (!current_task) return -EBADF;
 	if (fd < 3 || fd >= MAX_FD || !current_task->files[fd].used) return -EBADF;
 	int r = FsSeek(&current_task->files[fd], off, (int)whence);
@@ -210,8 +213,8 @@ static long sys_lseek(long fd, long off, long whence){
 /*
  * int nanosleep(const struct timespec *req, struct timespec *rem)
  */
-static long sys_nanosleep(long req, long rem, long unused){
-	(void)unused;
+static long sys_nanosleep(long req, long rem, long unused, long a4, long a5, long a6){
+	(void)unused; (void)a4; (void)a5; (void)a6;
 	timespec_t ts;
 	if (!req) return -EFAULT;
 	if (copy_from_user(&ts, (void*)req, sizeof(ts))) return -EFAULT;
@@ -238,8 +241,8 @@ static long __attribute__((noreturn)) do_exit(long status){
  * void _exit(int status)
  * 退出当前线程
  */
-static long sys_exit(long status, long b, long c){
-	(void)b; (void)c;
+static long sys_exit(long status, long b, long c, long a4, long a5, long a6){
+	(void)b; (void)c; (void)a4; (void)a5; (void)a6;
 	do_exit(status);
 }
 
@@ -247,8 +250,8 @@ static long sys_exit(long status, long b, long c){
  * void exit_group(int status)
  * 退出整个线程组
  */
-static long sys_exit_group(long status, long b, long c){
-	(void)b; (void)c;
+static long sys_exit_group(long status, long b, long c, long a4, long a5, long a6){
+	(void)b; (void)c; (void)a4; (void)a5; (void)a6;
 	do_exit(status);
 }
 
@@ -256,8 +259,8 @@ static long sys_exit_group(long status, long b, long c){
  * pid_t getpid(void)
  * 系统调用:getpid
 */
-static long sys_getpid(long a, long b, long c){
-	(void)a; (void)b; (void)c;
+static long sys_getpid(long a, long b, long c, long a4, long a5, long a6){
+	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
 	if (!current_task) return -1;
 	return (long)current_task->pid;
 }
@@ -266,7 +269,8 @@ static long sys_getpid(long a, long b, long c){
  * pid_t wait4(pid_t pid, int *wstatus, int options, struct rusage *ru)
  * 等待子进程退出并回收其资源
  */
-long sys_waitpid(long pid, long wstatus, long options){
+long sys_waitpid(long pid, long wstatus, long options, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
 	if(!current_task || !current_task->mm)return -ECHILD;
 	pid_t child_pid = (pid_t)pid;
 	if(child_pid == 0 || child_pid < -1)return -EINVAL;
@@ -310,17 +314,99 @@ long sys_waitpid(long pid, long wstatus, long options){
 }
 
 //系统调用表
-typedef long (*syscall_fn)(long, long, long);
+typedef long (*syscall_fn)(long, long, long, long, long, long);
 static syscall_fn syscall_table[SYSCALL_TABLE_SIZE];
 
 //系统调用分发器
-long syscall_dispatch(long num, long a1, long a2, long a3){
+long syscall_dispatch(long num, long a1, long a2, long a3, long a5, long a6){
 	if(num < 0 || num >= SYSCALL_TABLE_SIZE)return -ENOSYS;//检查调用号
     //获取处理函数
 	syscall_fn fn = syscall_table[num];
 	if(!fn)return -ENOSYS;
-	long ret = fn(a1, a2, a3);//调用处理函数
-	return ret;
+	long a4 = syscall_arg6;//参数4(r10)
+	return fn(a1, a2, a3, a4, a5, a6);//调用处理函数
+}
+
+/*
+ * void *brk(void *addr)
+ * 设置/获取program break(堆顶)
+ */
+static long sys_brk(long addr, long a2, long a3, long a4, long a5, long a6){
+	(void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task || !current_task->mm)return -ENOMEM;
+	mm_struct *mm = current_task->mm;
+	uintptr_t new_brk = (uintptr_t)addr;
+	if(new_brk == 0)return (long)mm->brk;//为0时查询当前brk
+	if(new_brk < mm->start_brk)return (long)mm->brk;//不能低于start_brk
+	//大于原堆，扩展堆
+	if(new_brk > mm->brk){
+		//映射新页
+		uintptr_t start = (mm->brk + PAGE_SIZE - 1) & PAGE_MASK;
+		uintptr_t end = (new_brk + PAGE_SIZE - 1) & PAGE_MASK;
+		if(end > start){
+			if(!vmm_mmap(mm, start, end - start, VM_READ | VM_WRITE))return (long)mm->brk;
+		}
+	//小于原堆，收缩堆
+	}else if(new_brk < mm->brk){
+		//释放页
+		uintptr_t start = (new_brk + PAGE_SIZE - 1) & PAGE_MASK;
+		uintptr_t end = (mm->brk + PAGE_SIZE - 1) & PAGE_MASK;
+		if(end > start)vmm_munmap(mm, start, end - start);
+	}
+	mm->brk = new_brk;//更新brk
+	return (long)new_brk;
+}
+
+/*
+ * void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
+ * 仅支持匿名私有映射(fd=-1或MAP_ANONYMOUS)
+ */
+static uintptr_t g_mmap_hint = 0x10000000;
+static long sys_mmap(long addr, long length, long prot, long flags, long fd, long offset){
+	(void)offset;
+	if(!current_task || !current_task->mm)return -ENOMEM;
+	if(length <= 0)return -EINVAL;
+	if((long)fd >= 0 && !(flags & MAP_ANONYMOUS))return -ENODEV;//暂不支持文件映射
+	//权限转换
+	uint64_t vm_flags = 0;
+	if(prot & PROT_READ) vm_flags |= VM_READ;
+	if(prot & PROT_WRITE) vm_flags |= VM_WRITE;
+	if(prot & PROT_EXEC) vm_flags |= VM_EXEC;
+	//确定映射地址
+	uintptr_t vaddr;
+	if(addr != 0){
+		vaddr = (uintptr_t)addr & PAGE_MASK;
+	}else{
+		vaddr = g_mmap_hint;
+		g_mmap_hint += ((uint64_t)length + PAGE_SIZE) & PAGE_MASK;
+	}
+	void *r = vmm_mmap(current_task->mm, vaddr, (uint64_t)length, vm_flags);
+	if(!r) return -ENOMEM;
+	return (long)r;
+}
+
+/*
+ * int munmap(void *addr, size_t length)
+ */
+static long sys_munmap(long addr, long length, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task || !current_task->mm)return -EINVAL;
+	if(length <= 0)return -EINVAL;
+	return vmm_munmap(current_task->mm, (uintptr_t)addr, (uint64_t)length);
+}
+
+/*
+ * int mprotect(void *addr, size_t len, int prot)
+ */
+static long sys_mprotect(long addr, long len, long prot, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!current_task || !current_task->mm) return -ENOMEM;
+	if(len <= 0) return -EINVAL;
+	uint64_t vm_flags = 0;
+	if(prot & PROT_READ) vm_flags |= VM_READ;
+	if(prot & PROT_WRITE) vm_flags |= VM_WRITE;
+	if(prot & PROT_EXEC) vm_flags |= VM_EXEC;
+	return vmm_mprotect(current_task->mm, (uintptr_t)addr, (uint64_t)len, vm_flags);
 }
 
 void InitSyscall(void){
@@ -341,6 +427,10 @@ void InitSyscall(void){
 	syscall_table[SYS_MKDIR]      = sys_mkdir;
 	syscall_table[SYS_RMDIR]      = sys_rmdir;
 	syscall_table[SYS_UNLINK]     = sys_unlink;
+	syscall_table[SYS_BRK]        = sys_brk;
+	syscall_table[SYS_MMAP]       = sys_mmap;
+	syscall_table[SYS_MUNMAP]     = sys_munmap;
+	syscall_table[SYS_MPROTECT]   = sys_mprotect;
 	//启用SYSCALL/SYSRET
 	{
 		uint64_t efer = rdmsr(IA32_EFER) | (1ULL << 0);//SCE
