@@ -16,6 +16,9 @@
 #define SYS_EXECVE          59
 #define SYS_WAIT4           61
 #define SYS_EXIT_GROUP      231
+#define SYS_MKDIR           83
+#define SYS_RMDIR           84
+#define SYS_UNLINK          87
 #define SYSCALL_TABLE_SIZE  256
 
 //POSIX open标志

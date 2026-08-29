@@ -261,6 +261,53 @@ static void to_83(const char *name, char *base, char *ext){
     }
 }
 
+//计算8.3短名校验和
+static uint8_t fat_lfn_checksum(const uint8_t shortname[11]){
+    uint8_t sum = 0;
+    for(int i = 0; i < 11; i++) sum = (uint8_t)(((sum & 1) ? 0x80 : 0) + (sum >> 1) + shortname[i]);
+    return sum;
+}
+
+//判断名字是否需要LFN
+static int fat_needs_lfn(const char *name){
+    int i = 0, dot = -1;
+    for(; name[i]; i++){
+        if(name[i] == '.'){
+            if(dot < 0) dot = i;
+            else return 1;//多个点
+        }else if(name[i] >= 'a' && name[i] <= 'z'){
+            return 1;//小写字母需LFN保留原样
+        }else if(!((name[i] >= 'A' && name[i] <= 'Z') || (name[i] >= '0' && name[i] <= '9') || name[i] == '_' || name[i] == '-' || name[i] == ' ')){
+            return 1;//非8.3合法字符
+        }
+    }
+    int base = dot < 0 ? i : dot;
+    int ext = dot < 0 ? 0 : i - dot - 1;
+    if(base > 8 || ext > 3) return 1;
+    return 0;
+}
+
+//填充一个LFN条目
+static void fat_fill_lfn(fat_lfn_entry_t *lfn, const char *name, int name_len, int block, int total_blocks, uint8_t checksum){
+    memset(lfn, 0, sizeof(*lfn));
+    lfn->order = (block == total_blocks - 1) ? (uint8_t)(total_blocks | 0x40) : (uint8_t)(block + 1);
+    lfn->attr = FAT_ATTR_LFN;
+    lfn->type = 0;
+    lfn->checksum = checksum;
+    //本块13个UTF-16字符
+    uint16_t chars[13];
+    for(int j = 0; j < 13; j++){
+        int ci = block * 13 + j;
+        if(ci < name_len) chars[j] = (uint16_t)(uint8_t)name[ci];
+        else if(ci == name_len) chars[j] = 0;//字符串终止
+        else chars[j] = 0xFFFF;
+    }
+    for(int j = 0; j < 5; j++) lfn->name1[j] = chars[j];
+    for(int j = 0; j < 6; j++) lfn->name2[j] = chars[5 + j];
+    lfn->name3[0] = chars[11];
+    lfn->name3[1] = chars[12];
+}
+
 //目录查找
 static fs_node_t *fat_lookup(fs_node_t *dir, const char *name){
     if(!g_fat.disk || !dir || !dir->priv) return NULL;
@@ -289,6 +336,32 @@ static fs_node_t *fat_lookup(fs_node_t *dir, const char *name){
         clu = fat_get_entry(clu);//下一簇
     }
     return NULL;
+}
+
+//在目录中定位匹配名字的目录项,返回所在簇+偏移
+static int fat_find_dirent(fs_node_t *dir, const char *name, uint32_t *out_clus, uint32_t *out_off){
+    if(!g_fat.disk || !dir || !dir->priv) return -1;
+    char base[8], ext[3];
+    to_83(name, base, ext);
+    fat_node_priv_t *dp = (fat_node_priv_t*)dir->priv;
+    uint32_t clu = dp->first_clu;
+    while(clu >= 2 && clu < FAT_CLUSTER_EOF){
+        if(fat_read_cluster(clu)) return -1;
+        for(uint32_t off = 0; off < g_fat.bpc; off += sizeof(fat_dir_entry_t)){
+            fat_dir_entry_t *de = (fat_dir_entry_t*)(g_fat.cluster_buf + off);
+            if(de->name[0] == FAT_DIRENT_END) return -1;//目录项链结束
+            if(de->name[0] == FAT_DIRENT_FREE) continue;
+            if(de->attr == FAT_ATTR_LFN) continue;
+            if(de->attr & FAT_ATTR_VOLUME_ID) continue;
+            if(de->name[0] == '.') continue;
+            if(memcmp(de->name, base, 8) != 0 || memcmp(de->ext, ext, 3) != 0) continue;
+            *out_clus = clu;
+            *out_off = off;
+            return 0;
+        }
+        clu = fat_get_entry(clu);
+    }
+    return -1;
 }
 
 //文件读取
@@ -367,50 +440,86 @@ static uint64_t fat_write(fs_node_t *node, uint64_t off, const void *buf, uint64
     return done;
 }
 
-//创建文件/目录
-static fs_node_t *fat_create(fs_node_t *dir, const char *name, int type){
-    if(!g_fat.disk || !dir || !dir->priv)return NULL;
-    //转8.3文件名
+//在目录中分配目录项,返回短条目所在簇+偏移
+static int fat_alloc_dirent(fs_node_t *dir, const char *name, int type, uint32_t first_clu, uint32_t *out_clus, uint32_t *out_off){
+    if(!g_fat.disk || !dir || !dir->priv) return -1;
     char base[8], ext[3];
     to_83(name, base, ext);
+    uint8_t shortname[11];
+    memcpy(shortname, base, 8);
+    memcpy(shortname + 8, ext, 3);
+    uint8_t checksum = fat_lfn_checksum(shortname);
+    int name_len = strlen(name);
+    int n_lfn = fat_needs_lfn(name) ? (name_len + 12) / 13 : 0;//LFN条目数
+    int need = n_lfn + 1;//LFN+短条目总槽数
     fat_node_priv_t *dp = (fat_node_priv_t*)dir->priv;
     uint32_t cur = dp->first_clu;
-    //如果目录为空，分配首簇
+    //目录为空则先分配首簇
     if(cur < 2){
         cur = fat_alloc_cluster(FAT_CLUSTER_EOF);
-        if(cur < 2)return NULL;
+        if(cur < 2) return -1;
         dp->first_clu = cur;
         fat_update_dirent(dp);
     }
     uint32_t guard = 0;
     while(1){
-        if(++guard > g_fat.total_clusters + 2)return NULL;
-        if(fat_read_cluster(cur))return NULL;
-        for(uint32_t off = 0; off < g_fat.bpc; off += sizeof(fat_dir_entry_t)){
-            fat_dir_entry_t *de = (fat_dir_entry_t*)(g_fat.cluster_buf + off);
-            if(de->name[0] == FAT_DIRENT_END && off + 2 * sizeof(fat_dir_entry_t) > g_fat.bpc)break;
-            if(de->name[0] != FAT_DIRENT_FREE && de->name[0] != FAT_DIRENT_END)continue;
-            _Bool was_end = (de->name[0] == FAT_DIRENT_END);
-            memset(de, 0, sizeof(fat_dir_entry_t));
+        if(++guard > g_fat.total_clusters + 2) return -1;
+        if(fat_read_cluster(cur)) return -1;
+        //找连续need个可用槽
+        for(uint32_t off = 0; off + (uint32_t)need * sizeof(fat_dir_entry_t) <= g_fat.bpc; off += sizeof(fat_dir_entry_t)){
+            int ok = 1;
+            for(int s = 0; s < need; s++){
+                uint8_t c = ((fat_dir_entry_t*)(g_fat.cluster_buf + off + s * sizeof(fat_dir_entry_t)))->name[0];
+                if(c != FAT_DIRENT_FREE && c != FAT_DIRENT_END){ ok = 0; break; }
+            }
+            if(!ok) continue;
+            //写LFN条目
+            for(int k = 0; k < n_lfn; k++){
+                fat_lfn_entry_t *lfn = (fat_lfn_entry_t*)(g_fat.cluster_buf + off + (n_lfn - 1 - k) * sizeof(fat_dir_entry_t));
+                fat_fill_lfn(lfn, name, name_len, k, n_lfn, checksum);
+            }
+            //写短条目
+            uint32_t short_off = off + (uint32_t)n_lfn * sizeof(fat_dir_entry_t);
+            fat_dir_entry_t *de = (fat_dir_entry_t*)(g_fat.cluster_buf + short_off);
+            memset(de, 0, sizeof(*de));
             memcpy(de->name, base, 8);
             memcpy(de->ext, ext, 3);
-            de->attr = (type == FT_DIR) ? FAT_ATTR_DIRECTORY : FAT_ATTR_ARCHIVE;//标记类型
-            //在原结束标记后补新结束标记
-            if(was_end){
-                memset((uint8_t*)de + sizeof(fat_dir_entry_t), 0, sizeof(fat_dir_entry_t));
-                ((fat_dir_entry_t*)((uint8_t*)de + sizeof(fat_dir_entry_t)))->name[0] = FAT_DIRENT_END;
+            de->attr = (type == FT_DIR) ? FAT_ATTR_DIRECTORY : FAT_ATTR_ARCHIVE;
+            de->fst_clus_lo = (uint16_t)(first_clu & 0xFFFF);
+            de->fst_clus_hi = (uint16_t)(first_clu >> 16);
+            //组后补END,否则扩簇补END
+            uint32_t after = off + (uint32_t)need * sizeof(fat_dir_entry_t);
+            if(after < g_fat.bpc){
+                memset(g_fat.cluster_buf + after, 0, sizeof(fat_dir_entry_t));
+                ((fat_dir_entry_t*)(g_fat.cluster_buf + after))->name[0] = FAT_DIRENT_END;
+            }else{
+                uint32_t nxt = fat_alloc_cluster(cur);
+                if(nxt < 2) return -1;
+                memset(g_fat.cluster_buf, 0, g_fat.bpc);
+                ((fat_dir_entry_t*)g_fat.cluster_buf)->name[0] = FAT_DIRENT_END;
+                if(fat_write_cluster(nxt)) return -1;
             }
-            if(fat_write_cluster(cur)) return NULL;
-            return fat_new_node(name, type, 0, 0, cur, off);
+            if(fat_write_cluster(cur)) return -1;
+            *out_clus = cur;
+            *out_off = short_off;
+            return 0;
         }
-        //本簇无空闲项,进入下一簇,链尾则扩簇
+        //本簇无连续槽:进入下一簇或扩簇
         uint32_t nxt = fat_get_entry(cur);
         if(nxt < 2 || nxt >= FAT_CLUSTER_EOF){
             nxt = fat_alloc_cluster(cur);
-            if(nxt < 2) return NULL;
+            if(nxt < 2) return -1;
         }
         cur = nxt;
     }
+}
+
+//创建文件/目录
+static fs_node_t *fat_create(fs_node_t *dir, const char *name, int type){
+    if(!g_fat.disk || !dir || !dir->priv)return NULL;
+    uint32_t clu, off;
+    if(fat_alloc_dirent(dir, name, type, 0, &clu, &off))return NULL;
+    return fat_new_node(name, type, 0, 0, clu, off);
 }
 
 //截断文件(释放多余簇)
@@ -441,6 +550,59 @@ static void fat_truncate(fs_node_t *node){
     fat_update_dirent(p);
 }
 
+//创建目录
+static int fat_mkdir(fs_node_t *dir, const char *name, int mode){
+    (void)mode;
+    if(!g_fat.disk || !dir || !dir->priv) return -1;
+    //分配新目录首簇
+    uint32_t newclu = fat_alloc_cluster(FAT_CLUSTER_EOF);
+    if(newclu < 2) return -1;
+    //在新簇写 . 和 .. 目录项
+    memset(g_fat.cluster_buf, 0, g_fat.bpc);
+    fat_dir_entry_t *dot = (fat_dir_entry_t*)g_fat.cluster_buf;
+    dot->name[0] = '.';
+    for(int i = 1; i < 8; i++) dot->name[i] = ' ';
+    for(int i = 0; i < 3; i++) dot->ext[i] = ' ';
+    dot->attr = FAT_ATTR_DIRECTORY;
+    dot->fst_clus_lo = (uint16_t)(newclu & 0xFFFF);
+    dot->fst_clus_hi = (uint16_t)(newclu >> 16);
+    fat_dir_entry_t *dotdot = (fat_dir_entry_t*)(g_fat.cluster_buf + sizeof(fat_dir_entry_t));
+    dotdot->name[0] = '.';
+    dotdot->name[1] = '.';
+    for(int i = 2; i < 8; i++) dotdot->name[i] = ' ';
+    for(int i = 0; i < 3; i++) dotdot->ext[i] = ' ';
+    dotdot->attr = FAT_ATTR_DIRECTORY;
+    uint32_t pclu = ((fat_node_priv_t*)dir->priv)->first_clu;
+    dotdot->fst_clus_lo = (uint16_t)(pclu & 0xFFFF);
+    dotdot->fst_clus_hi = (uint16_t)(pclu >> 16);
+    if(fat_write_cluster(newclu)) return -1;
+    //在父目录分配目录项
+    uint32_t clu, off;
+    return fat_alloc_dirent(dir, name, FT_DIR, newclu, &clu, &off);
+}
+
+//删除目录项
+static int fat_unlink(fs_node_t *dir, const char *name){
+    if(!g_fat.disk || !dir || !dir->priv) return -1;
+    uint32_t clu, off;
+    if(fat_find_dirent(dir, name, &clu, &off) != 0) return -1;
+    if(fat_read_cluster(clu)) return -1;
+    fat_dir_entry_t *de = (fat_dir_entry_t*)(g_fat.cluster_buf + off);
+    //释放文件/目录的簇链
+    uint32_t first = ((uint32_t)de->fst_clus_hi << 16) | de->fst_clus_lo;
+    if(first >= 2) fat_free_chain(first);
+    //标记短条目及其前面的LFN条目为已删除
+    de->name[0] = FAT_DIRENT_FREE;
+    uint32_t lfn_off = off;
+    while(lfn_off >= sizeof(fat_dir_entry_t)){
+        lfn_off -= sizeof(fat_dir_entry_t);
+        fat_dir_entry_t *e = (fat_dir_entry_t*)(g_fat.cluster_buf + lfn_off);
+        if(e->attr == FAT_ATTR_LFN) e->name[0] = FAT_DIRENT_FREE;
+        else break;
+    }
+    return fat_write_cluster(clu) ? -1 : 0;
+}
+
 //FAT32节点操作集
 static fs_node_ops_t fat_ops = {
     .read     = fat_read,
@@ -448,6 +610,8 @@ static fs_node_ops_t fat_ops = {
     .lookup   = fat_lookup,
     .create   = fat_create,
     .truncate = fat_truncate,
+    .mkdir    = fat_mkdir,
+    .unlink   = fat_unlink,
 };
 
 //挂载FAT32分区

@@ -159,6 +159,42 @@ static long sys_close(long fd, long b, long c){
 }
 
 /*
+ * int mkdir(const char *pathname, mode_t mode)
+ */
+static long sys_mkdir(long path, long mode, long unused){
+	(void)unused;
+	if(!current_task)return -ENOENT;
+	char kpath[256];
+	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
+	kpath[255] = 0;
+	return FsMkdir(kpath, (int)mode) ? -ENOENT : 0;
+}
+
+/*
+ * int rmdir(const char *pathname)
+ */
+static long sys_rmdir(long path, long b, long c){
+	(void)b; (void)c;
+	if(!current_task)return -ENOENT;
+	char kpath[256];
+	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
+	kpath[255] = 0;
+	return FsUnlink(kpath) ? -ENOENT : 0;
+}
+
+/*
+ * int unlink(const char *pathname)
+ */
+static long sys_unlink(long path, long b, long c){
+	(void)b; (void)c;
+	if(!current_task)return -ENOENT;
+	char kpath[256];
+	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
+	kpath[255] = 0;
+	return FsUnlink(kpath) ? -ENOENT : 0;
+}
+
+/*
  * off_t lseek(int fd, off_t offset, int whence)
  * 系统调用:lseek
  * 移动文件指针
@@ -302,6 +338,9 @@ void InitSyscall(void){
 	syscall_table[SYS_EXIT]       = sys_exit;
 	syscall_table[SYS_WAIT4]      = sys_waitpid;
 	syscall_table[SYS_EXIT_GROUP] = sys_exit_group;
+	syscall_table[SYS_MKDIR]      = sys_mkdir;
+	syscall_table[SYS_RMDIR]      = sys_rmdir;
+	syscall_table[SYS_UNLINK]     = sys_unlink;
 	//启用SYSCALL/SYSRET
 	{
 		uint64_t efer = rdmsr(IA32_EFER) | (1ULL << 0);//SCE

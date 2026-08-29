@@ -114,6 +114,24 @@ uint64_t FsSize(fs_file_t *f){
     return f->node->size;
 }
 
+int FsMkdir(const char *path, int mode){
+    if(!path) return -1;
+    fs_node_t *parent = NULL;
+    char name[MAX_NAME];
+    if(resolve_parent(path, &parent, name) != 0) return -1;
+    if(!parent->ops->mkdir) return -1;
+    return parent->ops->mkdir(parent, name, mode);
+}
+
+int FsUnlink(const char *path){
+    if(!path) return -1;
+    fs_node_t *parent = NULL;
+    char name[MAX_NAME];
+    if(resolve_parent(path, &parent, name) != 0) return -1;
+    if(!parent->ops->unlink) return -1;
+    return parent->ops->unlink(parent, name);
+}
+
 void FsInit(struct disk_info *disk){
     //优先挂载FAT32,失败则回退ramfs
     if(disk && (fat32_mount(disk) == 0)){

@@ -1,10 +1,3 @@
-/*
- * fs/ramfs.c — 内存文件系统
- * 纯内存实现:节点与文件内容都分配自物理页,不依赖磁盘驱动。
- * 作为VFS的第一个后端,打通open/read/write/close/lseek完整链路。
- * 由DeepSeek V4 Pro生成
- */
-
 #include <fs.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
@@ -95,12 +88,35 @@ static fs_node_t *ramfs_create(fs_node_t *dir, const char *name, int type){
     return ramfs_alloc_node(dir, name, type);
 }
 
+static int ramfs_mkdir(fs_node_t *dir, const char *name, int mode){
+    (void)mode;//权限暂不实现
+    return ramfs_alloc_node(dir, name, FT_DIR) ? 0 : -1;
+}
+
+//删除目录项并释放节点/内容页
+static int ramfs_unlink(fs_node_t *dir, const char *name){
+    fs_node_t *c = ramfs_lookup(dir, name);
+    if(!c) return -1;
+    //摘除链表
+    c->siblings.prev->next = c->siblings.next;
+    c->siblings.next->prev = c->siblings.prev;
+    if(dir->size > 0) dir->size--;
+    //释放文件内容
+    ramfs_priv_t *p = (ramfs_priv_t*)c->priv;
+    if(p->data) Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)p->data), (int)(p->cap / PAGE_SIZE));
+    //释放节点页
+    Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)c), 1);
+    return 0;
+}
+
 static const fs_node_ops_t g_ramfs_ops = {
     .read     = ramfs_read,
     .write    = ramfs_write,
     .lookup   = ramfs_lookup,
     .create   = ramfs_create,
     .truncate = ramfs_truncate,
+    .mkdir    = ramfs_mkdir,
+    .unlink   = ramfs_unlink,
 };
 
 //创建根目录节点

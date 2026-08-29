@@ -53,72 +53,21 @@ void KernelStart(BootParam* boot_param){
 }
 
 //用户态测试程序
-extern char msg1[], msg2[], msg3[], msg4[], msg5[],msg_path1[], msg_path2[], msg_path3[], msg_filedata[];
+extern char msg_filedata[];
 extern char msg_exec_path[], msg_exec_arg0[];
 __attribute__((noinline, section(".text.user")))
 static void user_main(void) {
-    //write(1,msg,len)
-    syscall(SYS_WRITE,1,(uintptr_t)msg1,22);
-    //文件测试
-    int fd = syscall(SYS_OPEN,(uintptr_t)msg_path3,O_RDWR,0);//覆盖写入+读取
-    if(fd >= 3){
-        char rbuf[128];
-        uint64_t n = syscall(SYS_READ,fd,(uintptr_t)rbuf,127);
-        if(n > 0) syscall(SYS_WRITE,1,(uintptr_t)rbuf,n);
-        syscall(SYS_LSEEK,fd,0,0);//SEEK_SET:回文件开头
-        syscall(SYS_WRITE,fd,(uintptr_t)msg5,3);//覆盖前3字节
-        syscall(SYS_LSEEK,fd,0,0);//回开头再读,应看到覆盖后的内容
-        n = syscall(SYS_READ,fd,(uintptr_t)rbuf,127);
-        if(n > 0) syscall(SYS_WRITE,1,(uintptr_t)rbuf,n);
-        syscall(SYS_CLOSE,fd,0,0);
-    }
-    fd = syscall(SYS_OPEN,(uintptr_t)msg_path3,O_WRONLY|O_APPEND,0);//追加写测试
-    if(fd >= 3){
-        syscall(SYS_WRITE,fd,(uintptr_t)msg5,3);
-        syscall(SYS_CLOSE,fd,0,0);
-        fd = syscall(SYS_OPEN,(uintptr_t)msg_path3,O_RDONLY,0);
-        if(fd >= 3){
-            char rbuf[128];
-            uint64_t n = syscall(SYS_READ,fd,(uintptr_t)rbuf,127);
-            if(n > 0) syscall(SYS_WRITE,1,(uintptr_t)rbuf,n);
-            syscall(SYS_CLOSE,fd,0,0);
-        }
-    }
-    char ln = '\n';
-    syscall(SYS_WRITE,1,&ln,1);
     //execve测试
     uintptr_t eargv[2];
     eargv[0] = (uintptr_t)msg_exec_arg0;
     eargv[1] = 0;
     syscall(SYS_EXECVE,(uintptr_t)msg_exec_path,(uintptr_t)eargv,0);
-    //fork()
-    pid_t pid = syscall(SYS_FORK,0,0,0);
-    if(!pid){
-        syscall(SYS_WRITE,1,(uintptr_t)msg2,14);
-        syscall(SYS_EXIT,42,0,0);//exit(42):退出码42
-    }else{
-        syscall(SYS_WRITE,1,(uintptr_t)msg3,15);
-        //waitpid(pid,&status,0):回收子进程
-        int status = -1;
-        long w = syscall(SYS_WAIT4,pid,(uintptr_t)&status,0);
-        if(w == pid && status == 42){
-            syscall(SYS_WRITE,1,(uintptr_t)msg4,20);//"waitpid got code 42\n"
-        }
-        syscall(SYS_EXIT,0,0,0);//exit(0)
-    }
+    syscall(SYS_EXIT,0,0,0);
 }
 __asm__(
     ".pushsection .text.user, \"ax\", @progbits\n"
-    "msg1: .ascii \"Hello World in ring3!\\n\"\n"
-    "msg2: .ascii \"Child process\\n\"\n"
-    "msg3: .ascii \"Parent process\\n\"\n"
-    "msg4: .ascii \"waitpid got code 42\\n\"\n"
-    "msg5: .ascii \"ABC\"\n"
-    "msg_path1: .asciz \"/hello.txt\"\n"
-    "msg_path2: .asciz \"/note.txt\"\n"
-    "msg_path3: .asciz \"/SYS/TEST.TXT\"\n"
     "msg_exec_path: .asciz \"/SYS/TEST.ELF\"\n"
-    "msg_exec_arg0: .asciz \"test\"\n"
+    "msg_exec_arg0: .asciz \"/SYS/TEST.ELF\"\n"
     ".popsection\n"
     "msg_filedata: .ascii \"user file data!\\n\"\n"
 );
@@ -201,13 +150,14 @@ void KernelMain(){
     memcpy((void*)PHYS_TO_VIRT(pte_get_paddr(*code_pte)), (void*)user_main,
            (uintptr_t)user_main_end - (uintptr_t)user_main);
     printk("Creating user task...\n");
-    CreateProcess(0x400000, umm, "User Test");//创建用户任务
+    CreateProcess(0x400000, umm, "UserTask");//创建用户任务
     CreateKernelThread(test_thread,4096,"test");
-    msleep(5000);
-    printk(PRINTK_INFO"Type 'r' to reboot or type 's' to shutdown.");
-    char key = GetKey();
-    if(key == 's')SYSTEM_Shutdown();
-    else SYSTEM_Restart();
+    // msleep(5000);
+    // printk(PRINTK_INFO"Type 'r' to reboot or type 's' to shutdown.");
+    // char key = GetKey();
+    // if(key == 's')SYSTEM_Shutdown();
+    // else SYSTEM_Restart();
+    SYSTEM_STOP();
 }
 
 void test_thread(){

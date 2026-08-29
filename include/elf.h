@@ -101,4 +101,14 @@ typedef struct {
 #define PF_W  (1 << 1)
 #define PF_R  (1 << 2)
 
+/* 辅助向量(auxv)类型 */
+#define AT_NULL    0
+#define AT_PHDR    3
+#define AT_PHENT   4
+#define AT_PHNUM   5
+#define AT_PAGESZ  6
+#define AT_ENTRY   9
+#define AT_SECURE  23
+#define AT_RANDOM  25
+
 #endif /* _ELF_H */

@@ -20,6 +20,8 @@ typedef struct fs_node_ops{
     fs_node_t * (*lookup)(fs_node_t *dir, const char *name);
     fs_node_t * (*create)(fs_node_t *dir, const char *name, int type);
     void        (*truncate)(fs_node_t *node);
+    int         (*mkdir)(fs_node_t *dir, const char *name, int mode);//创建目录
+    int         (*unlink)(fs_node_t *dir, const char *name);//删除目录项(文件或目录)
 } fs_node_ops_t;
 
 //文件系统节点(文件或目录)
@@ -50,6 +52,8 @@ uint64_t FsRead(fs_file_t *f, void *buf, uint64_t len);//读取文件
 uint64_t FsWrite(fs_file_t *f, const void *buf, uint64_t len);//写入文件
 int FsSeek(fs_file_t *f, int64_t off, int whence);//移动文件指针
 uint64_t FsSize(fs_file_t *f);//获取文件大小
+int FsMkdir(const char *path, int mode);//创建目录
+int FsUnlink(const char *path);//删除目录项(文件或目录)
 
 //FAT32
 int fat32_mount(struct disk_info *disk);//挂载FAT32分区
