@@ -5,6 +5,19 @@
 #include <spinlock.h>
 #include <desc.h>
 
+#define IA32_FS_BASE 0xC0000100
+
+static inline uint64_t task_rdmsr(uint32_t msr){
+	uint32_t low, high;
+	__asm__ volatile ("rdmsr" : "=a"(low), "=d"(high) : "c"(msr));
+	return ((uint64_t)high << 32) | low;
+}
+static inline void task_wrmsr(uint32_t msr, uint64_t val){
+	uint32_t low = (uint32_t)val;
+	uint32_t high = (uint32_t)(val >> 32);
+	__asm__ volatile ("wrmsr" : : "a"(low), "d"(high), "c"(msr) : "memory");
+}
+
 static struct list_node task_list_head = {&task_list_head, &task_list_head};//任务链表头
 task_struct* current_task = NULL;//当前运行的任务
 task_struct* kernel_task = NULL;//内核任务
@@ -572,6 +585,8 @@ void schedule(){
     if(current_task && (current_task->state == TASK_RUNNING)){
         current_task->state = TASK_READY;
         TaskListAdd(current_task);
+    }else if(current_task && (current_task->state == TASK_BLOCKED)){
+        if(!list_has_node(&current_task->list))list_add_tail(&current_task->list, &task_list_head);
     }
     task_struct* next = TaskPickNext();
     //如果没有就绪任务，返回内核任务
@@ -592,6 +607,9 @@ void schedule(){
             user_kernel_stack_top = (uint64_t)next->kernel_stack + next->stack_size;
             cpu_tss.rsp0 = user_kernel_stack_top;
         }
+        //切换FS段基址
+        if(sched_prev->mm) sched_prev->fs_base = task_rdmsr(IA32_FS_BASE);
+        if(next->mm)task_wrmsr(IA32_FS_BASE, next->fs_base);
         current_task = next;
         switch_to(&sched_prev->context.rsp, &next->context.rsp);//切换任务上下文
     }

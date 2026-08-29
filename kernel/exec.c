@@ -13,6 +13,14 @@
 #define EXEC_MAX_ENVP     32       //最多环境变量个数
 #define EXEC_ARG_MAX      128      //单个参数/环境变量最大长度
 
+#define IA32_FS_BASE 0xC0000100
+
+static inline void exec_wrmsr(uint32_t msr, uint64_t val){
+	uint32_t low = (uint32_t)val;
+	uint32_t high = (uint32_t)(val >> 32);
+	__asm__ volatile ("wrmsr" : : "a"(low), "d"(high), "c"(msr) : "memory");
+}
+
 //ELF加载结果
 typedef struct elf_load_info {
     uint64_t entry;      //程序入口
@@ -216,6 +224,9 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
     t->mm = new_mm;
     set_cr3((uintptr_t)new_mm->pgd);
     mmput(old_mm);
+    //清除FS基址
+    t->fs_base = 0;
+    exec_wrmsr(IA32_FS_BASE, 0);
     //修改syscall帧
     uint64_t *p = (uint64_t*)(user_kernel_stack_top - 128);
     p[4]  = 0x202;//用户RFLAGS(IF)

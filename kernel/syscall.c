@@ -10,6 +10,7 @@
 #include <idt.h>
 #include <fork.h>
 #include <fs.h>
+#include <futex.h>
 
 static inline uint64_t rdmsr(uint32_t msr){
 	uint32_t low, high;
@@ -26,6 +27,7 @@ static inline void wrmsr(uint32_t msr, uint64_t val){
 #define IA32_STAR   0xC0000081
 #define IA32_LSTAR  0xC0000082
 #define IA32_FMASK  0xC0000084
+#define IA32_FS_BASE 0xC0000100
 
 volatile int cpu_nx_enabled = 0;
 
@@ -231,6 +233,11 @@ static long sys_nanosleep(long req, long rem, long unused, long a4, long a5, lon
 //进程退出
 static long __attribute__((noreturn)) do_exit(long status){
 	if(current_task && current_task->mm){
+		//通知clear_child_tid(写入0, 供futex/线程库检测退出)
+		if(current_task->clear_child_tid){
+			uint32_t zero = 0;
+			copy_to_user(current_task->clear_child_tid, &zero, sizeof(zero));
+		}
 		current_task->exit_code = (int)status;//保存退出码
 		TaskExit();//退出任务
 	}
@@ -409,6 +416,40 @@ static long sys_mprotect(long addr, long len, long prot, long a4, long a5, long 
 	return vmm_mprotect(current_task->mm, (uintptr_t)addr, (uint64_t)len, vm_flags);
 }
 
+/*
+ * int arch_prctl(int code, unsigned long addr)
+ * 设置/读取FS段基址(用户态TLS)
+ */
+static long sys_arch_prctl(long code, long addr, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EINVAL;
+	if(code == ARCH_SET_FS){
+		if((uintptr_t)addr >= USER_VADDR_MAX)return -EPERM;//必须是用户态地址
+		current_task->fs_base = (uint64_t)addr;
+		wrmsr(IA32_FS_BASE, (uint64_t)addr);//直接写入FS基址MSR
+		return 0;
+	}
+	if(code == ARCH_GET_FS){
+		//Linux语义: 把FS基址写到用户指针*addr, 成功返回0
+		if(!addr)return -EFAULT;
+		uint64_t fs = current_task->fs_base;
+		if(copy_to_user((void*)addr, &fs, sizeof(fs)))return -EFAULT;
+		return 0;
+	}
+	return -EINVAL;
+}
+
+/*
+ * int set_tid_address(int *tidptr)
+ * 注册clear_child_tid指针, 返回当前PID
+ */
+static long sys_set_tid_address(long tidptr, long a2, long a3, long a4, long a5, long a6){
+	(void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -ENOSYS;
+	current_task->clear_child_tid = (int*)tidptr;
+	return current_task->pid;
+}
+
 void InitSyscall(void){
     //初始化系统调用表
 	memset(syscall_table, 0, sizeof(syscall_table));
@@ -428,6 +469,9 @@ void InitSyscall(void){
 	syscall_table[SYS_RMDIR]      = sys_rmdir;
 	syscall_table[SYS_UNLINK]     = sys_unlink;
 	syscall_table[SYS_BRK]        = sys_brk;
+	syscall_table[SYS_ARCH_PRCTL] = sys_arch_prctl;
+	syscall_table[SYS_FUTEX]            = sys_futex;
+	syscall_table[SYS_SET_TID_ADDRESS]  = sys_set_tid_address;
 	syscall_table[SYS_MMAP]       = sys_mmap;
 	syscall_table[SYS_MUNMAP]     = sys_munmap;
 	syscall_table[SYS_MPROTECT]   = sys_mprotect;

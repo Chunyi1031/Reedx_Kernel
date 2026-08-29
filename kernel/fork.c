@@ -76,6 +76,7 @@ pid_t do_fork(void){
 	child->kernel_stack = stack;
 	child->stack_size = 4096;
 	strcpy(child->name, parent->name);
+	child->fs_base = parent->fs_base;//继承TLS的FS段基址
 	//继承父进程文件描述符表
 	for (int i = 0; i < MAX_FD; i++) {
 		child->files[i] = parent->files[i];

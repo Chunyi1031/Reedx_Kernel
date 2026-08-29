@@ -3,6 +3,7 @@
 #include <drives/ps2kbd.h>
 #include <print.h>
 #include <task.h>
+#include <futex.h>
 
 volatile uint64_t SYSTEM_TimerTicks = 0;
 
@@ -24,6 +25,7 @@ void irq_dispatch(uint32_t vector){
 	case IRQ_TIMER:
 		SYSTEM_TimerTicks++;//增加计数
 		timeout_wake_check();//检查并唤醒超时的msleep任务
+		futex_timeout_check();//检查并唤醒超时的futex等待者
 		send_eoi((uint8_t)vector);//发送EOI
 		schedule();//调度
 		return;

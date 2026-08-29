@@ -9,20 +9,23 @@
 #define SYS_OPEN            2
 #define SYS_CLOSE           3
 #define SYS_LSEEK           8
-#define SYS_NANOSLEEP       35
-#define SYS_GETPID          39
-#define SYS_FORK            57
-#define SYS_EXIT            60
-#define SYS_EXECVE          59
-#define SYS_WAIT4           61
-#define SYS_EXIT_GROUP      231
-#define SYS_MKDIR           83
-#define SYS_RMDIR           84
-#define SYS_UNLINK          87
 #define SYS_MMAP            9
 #define SYS_MPROTECT        10
 #define SYS_MUNMAP          11
 #define SYS_BRK             12
+#define SYS_NANOSLEEP       35
+#define SYS_GETPID          39
+#define SYS_FORK            57
+#define SYS_EXECVE          59
+#define SYS_EXIT            60
+#define SYS_WAIT4           61
+#define SYS_MKDIR           83
+#define SYS_RMDIR           84
+#define SYS_UNLINK          87
+#define SYS_ARCH_PRCTL      158
+#define SYS_FUTEX           202
+#define SYS_SET_TID_ADDRESS 218
+#define SYS_EXIT_GROUP      231
 #define SYSCALL_TABLE_SIZE  256
 
 //POSIX open标志
@@ -51,6 +54,10 @@
 #define MAP_FIXED     0x10
 #define MAP_ANONYMOUS 0x20
 
+//arch_prctl代码
+#define ARCH_SET_FS  0x1002 //设置FS段基址
+#define ARCH_GET_FS  0x1003 //读取FS段基址
+
 //errno值（POSIX）
 #define EPERM               1
 #define ENOENT              2
@@ -71,8 +78,19 @@
 #define ENFILE             23
 #define ENOSPC             28
 #define ENODEV             19
+#define ETIMEDOUT         110
 //waitpid选项
 #define WNOHANG             1//不阻塞,没有已退出的子进程时立即返回0
+
+//futex操作
+#define FUTEX_WAIT            0
+#define FUTEX_WAKE            1
+#define FUTEX_REQUEUE         3
+#define FUTEX_CMP_REQUEUE     4
+#define FUTEX_WAIT_BITSET     9
+#define FUTEX_WAKE_BITSET     10
+#define FUTEX_PRIVATE_FLAG    128
+#define FUTEX_CLOCK_REALTIME  256
 
 //POSIX timespec
 typedef struct timespec {

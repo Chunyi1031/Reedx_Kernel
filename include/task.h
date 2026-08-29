@@ -45,6 +45,9 @@ typedef struct task_struct {
     int                 exit_code;  //退出码(waitpid读取)
     wait_queue_head_t   child_wq;   //等待子进程退出的队列
     mm_struct*          mm;         //用户任务内存信息
+    uint64_t            fs_base;    //FS段基址
+    int*                clear_child_tid;//set_tid_address注册的清除指针
+    int                 futex_timedout;//futex等待是否因超时被唤醒
     void*               kernel_stack;//内核栈指针
     uint64_t            stack_size; //内核栈大小
     struct list_node    list;       //就绪链表节点
