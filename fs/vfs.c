@@ -26,6 +26,10 @@ static fs_node_t *resolve(const char *path){
     }
     return cur;
 }
+//公开的路径解析
+fs_node_t *FsResolve(const char *path){
+    return resolve(path);
+}
 //解析父目录与末段名:/a/b/c → parent=/a/b, name=c
 static int resolve_parent(const char *path, fs_node_t **parent, char name[MAX_NAME]){
     char buf[256];

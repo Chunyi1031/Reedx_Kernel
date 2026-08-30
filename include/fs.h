@@ -46,6 +46,7 @@ typedef struct fs_file{
 
 void FsInit(struct disk_info *disk);//初始化文件系统
 fs_node_t *FsRoot(void);//文件系统根目录节点
+fs_node_t *FsResolve(const char *path);//解析绝对路径返回节点
 int FsOpen(const char *path, int flags, fs_file_t *out);//打开文件
 void FsClose(fs_file_t *f);//关闭文件
 uint64_t FsRead(fs_file_t *f, void *buf, uint64_t len);//读取文件

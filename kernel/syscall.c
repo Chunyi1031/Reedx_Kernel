@@ -11,6 +11,7 @@
 #include <fork.h>
 #include <fs.h>
 #include <futex.h>
+#include <rtc.h>
 
 static inline uint64_t rdmsr(uint32_t msr){
 	uint32_t low, high;
@@ -211,12 +212,166 @@ static long sys_lseek(long fd, long off, long whence, long a4, long a5, long a6)
 	if (r < 0) return -EINVAL;
 	return r;
 }
+/*DeepSeek V4 Flash*/
+//填充Linux x86_64 struct stat
+static void fill_stat(stat_t *st, fs_node_t *node){
+	memset(st, 0, sizeof(*st));
+	st->st_dev = 1;
+	st->st_ino = (uint64_t)(uintptr_t)node;//节点指针作伪inode
+	st->st_nlink = 1;
+	st->st_mode = (node->type == FT_DIR) ? (S_IFDIR | 0755) : (S_IFREG | 0644);
+	st->st_size = (int64_t)node->size;
+	st->st_blksize = 512;
+	st->st_blocks = ((uint64_t)node->size + 511) / 512;
+	uint64_t now = rtc_get_epoch();
+	st->st_atime = (int64_t)now;
+	st->st_mtime = (int64_t)now;
+	st->st_ctime = (int64_t)now;
+}
+
+/*
+ * int stat(const char *path, struct stat *buf)
+ */
+static long sys_newstat(long path, long buf, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task || !current_task->mm)return -ENOSYS;
+	if(!path || !buf)return -EFAULT;
+	char kpath[256];
+	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
+	kpath[255] = 0;
+	fs_node_t *node = FsResolve(kpath);
+	if(!node)return -ENOENT;
+	stat_t st;
+	fill_stat(&st, node);
+	if(copy_to_user((void*)buf, &st, sizeof(st)))return -EFAULT;
+	return 0;
+}
+
+/*
+ * int fstat(int fd, struct stat *buf)
+ */
+static long sys_newfstat(long fd, long buf, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EBADF;
+	if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+	if(!buf)return -EFAULT;
+	stat_t st;
+	fill_stat(&st, current_task->files[fd].node);
+	if(copy_to_user((void*)buf, &st, sizeof(st)))return -EFAULT;
+	return 0;
+}
+
+/*
+ * int access(const char *path, int mode)
+ * 权限暂不检查, 只检查存在性(F_OK=0)
+ */
+static long sys_access(long path, long mode, long a3, long a4, long a5, long a6){
+	(void)mode; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task || !current_task->mm)return -ENOSYS;
+	if(!path)return -EFAULT;
+	char kpath[256];
+	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
+	kpath[255] = 0;
+	if(!FsResolve(kpath))return -ENOENT;
+	return 0;
+}
+
+/*
+ * ssize_t readlink(const char *path, char *buf, size_t bufsiz)
+ * 无符号链接支持, 一律-EINVAL
+ */
+static long sys_readlink(long path, long buf, long bufsiz, long a4, long a5, long a6){
+	(void)path; (void)buf; (void)bufsiz; (void)a4; (void)a5; (void)a6;
+	return -EINVAL;
+}
+
+/*
+ * char *getcwd(char *buf, size_t size)
+ * 成功返回字符串长度(含结尾NUL, Linux内核ABI语义)
+ */
+static long sys_getcwd(long buf, long size, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EFAULT;
+	if(!buf || size <= 0)return -EFAULT;
+	int len = strlen(current_task->cwd);
+	if((uint64_t)len + 1 > (uint64_t)size)return -ERANGE;
+	if(copy_to_user((void*)buf, current_task->cwd, (uint64_t)len + 1))return -EFAULT;
+	return (long)len + 1;//Linux: 返回写入长度(含NUL)
+}
+
+/*
+ * int chdir(const char *path)
+ */
+static long sys_chdir(long path, long a2, long a3, long a4, long a5, long a6){
+	(void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task || !current_task->mm)return -ENOSYS;
+	if(!path)return -EFAULT;
+	char kpath[256];
+	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
+	kpath[255] = 0;
+	fs_node_t *node = FsResolve(kpath);
+	if(!node)return -ENOENT;
+	if(node->type != FT_DIR)return -ENOTDIR;
+	int len = strlen(kpath);
+	if(len > 255)len = 255;
+	memcpy(current_task->cwd, kpath, (uint64_t)len);
+	current_task->cwd[len] = 0;
+	return 0;
+}
+/*DeepSeek V4 Flash-END*/
+/*DeepSeek V4 Pro*/
+/*
+ * int ioctl(int fd, unsigned long request, ...)
+ * 无终端ioctl支持, 一律-ENOTTY(musl/glibc把ENOTTY当"非终端"处理, 无碍)
+ */
+static long sys_ioctl(long fd, long request, long arg, long a4, long a5, long a6){
+	(void)fd; (void)request; (void)arg; (void)a4; (void)a5; (void)a6;
+	return -ENOTTY;
+}
+
+/*
+ * ssize_t writev(int fd, const struct iovec *iov, int iovcnt)
+ * 聚合写(TTY输出或文件写入), 返回写入总字节数
+ */
+static long sys_writev(long fd, long iov, long iovcnt, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!iov || iovcnt <= 0 || iovcnt > 256)return -EINVAL;
+	struct iovec vec[256];
+	if(copy_from_user(vec, (void*)iov, (uint64_t)iovcnt * sizeof(struct iovec)))return -EFAULT;
+	long total = 0;
+	for(int i = 0; i < iovcnt; i++){
+		uint64_t len = vec[i].iov_len;
+		if(!len)continue;
+		uintptr_t base = (uintptr_t)vec[i].iov_base;
+		if(base >= USER_VADDR_MAX || base + len > USER_VADDR_MAX)return total ? total : -EFAULT;
+		char kbuf[512];
+		uint64_t done = 0;
+		while(done < len){
+			uint64_t chunk = len - done;
+			if(chunk > sizeof(kbuf))chunk = sizeof(kbuf);
+			if(copy_from_user(kbuf, (const char*)base + done, chunk))return total ? total : -EFAULT;
+			if((fd == 1) || (fd == 2)){
+				//TTY输出
+				for(uint64_t j = 0; j < chunk; j++)TTY_PrintChar(kbuf[j], CurrentConsoleStyle.TextColor);
+			}else{
+				//文件写入
+				if(!current_task)return -EBADF;
+				if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+				if((current_task->files[fd].flags & O_ACCMODE) == O_RDONLY)return -EBADF;
+				FsWrite(&current_task->files[fd], kbuf, chunk);
+			}
+			done += chunk;
+			total += (long)chunk;
+		}
+	}
+	return total;
+}
+/*DeepSeek V4 Pro-END*/
 
 /*
  * int nanosleep(const struct timespec *req, struct timespec *rem)
  */
-static long sys_nanosleep(long req, long rem, long unused, long a4, long a5, long a6){
-	(void)unused; (void)a4; (void)a5; (void)a6;
+static long sys_nanosleep(long req, long rem, long unused, long a4, long a5, long a6){	(void)unused; (void)a4; (void)a5; (void)a6;
 	timespec_t ts;
 	if (!req) return -EFAULT;
 	if (copy_from_user(&ts, (void*)req, sizeof(ts))) return -EFAULT;
@@ -457,7 +612,15 @@ void InitSyscall(void){
 	syscall_table[SYS_WRITE]      = sys_write;
 	syscall_table[SYS_OPEN]       = sys_open;
 	syscall_table[SYS_CLOSE]      = sys_close;
+	syscall_table[SYS_STAT]       = sys_newstat;
+	syscall_table[SYS_FSTAT]      = sys_newfstat;
 	syscall_table[SYS_LSEEK]      = sys_lseek;
+	syscall_table[SYS_ACCESS]     = sys_access;
+	syscall_table[SYS_READLINK]   = sys_readlink;
+	syscall_table[SYS_GETCWD]     = sys_getcwd;
+	syscall_table[SYS_CHDIR]      = sys_chdir;
+	syscall_table[SYS_IOCTL]      = sys_ioctl;
+	syscall_table[SYS_WRITEV]     = sys_writev;
 	syscall_table[SYS_NANOSLEEP]  = sys_nanosleep;
 	syscall_table[SYS_GETPID]     = sys_getpid;
 	syscall_table[SYS_FORK]       = sys_fork;

@@ -36,6 +36,12 @@ if [ -f "build/app/test.elf" ]; then
     cp "build/app/test.elf" "$MOUNT_POINT/SYS/TEST.ELF"
 fi
 
+# 复制musl静态链接hello程序
+if [ -f "build/app/hello.elf" ]; then
+    echo "更新musl程序..."
+    cp "build/app/hello.elf" "$MOUNT_POINT/SYS/HELLO.ELF"
+fi
+
 # 卸载
 echo "卸载..."
 udisksctl unmount -b "$LOOP"

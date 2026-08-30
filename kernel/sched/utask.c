@@ -29,6 +29,7 @@ task_struct* CreateProcess(uintptr_t entry, mm_struct* mm, const char* name) {
     task->kernel_stack = stack;
     task->stack_size = 4096;
     strcpy(task->name, name);
+    strcpy(task->cwd, "/");//初始工作目录为根
     //伪造首次切换的栈帧
     uint64_t stack_bottom = (uint64_t)stack + 4096;
     uint64_t* f = (uint64_t*)(stack_bottom - 17 * 8);

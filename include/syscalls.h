@@ -8,20 +8,28 @@
 #define SYS_WRITE           1
 #define SYS_OPEN            2
 #define SYS_CLOSE           3
+#define SYS_STAT            4
+#define SYS_FSTAT           5
 #define SYS_LSEEK           8
 #define SYS_MMAP            9
 #define SYS_MPROTECT        10
 #define SYS_MUNMAP          11
 #define SYS_BRK             12
+#define SYS_IOCTL           16
+#define SYS_WRITEV          20
+#define SYS_ACCESS          21
 #define SYS_NANOSLEEP       35
 #define SYS_GETPID          39
 #define SYS_FORK            57
 #define SYS_EXECVE          59
 #define SYS_EXIT            60
 #define SYS_WAIT4           61
+#define SYS_GETCWD          79
+#define SYS_CHDIR           80
 #define SYS_MKDIR           83
 #define SYS_RMDIR           84
 #define SYS_UNLINK          87
+#define SYS_READLINK        89
 #define SYS_ARCH_PRCTL      158
 #define SYS_FUTEX           202
 #define SYS_SET_TID_ADDRESS 218
@@ -67,6 +75,8 @@
 #define EAGAIN              11
 #define ENOMEM              12
 #define EACCES              13
+#define ENOTDIR            20
+#define ERANGE             34
 #define EFAULT              14
 #define EBUSY               16
 #define EEXIST              17
@@ -78,9 +88,10 @@
 #define ENFILE             23
 #define ENOSPC             28
 #define ENODEV             19
+#define ENOTTY             25
 #define ETIMEDOUT         110
-//waitpid选项
-#define WNOHANG             1//不阻塞,没有已退出的子进程时立即返回0
+
+#define WNOHANG             1 //waitpid选项
 
 //futex操作
 #define FUTEX_WAIT            0
@@ -97,6 +108,47 @@ typedef struct timespec {
     long tv_sec;//秒
     long tv_nsec;//纳秒（0 ~ 999999999）
 } timespec_t;
+
+//writev用iovec
+typedef struct iovec {
+    void    *iov_base;
+    uint64_t iov_len;
+} iovec_t;
+
+//文件类型/权限位(POSIX)
+#define S_IFMT   0170000
+#define S_IFSOCK 0140000
+#define S_IFLNK  0120000
+#define S_IFREG  0100000
+#define S_IFBLK  0060000
+#define S_IFDIR  0040000
+#define S_IFCHR  0020000
+#define S_IFIFO  0010000
+#define S_IRWXU  00700
+#define S_IRWXG  00070
+#define S_IRWXO  00007
+
+//Linux x86_64 struct stat
+typedef struct stat {
+    uint64_t st_dev;
+    uint64_t st_ino;
+    uint64_t st_nlink;
+    uint32_t st_mode;
+    uint32_t st_uid;
+    uint32_t st_gid;
+    uint32_t __pad0;
+    uint64_t st_rdev;
+    int64_t  st_size;
+    int64_t  st_blksize;
+    int64_t  st_blocks;
+    int64_t  st_atime;
+    int64_t  st_atime_nsec;
+    int64_t  st_mtime;
+    int64_t  st_mtime_nsec;
+    int64_t  st_ctime;
+    int64_t  st_ctime_nsec;
+    int64_t  __unused[3];
+} stat_t;
 
 extern void syscall_entry(void);//汇编入口（kernel/asm/syscall.S）
 

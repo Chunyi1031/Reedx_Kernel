@@ -53,6 +53,7 @@ typedef struct task_struct {
     struct list_node    list;       //就绪链表节点
     struct list_node    wait_node;  //等待队列节点
     uint64_t            wake_up_ticks;//msleep超时tick
+    char                cwd[256];   //当前工作目录
     fs_file_t           files[MAX_FD];//文件描述符表(0/1/2保留stdin/out/err)
 } task_struct;
 
