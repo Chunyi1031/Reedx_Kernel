@@ -108,6 +108,11 @@ static uint64_t date_to_epoch(uint16_t year, uint8_t month, uint8_t day, uint8_t
 	return (uint64_t)total_days * 86400 + hour * 3600 + minute * 60 + second;
 }
 
+uint64_t rtc_tm_to_epoch(uint16_t year, uint8_t month, uint8_t day, uint8_t hour, uint8_t minute, uint8_t second){
+	if(year < 1970 || !month || month > 12 || !day || day > 31)return 0;
+	return date_to_epoch(year, month, day, hour, minute, second);
+}
+
 //分解日期时间（wday/dst自动填充）
 static void epoch_to_date(uint64_t epoch, rtc_time_t *tm){
 	static const uint8_t mdays[12] = {31,28,31,30,31,30,31,31,30,31,30,31};

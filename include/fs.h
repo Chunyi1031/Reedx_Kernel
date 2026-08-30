@@ -31,6 +31,9 @@ struct fs_node{
     fs_node_ops_t  *ops;            //节点操作集
     void           *priv;           //具体文件系统私有数据
     uint64_t        size;           //文件字节数/目录项数
+    uint64_t        atime;          //访问时间
+    uint64_t        mtime;          //修改时间
+    uint64_t        ctime;          //创建时间
     struct list_node siblings;      //父目录内兄弟节点
     struct list_node children;      //子节点(目录用)
     uint32_t        refs;           //引用计数

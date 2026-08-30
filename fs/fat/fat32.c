@@ -3,6 +3,7 @@
 #include <mm/pmm.h>
 #include <mm/vmm.h>
 #include <print.h>
+#include <rtc.h>
 
 //FAT32盘上数据结构
 #define FAT_ATTR_READ_ONLY 0x01 //只读
@@ -111,6 +112,10 @@ typedef struct fat_node_priv {
 static fat32_fs_t g_fat;
 static fs_node_ops_t fat_ops;
 
+//FAT扇区缓存
+static uint32_t g_fat_cache_lba = ~0u;
+static uint8_t  g_fat_cache[512];
+
 //读磁盘扇区
 static int fat_read_sectors(uint32_t lba, void *buf, uint32_t count){
     return DiskRead(g_fat.disk, lba, count, buf);
@@ -120,10 +125,11 @@ static int fat_read_sectors(uint32_t lba, void *buf, uint32_t count){
 static uint32_t fat_get_entry(uint32_t clu){
     uint32_t fat_off = clu * 4;
     uint32_t fat_lba = g_fat.fat_start + fat_off / g_fat.bps;
-    uint32_t off = fat_off % g_fat.bps;
-    uint8_t sec[512];
-    if(fat_read_sectors(fat_lba, sec, 1)) return 0;
-    return *(uint32_t*)(sec + off) & 0x0FFFFFFF;
+    if(fat_lba != g_fat_cache_lba){
+        if(fat_read_sectors(fat_lba, g_fat_cache, 1)) return 0;
+        g_fat_cache_lba = fat_lba;
+    }
+    return *(uint32_t*)(g_fat_cache + fat_off % g_fat.bps) & 0x0FFFFFFF;
 }
 
 //读一簇到簇缓冲
@@ -153,6 +159,7 @@ static int fat_set_entry(uint32_t clu, uint32_t value){
     for(int f = 0; f < g_fat.nfats; f++){
         if(fat_write_sectors(fat_lba + (uint32_t)f * g_fat.fat_sz, sec, 1)) return -1;
     }
+    g_fat_cache_lba = ~0u;//FAT已修改, 使缓存失效
     return 0;
 }
 
@@ -203,7 +210,7 @@ static void fat_free_chain(uint32_t clu){
     }
 }
 
-//把节点的起始簇/大小同步回磁盘目录项
+//把节点的起始簇/大小/修改时间同步回磁盘目录项
 static int fat_update_dirent(fat_node_priv_t *p){
     if(!p || !p->dir_clus) return 0; //根节点等无目录项
     if(fat_read_cluster(p->dir_clus)) return -1;
@@ -211,7 +218,37 @@ static int fat_update_dirent(fat_node_priv_t *p){
     de->fst_clus_hi = (uint16_t)(p->first_clu >> 16);
     de->fst_clus_lo = (uint16_t)(p->first_clu & 0xFFFF);
     de->file_size = p->size;
+    //更新最后写入时间
+    rtc_time_t tm;
+    rtc_get_local(&tm);
+    de->wrt_time = (uint16_t)((tm.hour << 11) | (tm.minute << 5) | (tm.second / 2));
+    de->wrt_date = (uint16_t)(((tm.year - 1980) << 9) | (tm.month << 5) | tm.day);
     return fat_write_cluster(p->dir_clus);
+}
+
+//把当前时间写入目录项的创建/写入/访问字段
+static void fat_set_now(fat_dir_entry_t *de){
+    rtc_time_t tm;
+    rtc_get_local(&tm);
+    uint16_t fat_date = (uint16_t)(((tm.year - 1980) << 9) | (tm.month << 5) | tm.day);
+    uint16_t fat_time = (uint16_t)((tm.hour << 11) | (tm.minute << 5) | (tm.second / 2));
+    de->crt_time = fat_time;
+    de->crt_date = fat_date;
+    de->crt_time_tenth = 0;
+    de->wrt_time = fat_time;
+    de->wrt_date = fat_date;
+    de->lst_acc_date = fat_date;
+}
+
+//解析FAT日期时间字段为epoch
+static uint64_t fat_dt_to_epoch(uint16_t fat_date, uint16_t fat_time){
+    uint16_t year = 1980 + ((fat_date >> 9) & 0x7F);
+    uint8_t month = (uint8_t)((fat_date >> 5) & 0x0F);
+    uint8_t day = (uint8_t)(fat_date & 0x1F);
+    uint8_t hour = (uint8_t)((fat_time >> 11) & 0x1F);
+    uint8_t minute = (uint8_t)((fat_time >> 5) & 0x3F);
+    uint8_t second = (uint8_t)((fat_time & 0x1F) * 2);
+    return rtc_tm_to_epoch(year, month, day, hour, minute, second);
 }
 
 //创建节点
@@ -240,6 +277,27 @@ static fs_node_t *fat_new_node(const char *name, int type, uint32_t first_clu, u
     p->size = size;
     p->dir_clus = dir_clus;
     p->dir_off = dir_off;
+    //从磁盘目录项解析时间戳(根节点无目录项则用当前时间)
+    uint64_t now = rtc_get_epoch();
+    n->atime = now;
+    n->mtime = now;
+    n->ctime = now;
+    if(dir_clus >= 2 && dir_off < g_fat.bpc){
+        if(!fat_read_cluster(dir_clus)){
+            fat_dir_entry_t *de = (fat_dir_entry_t*)(g_fat.cluster_buf + dir_off);
+            uint64_t ct = fat_dt_to_epoch(de->crt_date, de->crt_time);
+            uint64_t wt = fat_dt_to_epoch(de->wrt_date, de->wrt_time);
+            uint64_t at = fat_dt_to_epoch(de->lst_acc_date, 0);
+            if(ct){
+                n->ctime = ct;
+                n->mtime = wt ? wt : ct;
+            }else if(wt){
+                n->ctime = wt;
+                n->mtime = wt;
+            }
+            if(at)n->atime = at;
+        }
+    }
     return n;
 }
 
@@ -431,12 +489,12 @@ static uint64_t fat_write(fs_node_t *node, uint64_t off, const void *buf, uint64
             clu = nxt;
         }
     }
-    //更新文件数据
+    //更新文件数据与修改时间(即使大小不变也刷新时间戳)
     if(base + done > p->size){
         p->size = base + done;
         node->size = p->size;
-        fat_update_dirent(p);
     }
+    fat_update_dirent(p);
     return done;
 }
 
@@ -488,6 +546,7 @@ static int fat_alloc_dirent(fs_node_t *dir, const char *name, int type, uint32_t
             de->fst_clus_lo = (uint16_t)(first_clu & 0xFFFF);
             de->fst_clus_hi = (uint16_t)(first_clu >> 16);
             //组后补END,否则扩簇补END
+            fat_set_now(de);//写入创建/修改/访问时间
             uint32_t after = off + (uint32_t)need * sizeof(fat_dir_entry_t);
             if(after < g_fat.bpc){
                 memset(g_fat.cluster_buf + after, 0, sizeof(fat_dir_entry_t));

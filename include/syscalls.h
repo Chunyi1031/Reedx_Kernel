@@ -30,15 +30,24 @@
 #define SYS_RMDIR           84
 #define SYS_UNLINK          87
 #define SYS_READLINK        89
+#define SYS_GETTIMEOFDAY    96
 #define SYS_ARCH_PRCTL      158
+#define SYS_TIME            201
 #define SYS_FUTEX           202
 #define SYS_SET_TID_ADDRESS 218
+#define SYS_CLOCK_GETTIME   228
+#define SYS_CLOCK_GETRES    229
+#define SYS_CLOCK_NANOSLEEP 230
 #define SYS_EXIT_GROUP      231
 #define SYS_READLINKAT      267
 #define SYS_SET_ROBUST_LIST 273
 #define SYS_PRLIMIT64       302
 #define SYS_GETRANDOM       318
-#define SYSCALL_TABLE_SIZE  512//需覆盖最大的系统调用号(当前318)
+#define SYS_OPENAT          257
+#define SYS_NEWFSTATAT      262
+#define AT_FDCWD            (-100)
+
+#define SYSCALL_TABLE_SIZE  512
 
 //POSIX open标志
 #define O_RDONLY    0       //只读打开
@@ -125,6 +134,19 @@ typedef struct rlimit64 {
     uint64_t rlim_max;
 } rlimit64_t;
 #define RLIMIT_STACK 3
+
+//gettimeofday用timeval
+typedef struct timeval {
+    long tv_sec;
+    long tv_usec;
+} timeval_t;
+
+//clock_gettime时钟ID
+#define CLOCK_REALTIME           0
+#define CLOCK_MONOTONIC          1
+#define CLOCK_PROCESS_CPUTIME_ID 2
+#define CLOCK_REALTIME_COARSE    5
+#define CLOCK_MONOTONIC_COARSE   6
 
 //文件类型/权限位(POSIX)
 #define S_IFMT   0170000

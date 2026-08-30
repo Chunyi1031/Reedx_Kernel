@@ -3,7 +3,10 @@
         {
             "name": "Linux",
             "includePath": [
-                "${workspaceFolder}/include/**"
+                "${workspaceFolder}/include/**",
+                "/usr/include",
+                "/usr/include/x86_64-linux-gnu",
+                "/usr/include/x86_64-linux-musl"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/x86_64-linux-gnu-gcc",

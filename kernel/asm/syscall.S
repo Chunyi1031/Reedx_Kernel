@@ -16,8 +16,9 @@
 .type syscall_entry, @function
 syscall_entry:
     /* 保存参数4(r10)到全局变量,再用 r10 中转用户 RSP
-       (r10 是 caller-saved,mmap 等 6 参数系统调用会用到它) */
+       r10 是 caller-saved,但内核必须原样保留它(Linux ABI:syscall只破坏rax/rcx/r11) */
     movq %r10, syscall_arg6(%rip)
+    movq %r10, syscall_saved_r10(%rip)  /* 保存用户r10, 恢复时弹回 */
     movq %rsp, %r10
     movq user_kernel_stack_top(%rip), %rsp
     pushq %r10               /* +120 用户RSP */
@@ -30,7 +31,7 @@ syscall_entry:
     pushq %rbp               /* +64 */
     pushq %r8                /* +56 */
     pushq %r9                /* +48 */
-    pushq %r10               /* +40  r10 已被中转占用，槽位无意义（r10 为 caller-saved） */
+    pushq syscall_saved_r10(%rip) /* +40 保存的用户r10 */
     pushq %r11               /* +32  用户RFLAGS */
     pushq %r12               /* +24 */
     pushq %r13               /* +16 */
@@ -74,4 +75,9 @@ syscall_entry:
 .section .data
 .globl syscall_arg6
 syscall_arg6:
+    .quad 0
+
+/* 用户r10保存区:r10被用作RSP中转前先存到这里,退出时弹回r10 */
+.globl syscall_saved_r10
+syscall_saved_r10:
     .quad 0

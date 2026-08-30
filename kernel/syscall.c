@@ -13,6 +13,7 @@
 #include <futex.h>
 #include <rtc.h>
 #include <delay.h>
+#include <irq.h>
 
 static inline uint64_t rdmsr(uint32_t msr){
 	uint32_t low, high;
@@ -225,9 +226,9 @@ static void fill_stat(stat_t *st, fs_node_t *node){
 	st->st_blksize = 512;
 	st->st_blocks = ((uint64_t)node->size + 511) / 512;
 	uint64_t now = rtc_get_epoch();
-	st->st_atime = (int64_t)now;
-	st->st_mtime = (int64_t)now;
-	st->st_ctime = (int64_t)now;
+	st->st_atime = (int64_t)(node->atime ? node->atime : now);
+	st->st_mtime = (int64_t)(node->mtime ? node->mtime : now);
+	st->st_ctime = (int64_t)(node->ctime ? node->ctime : now);
 }
 
 /*
@@ -249,6 +250,22 @@ static long sys_newstat(long path, long buf, long a3, long a4, long a5, long a6)
 }
 
 /*
+ * int openat(int dirfd, const char *path, int flags, mode_t mode)
+ */
+static long sys_openat(long dirfd, long path, long flags, long mode, long a5, long a6){
+	(void)dirfd; (void)a5; (void)a6;
+	return sys_open(path, flags, mode, 0, 0, 0);
+}
+
+/*
+ * int newfstatat(int dirfd, const char *path, struct stat *buf, int flags)
+ */
+static long sys_newfstatat(long dirfd, long path, long buf, long flags, long a5, long a6){
+	(void)dirfd; (void)flags; (void)a5; (void)a6;
+	return sys_newstat(path, buf, 0, 0, 0, 0);
+}
+
+/*
  * int fstat(int fd, struct stat *buf)
  */
 static long sys_newfstat(long fd, long buf, long a3, long a4, long a5, long a6){
@@ -265,6 +282,10 @@ static long sys_newfstat(long fd, long buf, long a3, long a4, long a5, long a6){
 		st.st_mode = S_IFCHR | 0666;
 		st.st_rdev = 1;
 		st.st_blksize = 512;
+		uint64_t now = rtc_get_epoch();
+		st.st_atime = (int64_t)now;
+		st.st_mtime = (int64_t)now;
+		st.st_ctime = (int64_t)now;
 	}else{
 		if(fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
 		fill_stat(&st, current_task->files[fd].node);
@@ -347,34 +368,40 @@ static long sys_ioctl(long fd, long request, long arg, long a4, long a5, long a6
  */
 static long sys_writev(long fd, long iov, long iovcnt, long a4, long a5, long a6){
 	(void)a4; (void)a5; (void)a6;
-	if(!iov || iovcnt <= 0 || iovcnt > 256)return -EINVAL;
-	struct iovec vec[256];
-	if(copy_from_user(vec, (void*)iov, (uint64_t)iovcnt * sizeof(struct iovec)))return -EFAULT;
+	if(!iov || iovcnt <= 0)return -EINVAL;
+	char kbuf[256];
 	long total = 0;
-	for(int i = 0; i < iovcnt; i++){
-		uint64_t len = vec[i].iov_len;
-		if(!len)continue;
-		uintptr_t base = (uintptr_t)vec[i].iov_base;
-		if(base >= USER_VADDR_MAX || base + len > USER_VADDR_MAX)return total ? total : -EFAULT;
-		char kbuf[512];
-		uint64_t done = 0;
-		while(done < len){
-			uint64_t chunk = len - done;
-			if(chunk > sizeof(kbuf))chunk = sizeof(kbuf);
-			if(copy_from_user(kbuf, (const char*)base + done, chunk))return total ? total : -EFAULT;
-			if((fd == 1) || (fd == 2)){
-				//TTY输出
-				for(uint64_t j = 0; j < chunk; j++)TTY_PrintChar(kbuf[j], CurrentConsoleStyle.TextColor);
-			}else{
-				//文件写入
-				if(!current_task)return -EBADF;
-				if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
-				if((current_task->files[fd].flags & O_ACCMODE) == O_RDONLY)return -EBADF;
-				FsWrite(&current_task->files[fd], kbuf, chunk);
+	long base_idx = 0;
+	while(base_idx < iovcnt){
+		long n = iovcnt - base_idx;
+		if(n > 32)n = 32;
+		struct iovec vec[32];
+		if(copy_from_user(vec, (void*)((uintptr_t)iov + (uint64_t)base_idx * sizeof(struct iovec)), (uint64_t)n * sizeof(struct iovec)))return total ? total : -EFAULT;
+		for(int i = 0; i < n; i++){
+			uint64_t len = vec[i].iov_len;
+			if(!len)continue;
+			uintptr_t base = (uintptr_t)vec[i].iov_base;
+			if(base >= USER_VADDR_MAX || base + len > USER_VADDR_MAX)return total ? total : -EFAULT;
+			uint64_t done = 0;
+			while(done < len){
+				uint64_t chunk = len - done;
+				if(chunk > sizeof(kbuf))chunk = sizeof(kbuf);
+				if(copy_from_user(kbuf, (const char*)base + done, chunk))return total ? total : -EFAULT;
+				if((fd == 1) || (fd == 2)){
+					//TTY输出
+					for(uint64_t j = 0; j < chunk; j++)TTY_PrintChar(kbuf[j], CurrentConsoleStyle.TextColor);
+				}else{
+					//文件写入
+					if(!current_task)return -EBADF;
+					if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+					if((current_task->files[fd].flags & O_ACCMODE) == O_RDONLY)return -EBADF;
+					FsWrite(&current_task->files[fd], kbuf, chunk);
+				}
+				done += chunk;
+				total += (long)chunk;
 			}
-			done += chunk;
-			total += (long)chunk;
 		}
+		base_idx += n;
 	}
 	return total;
 }
@@ -441,6 +468,106 @@ static long sys_getrandom(long buf, long len, long flags, long a4, long a5, long
 static long sys_readlinkat(long dirfd, long path, long buf, long bufsiz, long a5, long a6){
 	(void)dirfd; (void)path; (void)buf; (void)bufsiz; (void)a5; (void)a6;
 	return -ENOENT;
+}
+
+/*
+ * int gettimeofday(struct timeval *tv, void *tz)
+ * tz忽略; tv可为NULL(仅查询成功)
+ */
+static long sys_gettimeofday(long tv, long tz, long a3, long a4, long a5, long a6){
+	(void)tz; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!tv)return 0;
+	timeval_t t;
+	t.tv_sec = (long)rtc_get_epoch();
+	t.tv_usec = (long)((SYSTEM_TimerTicks * 10000) % 1000000);//tick=10ms
+	if(copy_to_user((void*)tv, &t, sizeof(t)))return -EFAULT;
+	return 0;
+}
+
+/*
+ * time_t time(time_t *tloc)
+ * 返回当前UTC时间戳, tloc非NULL时同时写入
+ */
+static long sys_time(long tloc, long a2, long a3, long a4, long a5, long a6){
+	(void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	uint64_t e = rtc_get_epoch();
+	if(tloc && copy_to_user((void*)tloc, &e, sizeof(e)))return -EFAULT;
+	return (long)e;
+}
+
+/*
+ * int clock_gettime(clockid_t clk_id, struct timespec *tp)
+ * 支持REALTIME/MONOTONIC及COARSE变体
+ */
+static long sys_clock_gettime(long clk, long tp, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!tp)return -EFAULT;
+	timespec_t ts;
+	if(clk == CLOCK_REALTIME || clk == CLOCK_REALTIME_COARSE){
+		ts.tv_sec = (long)rtc_get_epoch();
+		ts.tv_nsec = (long)((SYSTEM_TimerTicks * 10000) % 1000000) * 1000L;
+	}else if(clk == CLOCK_MONOTONIC || clk == CLOCK_MONOTONIC_COARSE){
+		uint64_t ms = SYSTEM_TimerTicks * 10;//每tick 10ms
+		ts.tv_sec = (long)(ms / 1000);
+		ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+	}else{
+		return -EINVAL;
+	}
+	if(copy_to_user((void*)tp, &ts, sizeof(ts)))return -EFAULT;
+	return 0;
+}
+
+/*
+ * int clock_getres(clockid_t clk_id, struct timespec *res)
+ * 分辨率=10ms(OS_TICK_HZ=100)
+ */
+static long sys_clock_getres(long clk, long tp, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(clk != CLOCK_REALTIME && clk != CLOCK_MONOTONIC &&
+	   clk != CLOCK_REALTIME_COARSE && clk != CLOCK_MONOTONIC_COARSE)return -EINVAL;
+	if(tp){
+		timespec_t ts = {0, 10000000L};//10ms
+		if(copy_to_user((void*)tp, &ts, sizeof(ts)))return -EFAULT;
+	}
+	return 0;
+}
+
+/*
+ * int clock_nanosleep(clockid_t clk, int flags, const struct timespec *req, struct timespec *rem)
+ * sleep()/nanosleep 最终走这里(glibc)
+ */
+static long sys_clock_nanosleep(long clk, long flags, long req, long rem, long a5, long a6){
+	(void)a5; (void)a6;
+	if(!req)return -EFAULT;
+	timespec_t ts;
+	if(copy_from_user(&ts, (void*)req, sizeof(ts)))return -EFAULT;
+	if(ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000L)return -EINVAL;
+	uint64_t ms;
+	if(!(flags & 1)){
+		//相对时间
+		ms = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+	}else{
+		//绝对时间(TIMER_ABSTIME): 相对当前时钟求差值
+		uint64_t cur_sec, cur_nsec;
+		if(clk == CLOCK_MONOTONIC){
+			uint64_t m = SYSTEM_TimerTicks * 10;
+			cur_sec = m / 1000;
+			cur_nsec = (m % 1000) * 1000000L;
+		}else{
+			cur_sec = rtc_get_epoch();
+			cur_nsec = ((SYSTEM_TimerTicks * 10000) % 1000000) * 1000L;
+		}
+		int64_t delta = ((int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec)
+		              - ((int64_t)cur_sec * 1000000000LL + (int64_t)cur_nsec);
+		if(delta <= 0)return 0;
+		ms = (uint64_t)delta / 1000000;
+	}
+	msleep(ms);
+	if(rem){
+		timespec_t zero = {0, 0};
+		if(copy_to_user((void*)rem, &zero, sizeof(zero)))return -EFAULT;
+	}
+	return 0;
 }
 /*DeepSeek V4 Pro-END*/
 
@@ -690,6 +817,8 @@ void InitSyscall(void){
 	syscall_table[SYS_CLOSE]      = sys_close;
 	syscall_table[SYS_STAT]       = sys_newstat;
 	syscall_table[SYS_FSTAT]      = sys_newfstat;
+	syscall_table[SYS_OPENAT]     = sys_openat;
+	syscall_table[SYS_NEWFSTATAT] = sys_newfstatat;
 	syscall_table[SYS_LSEEK]      = sys_lseek;
 	syscall_table[SYS_ACCESS]     = sys_access;
 	syscall_table[SYS_READLINK]   = sys_readlink;
@@ -701,6 +830,11 @@ void InitSyscall(void){
 	syscall_table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
 	syscall_table[SYS_PRLIMIT64]       = sys_prlimit64;
 	syscall_table[SYS_GETRANDOM]       = sys_getrandom;
+	syscall_table[SYS_GETTIMEOFDAY]    = sys_gettimeofday;
+	syscall_table[SYS_TIME]            = sys_time;
+	syscall_table[SYS_CLOCK_GETTIME]   = sys_clock_gettime;
+	syscall_table[SYS_CLOCK_GETRES]    = sys_clock_getres;
+	syscall_table[SYS_CLOCK_NANOSLEEP] = sys_clock_nanosleep;
 	syscall_table[SYS_NANOSLEEP]  = sys_nanosleep;
 	syscall_table[SYS_GETPID]     = sys_getpid;
 	syscall_table[SYS_FORK]       = sys_fork;

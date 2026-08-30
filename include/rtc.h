@@ -37,6 +37,7 @@ static const char* weekdays[7] = {"Sunday","Monday","Tuesday","Wednesday","Thurs
 
 void rtc_init(void);//启动时从CMOS RTC读取一次 UTC基准时间戳
 uint64_t rtc_get_epoch(void);//返回当前UTC Unix时间戳
+uint64_t rtc_tm_to_epoch(uint16_t year, uint8_t month, uint8_t day, uint8_t hour, uint8_t minute, uint8_t second);//年月日时分秒转UTC时间戳
 void rtc_epoch_to_utc(uint64_t epoch, rtc_time_t *tm);//解析Unix时间戳
 void rtc_get_utc(rtc_time_t *tm);//获取当前UTC分解时间
 void rtc_get_local(rtc_time_t *tm);//获取当前本地分解时间
