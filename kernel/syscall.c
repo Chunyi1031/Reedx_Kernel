@@ -12,6 +12,7 @@
 #include <fs.h>
 #include <futex.h>
 #include <rtc.h>
+#include <delay.h>
 
 static inline uint64_t rdmsr(uint32_t msr){
 	uint32_t low, high;
@@ -253,10 +254,21 @@ static long sys_newstat(long path, long buf, long a3, long a4, long a5, long a6)
 static long sys_newfstat(long fd, long buf, long a3, long a4, long a5, long a6){
 	(void)a3; (void)a4; (void)a5; (void)a6;
 	if(!current_task)return -EBADF;
-	if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
 	if(!buf)return -EFAULT;
 	stat_t st;
-	fill_stat(&st, current_task->files[fd].node);
+	if(fd < 3){
+		//标准输入/输出/错误: 当作字符设备(glibc据此判断缓冲策略)
+		memset(&st, 0, sizeof(st));
+		st.st_dev = 1;
+		st.st_ino = (uint64_t)(uintptr_t)&current_task->files[fd];
+		st.st_nlink = 1;
+		st.st_mode = S_IFCHR | 0666;
+		st.st_rdev = 1;
+		st.st_blksize = 512;
+	}else{
+		if(fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+		fill_stat(&st, current_task->files[fd].node);
+	}
 	if(copy_to_user((void*)buf, &st, sizeof(st)))return -EFAULT;
 	return 0;
 }
@@ -365,6 +377,70 @@ static long sys_writev(long fd, long iov, long iovcnt, long a4, long a5, long a6
 		}
 	}
 	return total;
+}
+
+/*
+ * int set_robust_list(struct robust_list_head *head, size_t len)
+ * 单核内核无健壮互斥需求, 忽略指针返回0
+ */
+static long sys_set_robust_list(long head, long len, long a3, long a4, long a5, long a6){
+	(void)head; (void)len; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -ENOSYS;
+	return 0;
+}
+
+/*
+ * int prlimit64(pid_t pid, int resource, const struct rlimit64 *new, struct rlimit64 *old)
+ * 仅支持当前进程查询; 栈限制返回8MB/无上限, 其余无上限; 设置忽略
+ */
+static long sys_prlimit64(long pid, long resource, long newlim, long oldlim, long a5, long a6){
+	(void)newlim; (void)a5; (void)a6;
+	if(pid != 0)return -EINVAL;//只支持当前进程
+	if(oldlim){
+		rlimit64_t rl;
+		rl.rlim_cur = (resource == RLIMIT_STACK) ? (8ULL * 1024 * 1024) : ~0ULL;
+		rl.rlim_max = ~0ULL;
+		if(copy_to_user((void*)oldlim, &rl, sizeof(rl)))return -EFAULT;
+	}
+	return 0;
+}
+
+//伪随机数状态(xorshift64, 种子来自TSC)
+static uint64_t g_rng_state = 0;
+
+/*
+ * ssize_t getrandom(void *buf, size_t len, unsigned flags)
+ * 伪随机填充(GRND_NONBLOCK等标志忽略), 返回写入字节数
+ */
+static long sys_getrandom(long buf, long len, long flags, long a4, long a5, long a6){
+	(void)flags; (void)a4; (void)a5; (void)a6;
+	if(!buf || len < 0)return -EFAULT;
+	if(len == 0)return 0;
+	if(!g_rng_state)g_rng_state = rdtsc() | 1;
+	uint8_t kbuf[128];
+	long total = 0;
+	while(total < len){
+		long chunk = len - total;
+		if(chunk > (long)sizeof(kbuf))chunk = sizeof(kbuf);
+		for(long i = 0; i < chunk; i++){
+			g_rng_state ^= g_rng_state << 13;
+			g_rng_state ^= g_rng_state >> 7;
+			g_rng_state ^= g_rng_state << 17;
+			kbuf[i] = (uint8_t)g_rng_state;
+		}
+		if(copy_to_user((char*)buf + total, kbuf, (uint64_t)chunk))return total ? total : -EFAULT;
+		total += chunk;
+	}
+	return total;
+}
+
+/*
+ * ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t bufsiz)
+ * 无/proc, 一律-ENOENT
+ */
+static long sys_readlinkat(long dirfd, long path, long buf, long bufsiz, long a5, long a6){
+	(void)dirfd; (void)path; (void)buf; (void)bufsiz; (void)a5; (void)a6;
+	return -ENOENT;
 }
 /*DeepSeek V4 Pro-END*/
 
@@ -621,6 +697,10 @@ void InitSyscall(void){
 	syscall_table[SYS_CHDIR]      = sys_chdir;
 	syscall_table[SYS_IOCTL]      = sys_ioctl;
 	syscall_table[SYS_WRITEV]     = sys_writev;
+	syscall_table[SYS_READLINKAT]      = sys_readlinkat;
+	syscall_table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
+	syscall_table[SYS_PRLIMIT64]       = sys_prlimit64;
+	syscall_table[SYS_GETRANDOM]       = sys_getrandom;
 	syscall_table[SYS_NANOSLEEP]  = sys_nanosleep;
 	syscall_table[SYS_GETPID]     = sys_getpid;
 	syscall_table[SYS_FORK]       = sys_fork;

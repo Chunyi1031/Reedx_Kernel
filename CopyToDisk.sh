@@ -42,6 +42,12 @@ if [ -f "build/app/hello.elf" ]; then
     cp "build/app/hello.elf" "$MOUNT_POINT/SYS/HELLO.ELF"
 fi
 
+# 复制glibc静态链接hello程序
+if [ -f "build/app/ghello.elf" ]; then
+    echo "更新glibc程序..."
+    cp "build/app/ghello.elf" "$MOUNT_POINT/SYS/GHELLO.ELF"
+fi
+
 # 卸载
 echo "卸载..."
 udisksctl unmount -b "$LOOP"

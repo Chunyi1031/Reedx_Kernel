@@ -34,7 +34,11 @@
 #define SYS_FUTEX           202
 #define SYS_SET_TID_ADDRESS 218
 #define SYS_EXIT_GROUP      231
-#define SYSCALL_TABLE_SIZE  256
+#define SYS_READLINKAT      267
+#define SYS_SET_ROBUST_LIST 273
+#define SYS_PRLIMIT64       302
+#define SYS_GETRANDOM       318
+#define SYSCALL_TABLE_SIZE  512//需覆盖最大的系统调用号(当前318)
 
 //POSIX open标志
 #define O_RDONLY    0       //只读打开
@@ -114,6 +118,13 @@ typedef struct iovec {
     void    *iov_base;
     uint64_t iov_len;
 } iovec_t;
+
+//prlimit64用rlimit
+typedef struct rlimit64 {
+    uint64_t rlim_cur;
+    uint64_t rlim_max;
+} rlimit64_t;
+#define RLIMIT_STACK 3
 
 //文件类型/权限位(POSIX)
 #define S_IFMT   0170000
