@@ -15,6 +15,7 @@
 .globl syscall_entry
 .type syscall_entry, @function
 syscall_entry:
+    cli
     /* 保存参数4(r10)到全局变量,再用 r10 中转用户 RSP
        r10 是 caller-saved,但内核必须原样保留它(Linux ABI:syscall只破坏rax/rcx/r11) */
     movq %r10, syscall_arg6(%rip)
@@ -37,6 +38,8 @@ syscall_entry:
     pushq %r13               /* +16 */
     pushq %r14               /* +8 */
     pushq %r15               /* +0 */
+
+    sti                     /* 帧已完整入栈, 之后中断安全 */
 
     /* 按 SysV ABI 传参给 C 分发器 */
     movq 112(%rsp), %rdi    /* rax = 调用号 */

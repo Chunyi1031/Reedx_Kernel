@@ -160,7 +160,8 @@ static long sys_open(long path, long flags, long mode, long a4, long a5, long a6
 static long sys_close(long fd, long b, long c, long a4, long a5, long a6){
 	(void)b; (void)c; (void)a4; (void)a5; (void)a6;
 	if (!current_task) return -EBADF;
-	if (fd < 3 || fd >= MAX_FD || !current_task->files[fd].used) return -EBADF;
+	if (fd >= 0 && fd < 3)return 0;
+	if (fd < 0 || fd >= MAX_FD || !current_task->files[fd].used) return -EBADF;
 	FsClose(&current_task->files[fd]);
 	return 0;
 }
@@ -569,6 +570,105 @@ static long sys_clock_nanosleep(long clk, long flags, long req, long rem, long a
 	}
 	return 0;
 }
+
+/*
+ * int fcntl(int fd, int cmd, ...)
+ * 仅支持 F_GETFD/F_GETFL/F_SETFL, 其余-EINVAL
+ * 关键: fd 0/1/2 永远"有效"(F_GETFD返回0), 否则glibc会误判标准输出未打开而丢弃输出
+ */
+static long sys_fcntl(long fd, long cmd, long arg, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(fd < 0 || fd >= MAX_FD)return -EBADF;
+	if(fd >= 3 && !current_task->files[fd].used)return -EBADF;
+	switch(cmd){
+	case F_GETFD://1
+		return 0;
+	case F_GETFL://3
+		if(fd < 3)return O_RDWR;
+		return current_task->files[fd].flags;
+	case F_SETFL://4
+		if(fd < 3)return 0;
+		current_task->files[fd].flags = (current_task->files[fd].flags & ~O_ACCMODE) | ((int)arg & O_ACCMODE);
+		return 0;
+	default:
+		return -EINVAL;
+	}
+}
+
+/*
+ * int poll(struct pollfd *fds, nfds_t nfds, int timeout)
+ * 无轮询设备, 所有fd视为无事件(清空revents), 返回0
+ */
+static long sys_poll(long fds, long nfds, long timeout, long a4, long a5, long a6){
+	(void)timeout; (void)a4; (void)a5; (void)a6;
+	if(nfds < 0)return -EINVAL;
+	if(fds && nfds > 0){
+		//pollfd结构: {int fd; short events; short revents} = 8字节, revents在偏移6
+		for(long i = 0; i < nfds && i < 256; i++){
+			uint16_t revents = 0;
+			if(copy_to_user((void*)((uintptr_t)fds + (uint64_t)i * 8 + 6), &revents, 2))return -EFAULT;
+		}
+	}
+	return 0;
+}
+
+/*
+ * int rt_sigaction(int signum, const struct sigaction *act, struct sigaction *oldact, size_t sigsetsize)
+ * 无信号处理: 接受设置, 清零旧值(内核sigaction=32字节)
+ */
+static long sys_rt_sigaction(long signum, long act, long oldact, long sigsetsize, long a5, long a6){
+	(void)signum; (void)act; (void)sigsetsize; (void)a5; (void)a6;
+	if(oldact){
+		char zero[32];
+		memset(zero, 0, sizeof(zero));
+		if(copy_to_user((void*)oldact, zero, sizeof(zero)))return -EFAULT;
+	}
+	return 0;
+}
+
+/*
+ * int sigaltstack(const stack_t *ss, stack_t *old_ss)
+ * 无信号处理: 接受设置, 清零旧值(stack_t=24字节)
+ */
+static long sys_sigaltstack(long ss, long old_ss, long a3, long a4, long a5, long a6){
+	(void)ss; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(old_ss){
+		char zero[24];
+		memset(zero, 0, sizeof(zero));
+		if(copy_to_user((void*)old_ss, zero, sizeof(zero)))return -EFAULT;
+	}
+	return 0;
+}
+
+/*
+ * int prctl(int option, ...)
+ * 暂不支持, -EINVAL(glibc会回退)
+ */
+static long sys_prctl(long option, long a2, long a3, long a4, long a5, long a6){
+	(void)option; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	return -EINVAL;
+}
+
+/*
+ * pid_t gettid(void)
+ */
+static long sys_gettid(long a, long b, long c, long a4, long a5, long a6){
+	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -1;
+	return current_task->pid;
+}
+
+/*
+ * int sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t *mask)
+ * 单核, 返回1个CPU
+ */
+static long sys_sched_getaffinity(long pid, long cpusetsize, long mask, long a4, long a5, long a6){
+	(void)pid; (void)a4; (void)a5; (void)a6;
+	if(!mask || cpusetsize <= 0)return -EFAULT;
+	uint8_t one = 0x01;
+	if(copy_to_user((void*)mask, &one, 1))return -EFAULT;
+	return 1;
+}
 /*DeepSeek V4 Pro-END*/
 
 /*
@@ -688,7 +788,7 @@ long syscall_dispatch(long num, long a1, long a2, long a3, long a5, long a6){
     //获取处理函数
 	syscall_fn fn = syscall_table[num];
 	if(!fn)return -ENOSYS;
-	long a4 = syscall_arg6;//参数4(r10)
+	long a4 = *(long*)(user_kernel_stack_top - 128 + 40);
 	return fn(a1, a2, a3, a4, a5, a6);//调用处理函数
 }
 
@@ -783,8 +883,10 @@ static long sys_arch_prctl(long code, long addr, long a3, long a4, long a5, long
 	if(!current_task)return -EINVAL;
 	if(code == ARCH_SET_FS){
 		if((uintptr_t)addr >= USER_VADDR_MAX)return -EPERM;//必须是用户态地址
+		cli();
 		current_task->fs_base = (uint64_t)addr;
 		wrmsr(IA32_FS_BASE, (uint64_t)addr);//直接写入FS基址MSR
+		sti();
 		return 0;
 	}
 	if(code == ARCH_GET_FS){
@@ -836,7 +938,15 @@ void InitSyscall(void){
 	syscall_table[SYS_CLOCK_GETRES]    = sys_clock_getres;
 	syscall_table[SYS_CLOCK_NANOSLEEP] = sys_clock_nanosleep;
 	syscall_table[SYS_NANOSLEEP]  = sys_nanosleep;
+	syscall_table[SYS_POLL]       = sys_poll;
+	syscall_table[SYS_RT_SIGACTION]     = sys_rt_sigaction;
+	syscall_table[SYS_SIGALTSTACK]      = sys_sigaltstack;
+	syscall_table[SYS_FCNTL]            = sys_fcntl;
+	syscall_table[SYS_PRCTL]            = sys_prctl;
+	syscall_table[SYS_GETTID]           = sys_gettid;
+	syscall_table[SYS_SCHED_GETAFFINITY] = sys_sched_getaffinity;
 	syscall_table[SYS_GETPID]     = sys_getpid;
+	syscall_table[SYS_CLONE]      = sys_fork;
 	syscall_table[SYS_FORK]       = sys_fork;
 	syscall_table[SYS_EXECVE]     = sys_execve;
 	syscall_table[SYS_EXIT]       = sys_exit;

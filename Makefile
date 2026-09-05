@@ -247,6 +247,9 @@ update-disk:
 .PHONY: run
 run: system
 	qemu-system-x86_64 -m 1G -bios ./OVMF.fd -drive file=$(SYSTEM_DISK),if=ide,format=raw -serial stdio
+# 	qemu-system-x86_64 -m 1G -bios ./OVMF.fd -drive id=my_disk,file=$(SYSTEM_DISK),if=none,format=raw -device ahci,id=ahci -device ide-hd,drive=my_disk,bus=ahci.0 -serial stdio
+# 	qemu-system-x86_64 -m 1G -bios ./OVMF.fd -drive id=my_disk,file=$(SYSTEM_DISK),if=none,format=raw -device nvme,serial=1234,drive=my_disk -serial stdio
+# 	qemu-system-x86_64 -m 1G -bios ./OVMF.fd -drive id=my_disk,file=$(SYSTEM_DISK),if=none,format=raw -device virtio-scsi,id=scsi -device scsi-hd,drive=my_disk,bus=scsi.0 -serial stdio
 
 .PHONY: run-debug
 run-debug: system
@@ -255,7 +258,7 @@ run-debug: system
 #帮助
 .PHONY: help
 help:
-	@echo 'T001 Kernel build system'
+	@echo 'Reedx Kernel build system'
 	@echo ''
 	@echo 'Targets:'
 	@echo '  all          - 构建kernel.elf (默认)'

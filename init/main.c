@@ -32,7 +32,7 @@ extern char __bss_start[], __bss_end[];
 _Bool LoadBootParam(BootParam* boot_param);//加载引导参数
 int InitSystem();//初始化化系统
 void KernelMain();//内核主函数
-void test_thread();
+_Bool InitDiskAndFs();//初始化磁盘及文件系统
 spinlock_t lock_test;
 
 //内核入口
@@ -54,20 +54,21 @@ void KernelStart(BootParam* boot_param){
 
 //用户态测试程序
 extern char msg_filedata[];
-extern char msg_exec_path[], msg_exec_arg0[];
+extern char msg_exec_path0[],msg_exec_path1[],msg_exec_arg0[];
 __attribute__((noinline, section(".text.user")))
 static void user_main(void) {
-    //execve测试
     uintptr_t eargv[2];
     eargv[0] = (uintptr_t)msg_exec_arg0;
     eargv[1] = 0;
-    syscall(SYS_EXECVE,(uintptr_t)msg_exec_path,(uintptr_t)eargv,0);
-    syscall(SYS_EXIT,0,0,0);
+    syscall(SYS_EXECVE,(uintptr_t)msg_exec_path0,(uintptr_t)eargv,0);
+    syscall(SYS_EXECVE,(uintptr_t)msg_exec_path1,(uintptr_t)eargv,0);
+    syscall(SYS_EXIT,-1,0,0);
 }
 __asm__(
     ".pushsection .text.user, \"ax\", @progbits\n"
-    "msg_exec_path: .asciz \"/SYS/TEST.ELF\"\n"
-    "msg_exec_arg0: .asciz \"/SYS/TEST.ELF\"\n"
+    "msg_exec_path0: .asciz \"/sbin/init\"\n"
+    "msg_exec_path1: .asciz \"/bin/init\"\n"
+    "msg_exec_arg0: .asciz \"init\"\n"
     ".popsection\n"
     "msg_filedata: .ascii \"user file data!\\n\"\n"
 );
@@ -94,53 +95,7 @@ void KernelMain(){
     sti();
     rtc_time_t time;
     rtc_get_local(&time);
-    printk(PRINTK_INFO"UEFI PML4 at 0x%llx,Kernel PML4 at 0x%llx",UEFI_PML4,KERNEL_PML4);
-    //磁盘检测+文件系统挂载(必须在创建用户任务之前,用户程序依赖根文件系统)
-    AtaRegisterDriver();
-    disk_info_t disk = {0};
-    device_path_info_t Device;
-    ParseDevicePath(SYSTEM_BootParam->DiskInfo.DevicePath,&Device);
-    early_printk("[DISK] path: pci=%x.%x ata=%d/%d sata=%u nvme=%u part=%u lba=%llu\n",
-        Device.pci_device, Device.pci_function,
-        Device.found_ata ? Device.ata_channel : -1,
-        Device.found_ata ? Device.ata_slave : -1,
-        Device.found_sata ? Device.sata_port : 0xFFFF,
-        Device.found_nvme ? Device.nvme_namespace : 0,
-        Device.found_partition ? Device.partition_number : 0,
-        Device.found_partition ? Device.partition_start_lba : 0);
-    if(DiskDetect(&Device,&disk) == 0){
-        if(disk.ctrl_type == DISK_CTRL_AHCI){
-            printk("[DISK] AHCI controller %02x:%02x.%x abar=%llx port=%u part_start=%llu part_size=%llu\n",
-                disk.pci_bus, disk.pci_dev, disk.pci_func,
-                disk.abar, disk.sata_port,
-                disk.partition_start_lba, disk.partition_size_lba);
-        }else if(disk.ctrl_type == DISK_CTRL_ATA){
-            printk("[DISK] ATA controller %02x:%02x.%x cmd=%x ctrl=%x channel=%d slave=%d part_start=%llu part_size=%llu\n",
-                disk.pci_bus, disk.pci_dev, disk.pci_func,
-                disk.cmd_base, disk.ctrl_base,
-                disk.ata_channel, disk.ata_slave,
-                disk.partition_start_lba, disk.partition_size_lba);
-        }
-        //初始化磁盘设备
-        if(DiskInit(&disk) == 0){
-            printk("[DISK] %s model=%s sectors=%llu lba48=%d\n",
-                disk.ops->name, disk.model, disk.total_sectors, disk.lba48);
-            uint8_t sector[512];
-            if(DiskRead(&disk, disk.partition_start_lba, 1, sector) == 0){
-                printk("[DISK] read lba=%llu OK, first bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n",
-                    disk.partition_start_lba,
-                    sector[0], sector[1], sector[2], sector[3],
-                    sector[4], sector[5], sector[6], sector[7]);
-            }else{
-                printk("[DISK] read lba=%llu failed\n", disk.partition_start_lba);
-            }
-        }else{
-            printk("[DISK] driver not ready\n");
-        }
-    }else{
-        printk("[DISK] controller not found\n");
-    }
-    FsInit(&disk);//FAT32优先挂载到根目录,失败回退ramfs
+    if(!InitDiskAndFs())panic("Disk init failed!");
     mm_struct* umm = vmm_create_address_space();
     if(!umm)SYSTEM_STOP();
     if(!vmm_mmap(umm, 0x400000, PAGE_SIZE, VM_READ | VM_EXEC | VM_WRITE))SYSTEM_STOP();
@@ -149,26 +104,8 @@ void KernelMain(){
     if(!code_pte || !pte_is_present(*code_pte))SYSTEM_STOP();
     memcpy((void*)PHYS_TO_VIRT(pte_get_paddr(*code_pte)), (void*)user_main,
            (uintptr_t)user_main_end - (uintptr_t)user_main);
-    printk("Creating user task...\n");
     CreateProcess(0x400000, umm, "UserTask");//创建用户任务
-    CreateKernelThread(test_thread,4096,"test");
-    // msleep(5000);
-    // printk(PRINTK_INFO"Type 'r' to reboot or type 's' to shutdown.");
-    // char key = GetKey();
-    // if(key == 's')SYSTEM_Shutdown();
-    // else SYSTEM_Restart();
     SYSTEM_STOP();
-}
-
-void test_thread(){
-    while(1){
-        fillRect(400,400,10,10,COLOR_RED);
-        msleep(1000);
-        fillRect(400,400,10,10,COLOR_GREEN);
-        msleep(1000);
-        fillRect(400,400,10,10,COLOR_BLUE);
-        msleep(1000);
-    }
 }
 
 _Bool LoadBootParam(BootParam* boot_param){

@@ -49,8 +49,12 @@ uint32_t rgb(uint8_t red, uint8_t green, uint8_t blue){
 //画点
 void DrawPiexl(uint16_t x,uint16_t y,uint32_t color){
     if(!ScreenFbMapped())return;
+    //范围检查
+    if(x >= SYSTEM_ScreenInfo.Width || y >= SYSTEM_ScreenInfo.Height)return;
+    uint32_t pixels = SYSTEM_ScreenInfo.FrameBufferSize / 4;
+    if(!pixels)return;
     int index = y * SYSTEM_ScreenInfo.Width + x;
-    if(index < SYSTEM_ScreenInfo.FrameBufferSize && index >= 0){
+    if(index >= 0 && index < (int)pixels){
         SYSTEM_FrameBuffer[index] = color;
     }
 }

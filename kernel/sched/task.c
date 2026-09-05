@@ -579,8 +579,11 @@ void switch_to(void *prev, void *next) {
     );
 }
 
-static task_struct* sched_prev = NULL;
 void schedule(){
+    uint64_t rflags;
+    __asm__ volatile("pushfq\n\tpopq %0" : "=r"(rflags) : : "memory");
+    int irq_was_enabled = (rflags & 0x200) != 0;
+    if(irq_was_enabled)cli();
     //如果当前任务正在运行，放入就绪队列
     if(current_task && (current_task->state == TASK_RUNNING)){
         current_task->state = TASK_READY;
@@ -592,14 +595,14 @@ void schedule(){
     //如果没有就绪任务，返回内核任务
     if(!next){
         next = kernel_task;
-        if(!next)return;//如果失败，返回
+        if(!next)goto out;//如果失败，返回
     }
+    task_struct* prev = current_task;
     //切换任务
-    sched_prev = current_task;
     next->state = TASK_RUNNING;
-    if(next != sched_prev){
+    if(next != prev){
         //切换地址空间
-        uintptr_t prev_pgd = sched_prev->mm ? (uintptr_t)sched_prev->mm->pgd : (uintptr_t)KERNEL_PML4;
+        uintptr_t prev_pgd = prev->mm ? (uintptr_t)prev->mm->pgd : (uintptr_t)KERNEL_PML4;
         uintptr_t next_pgd = next->mm ? (uintptr_t)next->mm->pgd : (uintptr_t)KERNEL_PML4;
         if(prev_pgd != next_pgd)set_cr3(next_pgd);
         //更新用户任务TSS.rsp0与syscall内核栈顶
@@ -608,16 +611,21 @@ void schedule(){
             cpu_tss.rsp0 = user_kernel_stack_top;
         }
         //切换FS段基址
-        if(sched_prev->mm) sched_prev->fs_base = task_rdmsr(IA32_FS_BASE);
+        if(prev->mm) prev->fs_base = task_rdmsr(IA32_FS_BASE);
         if(next->mm)task_wrmsr(IA32_FS_BASE, next->fs_base);
         current_task = next;
-        switch_to(&sched_prev->context.rsp, &next->context.rsp);//切换任务上下文
+        switch_to(&prev->context.rsp, &next->context.rsp);//切换任务上下文
     }
-    //清理已终止任务
-    if(sched_prev->state == TASK_TERMINATED){
-        task_struct *parent = (sched_prev->parent > 0) ? TaskFind(sched_prev->parent) : NULL;
-        if(!parent || parent->state == TASK_TERMINATED)TaskKill(sched_prev);//有存活的父进程则保留为僵尸进程，否则清理
+    //清理终止任务
+    struct list_node *pos, *tmp;
+    list_for_each_safe(pos, tmp, &task_list_head) {
+        task_struct *t = container_of(pos, task_struct, list);
+        if(t->state != TASK_TERMINATED)continue;
+        task_struct *parent = (t->parent > 0) ? TaskFind(t->parent) : NULL;
+        if(!parent || parent->state == TASK_TERMINATED)TaskKill(t);
     }
+out:
+    if(irq_was_enabled)sti();
 }
 
 //构造iretq帧返回ring3

@@ -277,6 +277,7 @@ static void vmm_clone_pagetable(uintptr_t src_table, uintptr_t dst_table, int le
             dst_virt[i] = new_child_phys | (flags & ~PTE_WRITABLE) | PTE_COW;
         } else {
             Pmm_RefInc((void*)child_phys);//父子共享叶子页,引用计数+1
+            src_virt[i] = child_phys | (flags & ~PTE_WRITABLE) | PTE_COW;
             dst_virt[i] = child_phys | (flags & ~PTE_WRITABLE) | PTE_COW;
         }
     }
@@ -388,7 +389,9 @@ mm_struct* vmm_clone_address_space(mm_struct *src_mm){
         vmm_destroy_address_space(dst_mm);
         return NULL;
     }
-    return dst_mm;
+	//刷新TLB
+	set_cr3(get_cr3());
+	return dst_mm;
 }
 
 vm_area_t* find_vma(mm_struct *mm, uintptr_t addr) {
@@ -492,7 +495,9 @@ int vmm_munmap(mm_struct *mm, uintptr_t vaddr, uint64_t length){
 int vmm_mprotect(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t prot) {
     if (!mm || !length) return -1;
     vaddr &= PAGE_MASK;
-    uint64_t pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+    uintptr_t start = vaddr;
+    uintptr_t end = (vaddr + length + PAGE_SIZE - 1) & PAGE_MASK;
+    uint64_t pages = (end - start) / PAGE_SIZE;
     //逐页修改权限
     for (uint64_t i = 0; i < pages; i++) {
         uintptr_t va = vaddr + i * PAGE_SIZE;
@@ -505,8 +510,38 @@ int vmm_mprotect(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t prot)
         *pte = paddr | pte_flags;
         __asm__ volatile("invlpg (%0)" : : "r"(va) : "memory");
     }
-    //更新VMA标志
-    vm_area_t *vma = find_vma(mm, vaddr);
-    if (vma) vma->vm_flags = prot;
+    //拆分/更新VMA
+    vm_area_t *vma, *tmp;
+    list_for_each_entry_safe(vma, tmp, &mm->mmap, vm_list) {
+        if (vma->vm_end <= start || vma->vm_start >= end) continue;//无重叠
+        if (vma->vm_start >= start && vma->vm_end <= end) {
+            //完全包含: 整个VMA改权限
+            vma->vm_flags = prot;
+        } else if (vma->vm_start < start && vma->vm_end > end) {
+            //VMA完全包含mprotect范围: 拆成3段
+            uint64_t old = vma->vm_flags;
+            vm_area_t *mid = vma_create(mm, start, end, prot);
+            vm_area_t *right = vma_create(mm, end, vma->vm_end, old);
+            if (!mid || !right) return -1;
+            vma->vm_end = start;//左段保留原flags
+            vma_insert(mm, mid);
+            vma_insert(mm, right);
+        } else if (vma->vm_start < start) {
+            //右重叠
+            uint64_t old = vma->vm_flags;
+            vm_area_t *right = vma_create(mm, start, vma->vm_end, prot);
+            if (!right) return -1;
+            vma->vm_end = start;
+            vma_insert(mm, right);
+        } else {
+            //左重叠
+            uint64_t old = vma->vm_flags;
+            vm_area_t *right = vma_create(mm, end, vma->vm_end, old);
+            if (!right) return -1;
+            vma->vm_end = end;
+            vma->vm_flags = prot;
+            vma_insert(mm, right);
+        }
+    }
     return 0;
 }

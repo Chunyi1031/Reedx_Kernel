@@ -3,6 +3,7 @@
 #include <elf.h>
 #include <fs.h>
 #include <klib.h>
+#include <idt.h>
 #include <delay.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
@@ -197,36 +198,37 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
         {AT_RANDOM, random_addr},
         {AT_NULL,   0},
     };
-    sp -= 8 * 2 * 8;//8项×16字节
-    uintptr_t auxv_arr = sp;
+    sp -= 8;                          //argc
+    sp -= 8 * ((uint64_t)argc + 1);   //argv指针数组
+    sp -= 8 * ((uint64_t)envc + 1);   //envp指针数组
+    sp -= 8 * 2 * 8;                  //auxv数组
+    sp &= ~0xFULL;
+    uintptr_t argc_addr = sp;
+    uintptr_t argv_arr  = sp + 8;
+    uintptr_t envp_arr  = sp + 8 * ((uint64_t)argc + 2);
+    uintptr_t auxv_arr  = envp_arr + 8 * ((uint64_t)envc + 1);
+    uint64_t argc_val = (uint64_t)argc;
+    uint64_t null_ptr = 0;
+    if(exec_write_mem(new_mm, argc_addr, &argc_val, 8))goto fail;
+    for(int i = 0; i < argc; i++)if(exec_write_mem(new_mm, argv_arr + 8 * i, &argv_va[i], 8))goto fail;
+    if(exec_write_mem(new_mm, argv_arr + 8 * argc, &null_ptr, 8))goto fail;
+    for(int i = 0; i < envc; i++)if(exec_write_mem(new_mm, envp_arr + 8 * i, &envp_va[i], 8))goto fail;
+    if(exec_write_mem(new_mm, envp_arr + 8 * envc, &null_ptr, 8))goto fail;
     for(int i = 0; i < 8; i++){
         if(exec_write_mem(new_mm, auxv_arr + i * 16, auxv[i], 16)) goto fail;
     }
-    //envp指针数组
-    sp -= 8 * ((uint64_t)envc + 1);
-    uintptr_t envp_arr = sp;
-    for(int i = 0; i < envc; i++)if(exec_write_mem(new_mm, envp_arr + 8 * i, &envp_va[i], 8))goto fail;
-    uint64_t null_ptr = 0;
-    if(exec_write_mem(new_mm, envp_arr + 8 * envc, &null_ptr, 8))goto fail;
-    //argv指针数组
-    sp -= 8 * ((uint64_t)argc + 1);
-    uintptr_t argv_arr = sp;
-    for(int i = 0; i < argc; i++)if(exec_write_mem(new_mm, argv_arr + 8 * i, &argv_va[i], 8))goto fail;
-    if(exec_write_mem(new_mm, argv_arr + 8 * argc, &null_ptr, 8))goto fail;
-    //argc压栈
-    sp -= 8;
-    uint64_t argc_val = (uint64_t)argc;
-    if(exec_write_mem(new_mm, sp, &argc_val, 8))goto fail;
-    sp &= ~0xFULL;
+    sp = argc_addr;
     //替换当前任务地址空间
     task_struct *t = current_task;
     mm_struct *old_mm = t->mm;
     t->mm = new_mm;
     set_cr3((uintptr_t)new_mm->pgd);
     mmput(old_mm);
-    //清除FS基址
+    //清除FS基址(竞态修复: 字段与MSR必须原子更新)
+    cli();
     t->fs_base = 0;
     exec_wrmsr(IA32_FS_BASE, 0);
+    sti();
     //修改syscall帧
     uint64_t *p = (uint64_t*)(user_kernel_stack_top - 128);
     p[4]  = 0x202;//用户RFLAGS(IF)

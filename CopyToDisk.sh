@@ -30,22 +30,24 @@ echo "挂载到: $MOUNT_POINT"
 echo "更新内核..."
 cp "$KERNEL" "$MOUNT_POINT/SYS/KERNEL.ELF"
 
-# 复制execve测试程序
-if [ -f "build/app/test.elf" ]; then
-    echo "更新测试程序..."
-    cp "build/app/test.elf" "$MOUNT_POINT/SYS/TEST.ELF"
-fi
-
-# 复制musl静态链接hello程序
-if [ -f "build/app/hello.elf" ]; then
-    echo "更新musl程序..."
-    cp "build/app/hello.elf" "$MOUNT_POINT/SYS/HELLO.ELF"
+# 复制 init 程序(app/init.c → /sbin/init, 内核自动启动); 自动生成 sbin 目录
+if [ -f "build/app/init.elf" ]; then
+    echo "更新init程序..."
+    mkdir -p "$MOUNT_POINT/sbin"
+    cp "build/app/init.elf" "$MOUNT_POINT/sbin/init"
 fi
 
 # 复制glibc静态链接hello程序
-if [ -f "build/app/ghello.elf" ]; then
-    echo "更新glibc程序..."
-    cp "build/app/ghello.elf" "$MOUNT_POINT/SYS/GHELLO.ELF"
+if [ -f "build/app/hello.elf" ]; then
+    echo "更新hello程序..."
+    cp "build/app/hello.elf" "$MOUNT_POINT/SYS/HELLO.ELF"
+fi
+
+# 复制echo程序(coreutils静态echo → /bin/echo)
+if [ -f "build/app/echo.elf" ]; then
+    echo "更新echo程序..."
+    mkdir -p "$MOUNT_POINT/bin"
+    cp "build/app/echo.elf" "$MOUNT_POINT/bin/echo"
 fi
 
 # 卸载

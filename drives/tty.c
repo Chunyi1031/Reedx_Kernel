@@ -10,15 +10,34 @@ void TTY_PrintChar(const char c,uint32_t color){
     if(!TTY_ScreenEnabled)return;
     uint16_t spl = TTY_PrintRow;
     uint16_t spr = TTY_PrintCol;
-    //如果过界
-    if(TTY_PrintRow > (SYSTEM_ScreenInfo.Height / 16)){
+    //屏幕已满,立即清屏回到顶部
+    if((uint64_t)TTY_PrintRow * 18 + 16 > SYSTEM_ScreenInfo.Height){
+        TTY_Clear();
         TTY_PrintRow = 0;
+        TTY_PrintCol = 0;
     }
     //如果字符为换行符
     if(c == '\n'){
         TTY_PrintRow += 1;
         TTY_PrintCol = 0;
+        //如果换行后超出屏幕,清屏回到顶部
+        if((uint64_t)TTY_PrintRow * 18 + 16 > SYSTEM_ScreenInfo.Height){
+            TTY_Clear();
+            TTY_PrintRow = 0;
+            TTY_PrintCol = 0;
+        }
         return;
+    }
+    //如果列超出屏幕宽度，自动换行
+    if((uint64_t)TTY_PrintCol * 10 + 10 > SYSTEM_ScreenInfo.Width){
+        TTY_PrintRow += 1;
+        TTY_PrintCol = 0;
+        //如果换行后超出屏幕，清屏回到顶部
+        if((uint64_t)TTY_PrintRow * 18 + 16 > SYSTEM_ScreenInfo.Height){
+            TTY_Clear();
+            TTY_PrintRow = 0;
+            TTY_PrintCol = 0;
+        }
     }
     //如果字符为制表符
     if(c == '\t'){

@@ -10,20 +10,24 @@
 #define SYS_CLOSE           3
 #define SYS_STAT            4
 #define SYS_FSTAT           5
+#define SYS_POLL            7
 #define SYS_LSEEK           8
 #define SYS_MMAP            9
 #define SYS_MPROTECT        10
 #define SYS_MUNMAP          11
 #define SYS_BRK             12
+#define SYS_RT_SIGACTION    13
 #define SYS_IOCTL           16
 #define SYS_WRITEV          20
 #define SYS_ACCESS          21
 #define SYS_NANOSLEEP       35
 #define SYS_GETPID          39
+#define SYS_CLONE           56
 #define SYS_FORK            57
 #define SYS_EXECVE          59
 #define SYS_EXIT            60
 #define SYS_WAIT4           61
+#define SYS_FCNTL           72
 #define SYS_GETCWD          79
 #define SYS_CHDIR           80
 #define SYS_MKDIR           83
@@ -31,9 +35,13 @@
 #define SYS_UNLINK          87
 #define SYS_READLINK        89
 #define SYS_GETTIMEOFDAY    96
+#define SYS_SIGALTSTACK     131
+#define SYS_PRCTL           157
 #define SYS_ARCH_PRCTL      158
+#define SYS_GETTID          186
 #define SYS_TIME            201
 #define SYS_FUTEX           202
+#define SYS_SCHED_GETAFFINITY 204
 #define SYS_SET_TID_ADDRESS 218
 #define SYS_CLOCK_GETTIME   228
 #define SYS_CLOCK_GETRES    229
@@ -57,6 +65,13 @@
 #define O_CREAT     0x40    //文件不存在则创建
 #define O_TRUNC     0x200   //打开时截断文件长度为0
 #define O_APPEND    0x400   //每次写入追加到文件末尾
+
+//fcntl命令
+#define F_DUPFD   0
+#define F_GETFD   1
+#define F_SETFD   2
+#define F_GETFL   3
+#define F_SETFL   4
 
 //lseek whence
 #define SEEK_SET    0
