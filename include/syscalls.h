@@ -27,9 +27,11 @@
 #define SYS_EXECVE          59
 #define SYS_EXIT            60
 #define SYS_WAIT4           61
+#define SYS_UNAME           63
 #define SYS_FCNTL           72
 #define SYS_GETCWD          79
 #define SYS_CHDIR           80
+#define SYS_RENAME          82
 #define SYS_MKDIR           83
 #define SYS_RMDIR           84
 #define SYS_UNLINK          87
@@ -47,12 +49,14 @@
 #define SYS_CLOCK_GETRES    229
 #define SYS_CLOCK_NANOSLEEP 230
 #define SYS_EXIT_GROUP      231
+#define SYS_OPENAT          257
+#define SYS_NEWFSTATAT      262
+#define SYS_RENAMEAT        264
 #define SYS_READLINKAT      267
 #define SYS_SET_ROBUST_LIST 273
 #define SYS_PRLIMIT64       302
+#define SYS_RENAMEAT2       316
 #define SYS_GETRANDOM       318
-#define SYS_OPENAT          257
-#define SYS_NEWFSTATAT      262
 #define AT_FDCWD            (-100)
 
 #define SYSCALL_TABLE_SIZE  512

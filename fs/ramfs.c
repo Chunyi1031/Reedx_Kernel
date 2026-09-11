@@ -109,6 +109,30 @@ static int ramfs_unlink(fs_node_t *dir, const char *name){
     return 0;
 }
 
+//重命名
+static int ramfs_rename(fs_node_t *olddir, const char *oldname, fs_node_t *newdir, const char *newname){
+    fs_node_t *c = ramfs_lookup(olddir, oldname);
+    if(!c) return -1;
+    //目标已存在则先删除
+    fs_node_t *old = ramfs_lookup(newdir, newname);
+    if(old) ramfs_unlink(newdir, newname);
+    //摘除旧链表
+    c->siblings.prev->next = c->siblings.next;
+    c->siblings.next->prev = c->siblings.prev;
+    if(olddir->size > 0) olddir->size--;
+    //更新名字
+    int i;
+    for(i = 0; i < MAX_NAME - 1 && newname[i]; i++) c->name[i] = newname[i];
+    c->name[i] = 0;
+    //挂到新父目录
+    c->siblings.prev = newdir->children.prev;
+    c->siblings.next = &newdir->children;
+    newdir->children.prev->next = &c->siblings;
+    newdir->children.prev = &c->siblings;
+    newdir->size++;
+    return 0;
+}
+
 static const fs_node_ops_t g_ramfs_ops = {
     .read     = ramfs_read,
     .write    = ramfs_write,
@@ -117,6 +141,7 @@ static const fs_node_ops_t g_ramfs_ops = {
     .truncate = ramfs_truncate,
     .mkdir    = ramfs_mkdir,
     .unlink   = ramfs_unlink,
+    .rename   = ramfs_rename,
 };
 
 //创建根目录节点

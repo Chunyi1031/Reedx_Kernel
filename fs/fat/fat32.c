@@ -107,6 +107,9 @@ typedef struct fat_node_priv {
     uint32_t size;        //文件字节数
     uint32_t dir_clus;    //目录项所在簇
     uint32_t dir_off;     //目录项在簇内偏移
+    uint32_t pos_clu;     //顺序读缓存: 下次继续读的簇
+    uint64_t pos_off;     //顺序读缓存: 下次继续读的文件偏移
+    uint64_t pos_within;  //顺序读缓存: 该簇内的偏移
 } fat_node_priv_t;
 
 static fat32_fs_t g_fat;
@@ -277,6 +280,9 @@ static fs_node_t *fat_new_node(const char *name, int type, uint32_t first_clu, u
     p->size = size;
     p->dir_clus = dir_clus;
     p->dir_off = dir_off;
+    p->pos_clu = 0;
+    p->pos_off = 0;
+    p->pos_within = 0;
     //从磁盘目录项解析时间戳(根节点无目录项则用当前时间)
     uint64_t now = rtc_get_epoch();
     n->atime = now;
@@ -428,25 +434,73 @@ static uint64_t fat_read(fs_node_t *node, uint64_t off, void *buf, uint64_t len)
     fat_node_priv_t *p = (fat_node_priv_t*)node->priv;
     if(off >= p->size)return 0;
     if(len > p->size - off)len = p->size - off;
-    uint32_t clu = p->first_clu;
-    uint64_t done = 0;
-    //跳过off之前的数据
-    while(off >= g_fat.bpc){
-        clu = fat_get_entry(clu);
-        if(clu < 2 || clu >= FAT_CLUSTER_EOF)return done;
-        off -= g_fat.bpc;
+    uint64_t start_off = off;
+    uint32_t clu;
+    uint64_t within;
+    //顺序读缓存
+    if(p->pos_clu >= 2 && p->pos_clu < FAT_CLUSTER_EOF && off == p->pos_off){
+        clu = p->pos_clu;
+        within = p->pos_within;
+    }else{
+        clu = p->first_clu;
+        while(off >= g_fat.bpc){
+            clu = fat_get_entry(clu);
+            if(clu < 2 || clu >= FAT_CLUSTER_EOF)return 0;
+            off -= g_fat.bpc;
+        }
+        within = off;
     }
-    //读取数据
+    uint64_t done = 0;
+    uint8_t *dst = (uint8_t*)buf;
     while(done < len){
         if(clu < 2 || clu >= FAT_CLUSTER_EOF) break;
-        if(fat_read_cluster(clu)) break;
+        //如果簇内非对齐,读单簇到簇缓冲, 拷贝尾部
+        if(within > 0){
+            if(fat_read_cluster(clu)) break;
+            uint64_t c = len - done;
+            if(c > g_fat.bpc - within) c = g_fat.bpc - within;
+            memcpy(dst + done, g_fat.cluster_buf + within, c);
+            done += c;
+            within += c;
+            if(within >= g_fat.bpc){
+                within = 0;
+                clu = fat_get_entry(clu);
+            }
+            continue;
+        }
+        //探测连续簇长度
+        uint32_t run = 1;
+        uint32_t probe = clu;
+        uint32_t max_run = 256 / g_fat.spc;
+        while(run < max_run){
+            uint32_t nxt = fat_get_entry(probe);
+            if(nxt != probe + 1) break;
+            probe = nxt;
+            run++;
+            if((uint64_t)run * g_fat.bpc >= len - done) break;
+        }
+        uint64_t avail = (uint64_t)run * g_fat.bpc;
         uint64_t chunk = len - done;
-        if(chunk > g_fat.bpc - off) chunk = g_fat.bpc - off;
-        memcpy((uint8_t*)buf + done, g_fat.cluster_buf + off, chunk);
-        done += chunk;
-        off = 0;
-        clu = fat_get_entry(clu);
+        if(chunk > avail) chunk = avail;
+        if(chunk >= g_fat.bpc){
+            //批量读整个簇
+            uint32_t full_clu = (uint32_t)(chunk / g_fat.bpc);
+            uint32_t sectors = full_clu * g_fat.spc;
+            if(fat_read_sectors(g_fat.data_start + (clu - 2) * g_fat.spc, dst + done, sectors)) break;
+            done += (uint64_t)full_clu * g_fat.bpc;
+            for(uint32_t k = 0; k < full_clu && clu >= 2 && clu < FAT_CLUSTER_EOF; k++)clu = fat_get_entry(clu);
+            within = 0;
+        //不足一个簇，读单簇并拷贝剩余部分
+        }else{
+            if(fat_read_cluster(clu)) break;
+            memcpy(dst + done, g_fat.cluster_buf, chunk);
+            done += chunk;
+            within = chunk;
+        }
     }
+    p->pos_off = start_off + done;
+    p->pos_clu = clu;
+    p->pos_within = within;
     return done;
 }
 
@@ -662,6 +716,50 @@ static int fat_unlink(fs_node_t *dir, const char *name){
     return fat_write_cluster(clu) ? -1 : 0;
 }
 
+//重命名
+static int fat_rename(fs_node_t *olddir, const char *oldname, fs_node_t *newdir, const char *newname){
+    if(!g_fat.disk || !olddir || !newdir || !olddir->priv || !newdir->priv) return -1;
+    //定位旧目录项
+    uint32_t old_clus, old_off;
+    if(fat_find_dirent(olddir, oldname, &old_clus, &old_off) != 0) return -1;
+    if(fat_read_cluster(old_clus)) return -1;
+    fat_dir_entry_t *ode = (fat_dir_entry_t*)(g_fat.cluster_buf + old_off);
+    //保存旧目录项信息
+    uint32_t first = ((uint32_t)ode->fst_clus_hi << 16) | ode->fst_clus_lo;
+    uint32_t size = ode->file_size;
+    int type = (ode->attr & FAT_ATTR_DIRECTORY) ? FT_DIR : FT_FILE;
+    uint16_t crt_time = ode->crt_time, crt_date = ode->crt_date;
+    uint8_t crt_tenth = ode->crt_time_tenth;
+    uint16_t wrt_time = ode->wrt_time, wrt_date = ode->wrt_date;
+    uint16_t lst_acc = ode->lst_acc_date;
+    //在新父目录分配新目录项
+    uint32_t new_clus, new_off;
+    if(fat_alloc_dirent(newdir, newname, type, first, &new_clus, &new_off)) return -1;
+    //补写文件大小与原时间戳
+    if(fat_read_cluster(new_clus)) return -1;
+    fat_dir_entry_t *nde = (fat_dir_entry_t*)(g_fat.cluster_buf + new_off);
+    nde->file_size = size;
+    nde->crt_time = crt_time;
+    nde->crt_date = crt_date;
+    nde->crt_time_tenth = crt_tenth;
+    nde->wrt_time = wrt_time;
+    nde->wrt_date = wrt_date;
+    nde->lst_acc_date = lst_acc;
+    if(fat_write_cluster(new_clus)) return -1;
+    //释放旧目录项
+    if(fat_read_cluster(old_clus)) return -1;
+    ode = (fat_dir_entry_t*)(g_fat.cluster_buf + old_off);
+    ode->name[0] = FAT_DIRENT_FREE;
+    uint32_t lfn_off = old_off;
+    while(lfn_off >= sizeof(fat_dir_entry_t)){
+        lfn_off -= sizeof(fat_dir_entry_t);
+        fat_dir_entry_t *e = (fat_dir_entry_t*)(g_fat.cluster_buf + lfn_off);
+        if(e->attr == FAT_ATTR_LFN) e->name[0] = FAT_DIRENT_FREE;
+        else break;
+    }
+    return fat_write_cluster(old_clus) ? -1 : 0;
+}
+
 //FAT32节点操作集
 static fs_node_ops_t fat_ops = {
     .read     = fat_read,
@@ -671,6 +769,7 @@ static fs_node_ops_t fat_ops = {
     .truncate = fat_truncate,
     .mkdir    = fat_mkdir,
     .unlink   = fat_unlink,
+    .rename   = fat_rename,
 };
 
 //挂载FAT32分区

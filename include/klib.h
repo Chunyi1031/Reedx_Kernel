@@ -17,4 +17,15 @@ struct list_node {
     struct list_node *next;//指向下一个节点
 };
 
+typedef struct utsname {
+	char sysname[65];
+	char nodename[65];
+	char release[65];
+	char version[65];
+	char machine[65];
+	char domainname[65];
+}__attribute__((packed)) utsname_t;
+
+extern utsname_t system_utsname;
+
 #endif

@@ -67,9 +67,17 @@ static long sys_read(long fd, long buf, long count, long a4, long a5, long a6){
 	if(fd == 0) {
 		if(count == 0)return 0;
 		sti();
-		char c = GetKey();//读取按键
-		if(copy_to_user((void*)buf, &c, 1))return -EFAULT;//复制到用户空间
-		return 1;
+		char kbuf[KEYBOARD_BUFFER_SIZE];
+		long total = 0;
+		kbuf[total++] = GetKey();//阻塞等待至少一个按键
+		//一次读完缓冲区中已就绪的多个按键
+		while(total < count && total < KEYBOARD_BUFFER_SIZE){
+			char c = GetKey_NoBlock();
+			if(c == 0)break;
+			kbuf[total++] = c;
+		}
+		if(copy_to_user((void*)buf, kbuf, (unsigned long)total))return -EFAULT;//复制到用户空间
+		return total;
 	}
 	//文件读取
 	if(!current_task)return -EBADF;
@@ -200,6 +208,41 @@ static long sys_unlink(long path, long b, long c, long a4, long a5, long a6){
 	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
 	kpath[255] = 0;
 	return FsUnlink(kpath) ? -ENOENT : 0;
+}
+
+/*
+ * int rename(const char *oldpath, const char *newpath)
+ * 系统调用:rename
+ */
+static long sys_rename(long oldpath, long newpath, long c, long a4, long a5, long a6){
+	(void)c; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -ENOENT;
+	char kold[256], knew[256];
+	if(copy_from_user(kold, (void*)oldpath, 255))return -EFAULT;
+	if(copy_from_user(knew, (void*)newpath, 255))return -EFAULT;
+	kold[255] = 0;
+	knew[255] = 0;
+	return FsRename(kold, knew) ? -ENOENT : 0;
+}
+
+/*
+ * int renameat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath)
+ * 仅支持 AT_FDCWD + 绝对路径
+ */
+static long sys_renameat(long olddirfd, long oldpath, long newdirfd, long newpath, long a5, long a6){
+	(void)a5; (void)a6;
+	if(olddirfd != AT_FDCWD || newdirfd != AT_FDCWD)return -ENOSYS;
+	return sys_rename(oldpath, newpath, 0, 0, 0, 0);
+}
+
+/*
+ * int renameat2(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, unsigned int flags)
+ * 仅支持 AT_FDCWD + 绝对路径 + flags=0
+ */
+static long sys_renameat2(long olddirfd, long oldpath, long newdirfd, long newpath, long flags, long a6){
+	(void)a6;
+	if(olddirfd != AT_FDCWD || newdirfd != AT_FDCWD || flags != 0)return -ENOSYS;
+	return sys_rename(oldpath, newpath, 0, 0, 0, 0);
 }
 
 /*
@@ -910,6 +953,13 @@ static long sys_set_tid_address(long tidptr, long a2, long a3, long a4, long a5,
 	return current_task->pid;
 }
 
+static long sys_uname(long name, long a2, long a3, long a4, long a5, long a6){
+	(void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!name)return -EFAULT;
+	if(copy_to_user((void*)name,&system_utsname,sizeof(system_utsname)) != 0)return -EFAULT;
+	return 0;
+}
+
 void InitSyscall(void){
     //初始化系统调用表
 	memset(syscall_table, 0, sizeof(syscall_table));
@@ -955,6 +1005,9 @@ void InitSyscall(void){
 	syscall_table[SYS_MKDIR]      = sys_mkdir;
 	syscall_table[SYS_RMDIR]      = sys_rmdir;
 	syscall_table[SYS_UNLINK]     = sys_unlink;
+	syscall_table[SYS_RENAME]     = sys_rename;
+	syscall_table[SYS_RENAMEAT]   = sys_renameat;
+	syscall_table[SYS_RENAMEAT2]  = sys_renameat2;
 	syscall_table[SYS_BRK]        = sys_brk;
 	syscall_table[SYS_ARCH_PRCTL] = sys_arch_prctl;
 	syscall_table[SYS_FUTEX]            = sys_futex;
@@ -962,6 +1015,7 @@ void InitSyscall(void){
 	syscall_table[SYS_MMAP]       = sys_mmap;
 	syscall_table[SYS_MUNMAP]     = sys_munmap;
 	syscall_table[SYS_MPROTECT]   = sys_mprotect;
+	syscall_table[SYS_UNAME]	  = sys_uname;
 	//启用SYSCALL/SYSRET
 	{
 		uint64_t efer = rdmsr(IA32_EFER) | (1ULL << 0);//SCE

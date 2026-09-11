@@ -26,6 +26,7 @@ uint64_t SYSTEM_CPU_Fquency = 0;
 UEFI_MEMORY_MAP *SYSTEM_MemoryMap = NULL;
 EFI_RUNTIME_SERVICES *UEFI_RuntimeServices = NULL;
 _Bool UEFI_UseRT = false;
+utsname_t system_utsname = {0};
 
 extern char __bss_start[], __bss_end[];
 
@@ -78,6 +79,15 @@ static void user_main_end(void) {
     __asm__ volatile("ud2\n\t");
 }
 
+void fill_utsname(){
+    strcpy(system_utsname.sysname,"Reedx");
+    strcpy(system_utsname.nodename,"(none)");
+    strcpy(system_utsname.release,"0.0.1-beta");
+    strcpy(system_utsname.version,"(unknown)");
+    strcpy(system_utsname.machine,"x86_64");
+    strcpy(system_utsname.domainname,"(none)");
+}
+
 void KernelMain(){
     setup_gdt();
     setup_tss();
@@ -92,6 +102,7 @@ void KernelMain(){
     InitSyscall();
     switch_kernel_info_to_high();
     switch_kernel_stack_to_high();
+    fill_utsname();
     sti();
     rtc_time_t time;
     rtc_get_local(&time);

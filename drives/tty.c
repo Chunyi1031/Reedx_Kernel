@@ -8,6 +8,16 @@ ConsoleStyle CurrentConsoleStyle = {COLOR_WHITE,COLOR_BLACK};
 void TTY_PrintChar(const char c,uint32_t color){
     SerialWriteChar(SERIAL_COM1,c);
     if(!TTY_ScreenEnabled)return;
+    //退格
+    if(c == '\b'){
+        if(TTY_PrintCol > 0){
+            TTY_PrintCol--;
+        }else if(TTY_PrintRow > 0){
+            TTY_PrintRow--;
+            TTY_PrintCol = (SYSTEM_ScreenInfo.Width >= 10) ? (SYSTEM_ScreenInfo.Width / 10 - 1) : 0;
+        }
+        return;
+    }
     uint16_t spl = TTY_PrintRow;
     uint16_t spr = TTY_PrintCol;
     //屏幕已满,立即清屏回到顶部
@@ -41,10 +51,12 @@ void TTY_PrintChar(const char c,uint32_t color){
     }
     //如果字符为制表符
     if(c == '\t'){
-        DrawChar(' ',TTY_PrintCol * 10,TTY_PrintRow * 18,color);
+        fillRect(TTY_PrintCol * 10,TTY_PrintRow * 18,10,18,CurrentConsoleStyle.BgColor);
         TTY_PrintCol ++;
         return;
     }
+    //先整格填充背景色, 再绘制前景字形
+    fillRect(TTY_PrintCol * 10,TTY_PrintRow * 18,10,18,CurrentConsoleStyle.BgColor);
     DrawChar(c,TTY_PrintCol * 10,TTY_PrintRow * 18,color);//绘制文字
     TTY_PrintCol ++;//记录打印位置
     for(int i = 0;i < 16;i ++){

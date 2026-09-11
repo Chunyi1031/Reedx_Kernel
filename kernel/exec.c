@@ -69,7 +69,7 @@ static int elf_load(fs_file_t *f, mm_struct *mm, elf_load_info_t *info){
         return -1;
     }
     //文件内容中转缓冲
-    void *kbuf = (void*)PHYS_TO_VIRT(Pmm_Malloc(1));
+    void *kbuf = (void*)PHYS_TO_VIRT(Pmm_Malloc(32));
     if(!kbuf){
         Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ph_buf), 1);
         return -1;
@@ -81,7 +81,7 @@ static int elf_load(fs_file_t *f, mm_struct *mm, elf_load_info_t *info){
         if(ph->p_type != PT_LOAD) continue;
         if(ph->p_memsz < ph->p_filesz || ph->p_vaddr >= USER_VADDR_MAX){
             Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ph_buf), 1);
-            Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 1);
+            Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 32);
             return -1;
         }
         //记录加载基址(第一个PT_LOAD)
@@ -96,29 +96,29 @@ static int elf_load(fs_file_t *f, mm_struct *mm, elf_load_info_t *info){
         uint64_t map_end   = (ph->p_vaddr + ph->p_memsz + PAGE_SIZE - 1) & PAGE_MASK;
         if(!vmm_mmap(mm, map_start, map_end - map_start, prot)){
             Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ph_buf), 1);
-            Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 1);
+            Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 32);
             return -1;
         }
         //拷贝文件内容到新地址空间
         if(FsSeek(f, ph->p_offset, SEEK_SET) < 0){
             Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ph_buf), 1);
-            Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 1);
+            Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 32);
             return -1;
         }
         uint64_t copied = 0;
         while(copied < ph->p_filesz){
             uint64_t chunk = ph->p_filesz - copied;
-            if(chunk > PAGE_SIZE)chunk = PAGE_SIZE;
+            if(chunk > 32 * PAGE_SIZE)chunk = 32 * PAGE_SIZE;
             if((FsRead(f, kbuf, chunk) != chunk) || exec_write_mem(mm, ph->p_vaddr + copied, kbuf, chunk)){
                 Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ph_buf), 1);
-                Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 1);
+                Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 32);
                 return -1;
             }
             copied += chunk;
         }
     }
     Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ph_buf), 1);
-    Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 1);
+    Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 32);
     info->entry = eh.e_entry;
     info->phentsize = eh.e_phentsize;
     info->phnum = eh.e_phnum;

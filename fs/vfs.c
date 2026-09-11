@@ -136,6 +136,22 @@ int FsUnlink(const char *path){
     return parent->ops->unlink(parent, name);
 }
 
+int FsRename(const char *oldpath, const char *newpath){
+    if(!oldpath || !newpath) return -1;
+    if(strcmp(oldpath, newpath) == 0) return 0;
+    if(FsResolve(newpath)){
+        if(FsUnlink(newpath) != 0) return -1;
+    }
+    fs_node_t *oldparent = NULL;
+    char oldname[MAX_NAME];
+    fs_node_t *newparent = NULL;
+    char newname[MAX_NAME];
+    if(resolve_parent(oldpath, &oldparent, oldname) != 0) return -1;
+    if(resolve_parent(newpath, &newparent, newname) != 0) return -1;
+    if(!oldparent->ops->rename) return -1;
+    return oldparent->ops->rename(oldparent, oldname, newparent, newname);
+}
+
 void FsInit(struct disk_info *disk){
     //优先挂载FAT32,失败则回退ramfs
     if(disk && (fat32_mount(disk) == 0)){
