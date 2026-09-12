@@ -268,6 +268,7 @@ static fs_node_t *fat_new_node(const char *name, int type, uint32_t first_clu, u
     n->ops = &fat_ops;
     n->refs = 1;
     n->size = size;
+    n->ino = ((uint64_t)dir_clus << 32) | dir_off;
     int i;
     for(i = 0; i < MAX_NAME - 1 && name[i]; i++)n->name[i] = name[i];
     n->name[i] = 0;
@@ -538,7 +539,10 @@ static uint64_t fat_write(fs_node_t *node, uint64_t off, const void *buf, uint64
     //定位off所在簇
     while(off >= g_fat.bpc){
         uint32_t nxt = fat_get_entry(clu);
-        if(nxt < 2 || nxt >= FAT_CLUSTER_EOF)return 0;
+        if(nxt < 2 || nxt >= FAT_CLUSTER_EOF){
+            nxt = fat_alloc_cluster(clu);//链尾不足, 追加新簇
+            if(nxt < 2) return 0;
+        }
         clu = nxt;
         off -= g_fat.bpc;
     }
@@ -624,20 +628,13 @@ static int fat_alloc_dirent(fs_node_t *dir, const char *name, int type, uint32_t
             de->attr = (type == FT_DIR) ? FAT_ATTR_DIRECTORY : FAT_ATTR_ARCHIVE;
             de->fst_clus_lo = (uint16_t)(first_clu & 0xFFFF);
             de->fst_clus_hi = (uint16_t)(first_clu >> 16);
-            //组后补END,否则扩簇补END
             fat_set_now(de);//写入创建/修改/访问时间
             uint32_t after = off + (uint32_t)need * sizeof(fat_dir_entry_t);
-            if(after < g_fat.bpc){
-                memset(g_fat.cluster_buf + after, 0, sizeof(fat_dir_entry_t));
-                ((fat_dir_entry_t*)(g_fat.cluster_buf + after))->name[0] = FAT_DIRENT_END;
-            }else{
+            if(fat_write_cluster(cur))return -1;//写回当前簇
+            if(after >= g_fat.bpc){
                 uint32_t nxt = fat_alloc_cluster(cur);
                 if(nxt < 2) return -1;
-                memset(g_fat.cluster_buf, 0, g_fat.bpc);
-                ((fat_dir_entry_t*)g_fat.cluster_buf)->name[0] = FAT_DIRENT_END;
-                if(fat_write_cluster(nxt)) return -1;
             }
-            if(fat_write_cluster(cur)) return -1;
             *out_clus = cur;
             *out_off = short_off;
             return 0;
@@ -785,6 +782,91 @@ static int fat_rename(fs_node_t *olddir, const char *oldname, fs_node_t *newdir,
     return fat_write_cluster(old_clus) ? -1 : 0;
 }
 
+//按线性目录项索引定位
+static int fat_dir_entry_at(fat_node_priv_t *dp, uint32_t idx, uint32_t *clu, uint32_t *off){
+    uint32_t epp = g_fat.bpc / sizeof(fat_dir_entry_t);//每簇目录项数
+    uint32_t cluster_idx = idx / epp;
+    uint32_t within = idx % epp;
+    uint32_t c = dp->first_clu;
+    for(uint32_t i = 0; i < cluster_idx; i++){
+        uint32_t nxt = fat_get_entry(c);
+        if(nxt < 2 || nxt >= FAT_CLUSTER_EOF)return -1;
+        c = nxt;
+    }
+    *clu = c;
+    *off = within * sizeof(fat_dir_entry_t);
+    return 0;
+}
+
+//由8.3短名生成字符串
+static void fat_short_name(fat_dir_entry_t *de, char *name){
+    int b = 7; while(b >= 0 && de->name[b] == ' ')b--;
+    int e = 2; while(e >= 0 && de->ext[e] == ' ')e--;
+    int j = 0;
+    for(int i = 0; i <= b; i++) name[j++] = (char)de->name[i];
+    if(e >= 0){
+        name[j++] = '.';
+        for(int i = 0; i <= e; i++) name[j++] = (char)de->ext[i];
+    }
+    name[j] = 0;
+}
+
+//回看短条目前面的LFN条目,重建长文件名,有LFN返回1，否则0
+static int fat_reconstruct_lfn(fat_node_priv_t *dp, uint32_t idx, char *name){
+    int total = 0;
+    int found = 0;
+    for(uint32_t j = 1; j <= idx; j++){
+        uint32_t clu, eoff;
+        if(fat_dir_entry_at(dp, idx - j, &clu, &eoff))break;
+        if(fat_read_cluster(clu))return 0;
+        fat_lfn_entry_t *le = (fat_lfn_entry_t*)(g_fat.cluster_buf + eoff);
+        if(le->attr != FAT_ATTR_LFN)break;
+        uint8_t order = le->order & 0x3F;
+        if(order < 1 || order > 20)break;
+        int pos = (order - 1) * 13;
+        uint16_t chars[13];
+        for(int k = 0; k < 5; k++)chars[k] = le->name1[k];
+        for(int k = 0; k < 6; k++)chars[5 + k] = le->name2[k];
+        for(int k = 0; k < 2; k++)chars[11 + k] = le->name3[k];
+        for(int k = 0; k < 13 && pos + k < MAX_NAME - 1; k++){
+            uint16_t ch = chars[k];
+            if(ch == 0 || ch == 0xFFFF)continue;
+            name[pos + k] = (ch < 0x80) ? (char)ch : '?';
+            if(pos + k + 1 > total)total = pos + k + 1;
+        }
+        found = 1;
+    }
+    if(!found)return 0;
+    name[total] = 0;
+    return 1;
+}
+
+//目录迭代
+static int fat_readdir(fs_node_t *dir, uint64_t *cookie, fs_dirent_t *out){
+    if(!g_fat.disk || !dir || !dir->priv)return -1;
+    fat_node_priv_t *dp = (fat_node_priv_t*)dir->priv;
+    uint32_t idx = (uint32_t)(*cookie / sizeof(fat_dir_entry_t));
+    for(;;){
+        uint32_t clu, eoff;
+        if(fat_dir_entry_at(dp, idx, &clu, &eoff))return 1;
+        if(fat_read_cluster(clu))return -1;
+        fat_dir_entry_t *de = (fat_dir_entry_t*)(g_fat.cluster_buf + eoff);
+        uint8_t c = de->name[0];
+        if(c == FAT_DIRENT_END)return 1;
+        if(c == FAT_DIRENT_FREE || de->attr == FAT_ATTR_LFN || (de->attr & FAT_ATTR_VOLUME_ID) || c == '.'){
+            idx++;
+            continue;
+        }
+        if(!fat_reconstruct_lfn(dp, idx, out->name)){
+            fat_short_name(de, out->name);
+        }
+        out->ino = ((uint64_t)clu << 32) | eoff;
+        out->type = (de->attr & FAT_ATTR_DIRECTORY) ? FT_DIR : FT_FILE;
+        *cookie = (uint64_t)(idx + 1) * sizeof(fat_dir_entry_t);
+        return 0;
+    }
+}
+
 //FAT32节点操作集
 static fs_node_ops_t fat_ops = {
     .read     = fat_read,
@@ -795,6 +877,7 @@ static fs_node_ops_t fat_ops = {
     .mkdir    = fat_mkdir,
     .unlink   = fat_unlink,
     .rename   = fat_rename,
+    .readdir  = fat_readdir,
 };
 
 //挂载FAT32分区

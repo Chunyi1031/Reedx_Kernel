@@ -40,7 +40,7 @@ fi
 # 复制glibc静态链接hello程序
 if [ -f "build/app/hello.elf" ]; then
     echo "更新hello程序..."
-    cp "build/app/hello.elf" "$MOUNT_POINT/SYS/HELLO.ELF"
+    cp "build/app/hello.elf" "$MOUNT_POINT/SYS/eshell"
 fi
 
 # 复制echo程序(coreutils静态echo → /bin/echo)

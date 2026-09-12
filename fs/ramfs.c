@@ -64,6 +64,7 @@ static fs_node_t *ramfs_alloc_node(fs_node_t *dir, const char *name, int type){
     n->type = type;
     n->ops = (fs_node_ops_t*)&g_ramfs_ops;
     n->refs = 1;
+    n->ino = (uint64_t)(uintptr_t)n;
     //截断名字到MAX_NAME-1
     int i;
     for(i = 0; i < MAX_NAME - 1 && name[i]; i++) n->name[i] = name[i];
@@ -133,6 +134,21 @@ static int ramfs_rename(fs_node_t *olddir, const char *oldname, fs_node_t *newdi
     return 0;
 }
 
+//目录迭代
+static int ramfs_readdir(fs_node_t *dir, uint64_t *cookie, fs_dirent_t *out){
+    uint64_t idx = *cookie;
+    struct list_node *pos = dir->children.next;
+    uint64_t i = 0;
+    while(pos != &dir->children && i < idx){ pos = pos->next; i++; }
+    if(pos == &dir->children) return 1;//结束
+    fs_node_t *c = container_of(pos, fs_node_t, siblings);
+    out->ino = (uint64_t)(uintptr_t)c;
+    out->type = c->type;
+    strcpy(out->name, c->name);
+    *cookie = idx + 1;
+    return 0;
+}
+
 static const fs_node_ops_t g_ramfs_ops = {
     .read     = ramfs_read,
     .write    = ramfs_write,
@@ -142,6 +158,7 @@ static const fs_node_ops_t g_ramfs_ops = {
     .mkdir    = ramfs_mkdir,
     .unlink   = ramfs_unlink,
     .rename   = ramfs_rename,
+    .readdir  = ramfs_readdir,
 };
 
 //创建根目录节点

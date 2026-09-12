@@ -46,12 +46,15 @@
 #define SYS_TIME            201
 #define SYS_FUTEX           202
 #define SYS_SCHED_GETAFFINITY 204
+#define SYS_GETDENTS64      217
 #define SYS_SET_TID_ADDRESS 218
 #define SYS_CLOCK_GETTIME   228
 #define SYS_CLOCK_GETRES    229
 #define SYS_CLOCK_NANOSLEEP 230
 #define SYS_EXIT_GROUP      231
 #define SYS_OPENAT          257
+#define SYS_MKDIRAT         258
+#define SYS_UNLINKAT        263
 #define SYS_NEWFSTATAT      262
 #define SYS_RENAMEAT        264
 #define SYS_READLINKAT      267
@@ -60,6 +63,11 @@
 #define SYS_RENAMEAT2       316
 #define SYS_GETRANDOM       318
 #define AT_FDCWD            (-100)
+
+#define AT_REMOVEDIR        0x200
+#define RENAME_NOREPLACE    1
+#define RENAME_EXCHANGE     2
+#define RENAME_WHITEOUT     4
 
 #define SYSCALL_TABLE_SIZE  512
 

@@ -5,6 +5,7 @@
 #include <task.h>
 #include <klib.h>
 #include <mm/vmm.h>
+#include <mm/pmm.h>
 #include <drives/tty.h>
 #include <drives/ps2kbd.h>
 #include <idt.h>
@@ -52,6 +53,49 @@ uint64_t copy_to_user(void *to, const void *from, uint64_t n){
     if (uaddr >= USER_VADDR_MAX || uaddr + n > USER_VADDR_MAX) return n;
     memcpy(to, from, n);
     return 0;
+}
+
+//从用户空间拷贝字符串
+static long strncpy_from_user(char *dst, const void *src, long max){
+    uintptr_t uaddr = (uintptr_t)src;
+    long i = 0;
+    if(!dst || !src) return -1;
+    while(i < max - 1){
+        if(uaddr >= USER_VADDR_MAX) return -1;
+        char c = *(const char*)uaddr;
+        dst[i] = c;
+        if(c == 0) return i;
+        i++;
+        uaddr++;
+    }
+    dst[max - 1] = 0;
+    return max - 1;
+}
+
+/*
+ * int getdents64(unsigned int fd, struct linux_dirent64 *dirp, unsigned int count)
+ * 系统调用:getdents64 读取目录项
+ */
+static long sys_getdents64(long fd, long buf, long count, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!current_task) return -EBADF;
+	if(count <= 0) return -EINVAL;
+	if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used) return -EBADF;
+	if(count > 32768) count = 32768;
+	int pages = (int)((count + 4095) / 4096);
+	void *kbuf = (void*)PHYS_TO_VIRT(Pmm_Malloc(pages));
+	if(!kbuf) return -ENOMEM;
+	int n = FsGetdents(&current_task->files[fd], kbuf, (uint64_t)count);
+	if(n < 0){
+		Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), pages);
+		return n;
+	}
+	if(n > 0 && copy_to_user((void*)buf, kbuf, (uint64_t)n)){
+		Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), pages);
+		return -EFAULT;
+	}
+	Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), pages);
+	return n;
 }
 
 /*
@@ -195,8 +239,7 @@ static long sys_open(long path, long flags, long mode, long a4, long a5, long a6
 	if(!current_task)return -ENOENT;
 	//复制路径
 	char kpath[256];
-	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
-	kpath[255] = 0;
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
 	//分配文件描述符
 	int fd;
 	for(fd = 3; fd < MAX_FD; fd++) {
@@ -229,8 +272,7 @@ static long sys_mkdir(long path, long mode, long unused, long a4, long a5, long 
 	(void)unused; (void)a4; (void)a5; (void)a6;
 	if(!current_task)return -ENOENT;
 	char kpath[256];
-	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
-	kpath[255] = 0;
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
 	return FsMkdir(kpath, (int)mode) ? -ENOENT : 0;
 }
 
@@ -241,8 +283,7 @@ static long sys_rmdir(long path, long b, long c, long a4, long a5, long a6){
 	(void)b; (void)c; (void)a4; (void)a5; (void)a6;
 	if(!current_task)return -ENOENT;
 	char kpath[256];
-	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
-	kpath[255] = 0;
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
 	return FsUnlink(kpath) ? -ENOENT : 0;
 }
 
@@ -253,8 +294,7 @@ static long sys_unlink(long path, long b, long c, long a4, long a5, long a6){
 	(void)b; (void)c; (void)a4; (void)a5; (void)a6;
 	if(!current_task)return -ENOENT;
 	char kpath[256];
-	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
-	kpath[255] = 0;
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
 	return FsUnlink(kpath) ? -ENOENT : 0;
 }
 
@@ -266,30 +306,53 @@ static long sys_rename(long oldpath, long newpath, long c, long a4, long a5, lon
 	(void)c; (void)a4; (void)a5; (void)a6;
 	if(!current_task)return -ENOENT;
 	char kold[256], knew[256];
-	if(copy_from_user(kold, (void*)oldpath, 255))return -EFAULT;
-	if(copy_from_user(knew, (void*)newpath, 255))return -EFAULT;
-	kold[255] = 0;
-	knew[255] = 0;
+	if(strncpy_from_user(kold, (void*)oldpath, 256) < 0)return -EFAULT;
+	if(strncpy_from_user(knew, (void*)newpath, 256) < 0)return -EFAULT;
 	return FsRename(kold, knew) ? -ENOENT : 0;
 }
 
 /*
  * int renameat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath)
- * 仅支持 AT_FDCWD + 绝对路径
+ * 仅支持 AT_FDCWD
  */
 static long sys_renameat(long olddirfd, long oldpath, long newdirfd, long newpath, long a5, long a6){
 	(void)a5; (void)a6;
-	if(olddirfd != AT_FDCWD || newdirfd != AT_FDCWD)return -ENOSYS;
+	if((int)olddirfd != AT_FDCWD || (int)newdirfd != AT_FDCWD)return -ENOSYS;
 	return sys_rename(oldpath, newpath, 0, 0, 0, 0);
 }
 
 /*
+ * int mkdirat(int dirfd, const char *path, mode_t mode)
+ */
+static long sys_mkdirat(long dirfd, long path, long mode, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if((int)dirfd != AT_FDCWD)return -ENOSYS;
+	return sys_mkdir(path, mode, 0, 0, 0, 0);
+}
+
+/*
+ * int unlinkat(int dirfd, const char *path, int flags)
+ */
+static long sys_unlinkat(long dirfd, long path, long flags, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if((int)dirfd != AT_FDCWD)return -ENOSYS;
+	if(flags & AT_REMOVEDIR)return sys_rmdir(path, 0, 0, 0, 0, 0);
+	return sys_unlink(path, 0, 0, 0, 0, 0);
+}
+
+/*
  * int renameat2(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, unsigned int flags)
- * 仅支持 AT_FDCWD + 绝对路径 + flags=0
  */
 static long sys_renameat2(long olddirfd, long oldpath, long newdirfd, long newpath, long flags, long a6){
 	(void)a6;
-	if(olddirfd != AT_FDCWD || newdirfd != AT_FDCWD || flags != 0)return -ENOSYS;
+	if((int)olddirfd != AT_FDCWD || (int)newdirfd != AT_FDCWD)return -ENOSYS;
+	//RENAME_NOREPLACE，目标存在则返回EEXIST
+	if(flags & RENAME_NOREPLACE){
+		char knew[256];
+		if(strncpy_from_user(knew, (void*)newpath, 256) < 0)return -EFAULT;
+		if(FsResolve(knew))return -EEXIST;
+	}
+	if(flags & ~RENAME_NOREPLACE)return -ENOSYS;
 	return sys_rename(oldpath, newpath, 0, 0, 0, 0);
 }
 
@@ -311,7 +374,7 @@ static long sys_lseek(long fd, long off, long whence, long a4, long a5, long a6)
 static void fill_stat(stat_t *st, fs_node_t *node){
 	memset(st, 0, sizeof(*st));
 	st->st_dev = 1;
-	st->st_ino = (uint64_t)(uintptr_t)node;//节点指针作伪inode
+	st->st_ino = node->ino;
 	st->st_nlink = 1;
 	st->st_mode = (node->type == FT_DIR) ? (S_IFDIR | 0755) : (S_IFREG | 0644);
 	st->st_size = (int64_t)node->size;
@@ -331,8 +394,7 @@ static long sys_newstat(long path, long buf, long a3, long a4, long a5, long a6)
 	if(!current_task || !current_task->mm)return -ENOSYS;
 	if(!path || !buf)return -EFAULT;
 	char kpath[256];
-	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
-	kpath[255] = 0;
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
 	fs_node_t *node = FsResolve(kpath);
 	if(!node)return -ENOENT;
 	stat_t st;
@@ -395,8 +457,7 @@ static long sys_access(long path, long mode, long a3, long a4, long a5, long a6)
 	if(!current_task || !current_task->mm)return -ENOSYS;
 	if(!path)return -EFAULT;
 	char kpath[256];
-	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
-	kpath[255] = 0;
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
 	if(!FsResolve(kpath))return -ENOENT;
 	return 0;
 }
@@ -432,14 +493,15 @@ static long sys_chdir(long path, long a2, long a3, long a4, long a5, long a6){
 	if(!current_task || !current_task->mm)return -ENOSYS;
 	if(!path)return -EFAULT;
 	char kpath[256];
-	if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
-	kpath[255] = 0;
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
+	char norm[512];
+	if(FsNormalizePath(kpath, norm, sizeof(norm)) != 0)return -ENOENT;
 	fs_node_t *node = FsResolve(kpath);
 	if(!node)return -ENOENT;
 	if(node->type != FT_DIR)return -ENOTDIR;
-	int len = strlen(kpath);
+	int len = strlen(norm);
 	if(len > 255)len = 255;
-	memcpy(current_task->cwd, kpath, (uint64_t)len);
+	memcpy(current_task->cwd, norm, (uint64_t)len);
 	current_task->cwd[len] = 0;
 	return 0;
 }
@@ -971,15 +1033,21 @@ static long sys_mmap(long addr, long length, long prot, long flags, long fd, lon
 		FsSeek(ff, (int64_t)offset, SEEK_SET);
 		uint64_t remain = (uint64_t)length;
 		uint64_t off = 0;
-		char kbuf[512];
+		const uint64_t BIG = 32 * PAGE_SIZE;
+		void *kbuf = (void*)PHYS_TO_VIRT(Pmm_Malloc(32));
+		if(!kbuf) return -ENOMEM;
 		while(remain){
-			uint64_t chunk = remain > sizeof(kbuf) ? sizeof(kbuf) : remain;
+			uint64_t chunk = remain > BIG ? BIG : remain;
 			uint64_t n = FsRead(ff, kbuf, chunk);
 			if(n == 0)break;//EOF，剩余保持零
-			if(mmap_write_mem(current_task->mm, vaddr + off, kbuf, n))return -ENOMEM;
+			if(mmap_write_mem(current_task->mm, vaddr + off, kbuf, n)){
+				Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 32);
+				return -ENOMEM;
+			}
 			off += n;
 			remain -= n;
 		}
+		Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 32);
 	}
 	return (long)vaddr;
 }
@@ -1057,6 +1125,7 @@ void InitSyscall(void){
 	syscall_table[SYS_READ]       = sys_read;
 	syscall_table[SYS_WRITE]      = sys_write;
 	syscall_table[SYS_PREAD64]    = sys_pread64;
+	syscall_table[SYS_GETDENTS64] = sys_getdents64;
 	syscall_table[SYS_OPEN]       = sys_open;
 	syscall_table[SYS_CLOSE]      = sys_close;
 	syscall_table[SYS_STAT]       = sys_newstat;
@@ -1096,8 +1165,10 @@ void InitSyscall(void){
 	syscall_table[SYS_WAIT4]      = sys_waitpid;
 	syscall_table[SYS_EXIT_GROUP] = sys_exit_group;
 	syscall_table[SYS_MKDIR]      = sys_mkdir;
+	syscall_table[SYS_MKDIRAT]    = sys_mkdirat;
 	syscall_table[SYS_RMDIR]      = sys_rmdir;
 	syscall_table[SYS_UNLINK]     = sys_unlink;
+	syscall_table[SYS_UNLINKAT]   = sys_unlinkat;
 	syscall_table[SYS_RENAME]     = sys_rename;
 	syscall_table[SYS_RENAMEAT]   = sys_renameat;
 	syscall_table[SYS_RENAMEAT2]  = sys_renameat2;
