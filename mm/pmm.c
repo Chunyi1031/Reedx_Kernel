@@ -60,12 +60,8 @@ int Init_Physical_Memory_Manager() {
         early_printk("Physical Memory Manager initialization failed: UEFI Memory Map not found\n");
         return 1;
     }
-    //设置位置 —— KernelAddress 替代旧 KernelStartAddress
     memdesc_phys_base = SYSTEM_BootParam->KernelAddress + SYSTEM_BootParam->KernelSize;
     memdesc_phys_base = (memdesc_phys_base + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-    //注意：此刻高半映射尚未建立（InitKernelMapping 之后才可用），
-    //先用物理地址访问（UEFI 页表低半区 identity 映射），
-    //InitKernelMapping 完成后由 PmmSwitchToHigh 切换为高半地址。
     MemDescAddr = (OS_MEMORY_DESCRIPTOR*)memdesc_phys_base;
     if (!MemDescAddr) {
         print_error();
@@ -211,41 +207,58 @@ void PmmSwitchToHigh(void){
     MemDescAddr = (OS_MEMORY_DESCRIPTOR*)PHYS_TO_VIRT((uintptr_t)MemDescAddr);
 }
 
+static spinlock_t g_pmm_lock = {0};//全局物理内存锁
+
 void* Pmm_Malloc(int pages) {
-    if(pages <= 0)return NULL;
-    for(int i = 0;i < MemDescNum;i ++){
-        OS_MEMORY_DESCRIPTOR* desc = &MemDescAddr[i];
-        int index = BitmapAllocBits(&desc->bitmap,PMM_FREE,pages);
-        if(index >= 0){
-            if(desc->refs)for(int j = 0;j < pages;j ++)desc->refs[index + j] = 1;
-            return (void*)(desc->Address + index * PAGE_SIZE);
+    uint64_t flags;
+    spin_lock_irqsave(&g_pmm_lock, flags);
+    void *r = NULL;
+    if(pages > 0){
+        for(int i = 0;i < MemDescNum;i ++){
+            OS_MEMORY_DESCRIPTOR* desc = &MemDescAddr[i];
+            int index = BitmapAllocBits(&desc->bitmap,PMM_FREE,pages);
+            if(index >= 0){
+                if(desc->refs)for(int j = 0;j < pages;j ++)desc->refs[index + j] = 1;
+                r = (void*)(desc->Address + index * PAGE_SIZE);
+                break;
+            }
         }
     }
-    return NULL;
+    spin_unlock_irqrestore(&g_pmm_lock, flags);
+    return r;
 }
 
 //增加物理页引用计数
 void Pmm_RefInc(void* addr){
+    uint64_t flags;
+    spin_lock_irqsave(&g_pmm_lock, flags);
     OS_MEMORY_DESCRIPTOR* desc = NULL;
     uint64_t offset = 0;
     find_addr_in_bitmap((uintptr_t)addr,&desc,&offset);
-    if(!desc || !desc->refs)return;
-    desc->refs[offset] ++;
+    if(desc && desc->refs){
+        desc->refs[offset] ++;
+    }
+    spin_unlock_irqrestore(&g_pmm_lock, flags);
 }
 
 void Pmm_Free(void* addr,int pages) {
-    if(pages <= 0)return;
-    OS_MEMORY_DESCRIPTOR* desc = NULL;
-    uint64_t offset = 0;
-    find_addr_in_bitmap((uintptr_t)addr,&desc,&offset);
-    if(!desc)return;
-    for(int i = 0;i < pages;i ++){
-        uint64_t bit = offset + i;
-        if(!desc->refs || desc->refs[bit] == 0){
-            BitmapSetBits(&desc->bitmap,bit,1,PMM_FREE);//无计数信息则直接释放
-            continue;
+    uint64_t flags;
+    spin_lock_irqsave(&g_pmm_lock, flags);
+    if(pages > 0){
+        OS_MEMORY_DESCRIPTOR* desc = NULL;
+        uint64_t offset = 0;
+        find_addr_in_bitmap((uintptr_t)addr,&desc,&offset);
+        if(desc){
+            for(int i = 0;i < pages;i ++){
+                uint64_t bit = offset + i;
+                if(!desc->refs || desc->refs[bit] == 0){
+                    BitmapSetBits(&desc->bitmap,bit,1,PMM_FREE);//无计数信息则直接释放
+                    continue;
+                }
+                desc->refs[bit] --;//引用-1
+                if(desc->refs[bit] == 0)BitmapSetBits(&desc->bitmap,bit,1,PMM_FREE);//归零才真正释放
+            }
         }
-        desc->refs[bit] --;//引用-1
-        if(desc->refs[bit] == 0)BitmapSetBits(&desc->bitmap,bit,1,PMM_FREE);//归零才真正释放
     }
+    spin_unlock_irqrestore(&g_pmm_lock, flags);
 }

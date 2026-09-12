@@ -17,7 +17,9 @@
 #define SYS_MUNMAP          11
 #define SYS_BRK             12
 #define SYS_RT_SIGACTION    13
+#define SYS_RT_SIGPROCMASK  14
 #define SYS_IOCTL           16
+#define SYS_PREAD64         17
 #define SYS_WRITEV          20
 #define SYS_ACCESS          21
 #define SYS_NANOSLEEP       35
@@ -97,6 +99,11 @@
 //arch_prctl代码
 #define ARCH_SET_FS  0x1002 //设置FS段基址
 #define ARCH_GET_FS  0x1003 //读取FS段基址
+
+//信号掩码操作
+#define SIG_BLOCK    0
+#define SIG_UNBLOCK  1
+#define SIG_SETMASK  2
 
 //errno值（POSIX）
 #define EPERM               1

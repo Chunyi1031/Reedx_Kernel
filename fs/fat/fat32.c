@@ -372,60 +372,85 @@ static void fat_fill_lfn(fat_lfn_entry_t *lfn, const char *name, int name_len, i
     lfn->name3[1] = chars[12];
 }
 
-//目录查找
-static fs_node_t *fat_lookup(fs_node_t *dir, const char *name){
-    if(!g_fat.disk || !dir || !dir->priv) return NULL;
-    //转8.3文件名
-    char base[8], ext[3];
-    to_83(name, base, ext);
-    fat_node_priv_t *dp = (fat_node_priv_t*)dir->priv;
-    uint32_t clu = dp->first_clu;
-    while(clu >= 2 && clu < FAT_CLUSTER_EOF){
-        if(fat_read_cluster(clu))return NULL;//读取簇
-        //遍历簇中的目录项
-        for(uint32_t off = 0; off < g_fat.bpc; off += sizeof(fat_dir_entry_t)){
-            fat_dir_entry_t *de = (fat_dir_entry_t*)(g_fat.cluster_buf + off);
-            if(de->name[0] == FAT_DIRENT_END)return NULL;//目录项链结束
-            if(de->name[0] == FAT_DIRENT_FREE)continue;//已删除
-            if(de->attr == FAT_ATTR_LFN)continue;//长文件名条目
-            if(de->attr & FAT_ATTR_VOLUME_ID)continue;//卷标
-            if(de->name[0] == '.')continue;//.和..
-            if(memcmp(de->name, base, 8) != 0 || memcmp(de->ext, ext, 3) != 0)continue;//匹配名称
-            //构建节点
-            uint32_t first = ((uint32_t)de->fst_clus_hi << 16) | de->fst_clus_lo;
-            uint32_t size = de->file_size;
-            int type = (de->attr & FAT_ATTR_DIRECTORY) ? FT_DIR : FT_FILE;
-            return fat_new_node(name, type, first, size, clu, off);
-        }
-        clu = fat_get_entry(clu);//下一簇
+//比较收集的LFN与名字(ASCII大小写不敏感)
+static int fat_lfn_eq(const uint16_t *lfn, int lfn_len, const char *name){
+    int i = 0;
+    for(;;){
+        uint16_t ch = (i < lfn_len) ? lfn[i] : 0;
+        if(ch == 0xFFFF || ch == 0)ch = 0;//填充或终止都视为结束
+        char q = name[i] ? name[i] : 0;
+        if(ch == 0 && q == 0)return 1;
+        if(ch == 0 || q == 0)return 0;
+        if(ch >= 0x80)return 0;//非ASCII暂不支持
+        char c = (char)ch;
+        if(c >= 'a' && c <= 'z')c -= 32;
+        if(q >= 'a' && q <= 'z')q -= 32;
+        if(c != q)return 0;
+        i++;
     }
-    return NULL;
 }
 
-//在目录中定位匹配名字的目录项,返回所在簇+偏移
+//在目录中定位匹配名字的目录项(支持LFN长文件名), 返回所在簇+偏移
 static int fat_find_dirent(fs_node_t *dir, const char *name, uint32_t *out_clus, uint32_t *out_off){
-    if(!g_fat.disk || !dir || !dir->priv) return -1;
+    if(!g_fat.disk || !dir || !dir->priv || !name) return -1;
     char base[8], ext[3];
     to_83(name, base, ext);
     fat_node_priv_t *dp = (fat_node_priv_t*)dir->priv;
     uint32_t clu = dp->first_clu;
+    uint16_t lfn[256];
+    int lfn_len = 0;
     while(clu >= 2 && clu < FAT_CLUSTER_EOF){
         if(fat_read_cluster(clu)) return -1;
         for(uint32_t off = 0; off < g_fat.bpc; off += sizeof(fat_dir_entry_t)){
             fat_dir_entry_t *de = (fat_dir_entry_t*)(g_fat.cluster_buf + off);
             if(de->name[0] == FAT_DIRENT_END) return -1;//目录项链结束
-            if(de->name[0] == FAT_DIRENT_FREE) continue;
-            if(de->attr == FAT_ATTR_LFN) continue;
-            if(de->attr & FAT_ATTR_VOLUME_ID) continue;
-            if(de->name[0] == '.') continue;
-            if(memcmp(de->name, base, 8) != 0 || memcmp(de->ext, ext, 3) != 0) continue;
-            *out_clus = clu;
-            *out_off = off;
-            return 0;
+            if(de->name[0] == FAT_DIRENT_FREE){ lfn_len = 0; continue; }//已删除
+            if(de->attr == FAT_ATTR_LFN){
+                //收集LFN字符(条目倒序存放: 0x40|n为文件名开头块)
+                uint8_t order = de->name[0] & 0x3F;
+                if(order >= 1 && order <= 20){
+                    int pos = (order - 1) * 13;
+                    if(pos + 13 <= 256){
+                        fat_lfn_entry_t *le = (fat_lfn_entry_t*)de;
+                        for(int j = 0; j < 5; j++)lfn[pos + j] = le->name1[j];
+                        for(int j = 0; j < 6; j++)lfn[pos + 5 + j] = le->name2[j];
+                        for(int j = 0; j < 2; j++)lfn[pos + 11 + j] = le->name3[j];
+                        if(order * 13 > lfn_len)lfn_len = order * 13;
+                    }
+                }
+                continue;
+            }
+            if(de->attr & FAT_ATTR_VOLUME_ID){ lfn_len = 0; continue; }//卷标
+            if(de->name[0] == '.'){ lfn_len = 0; continue; }//.和..
+            //短条目: 8.3短名匹配优先
+            if(memcmp(de->name, base, 8) == 0 && memcmp(de->ext, ext, 3) == 0){
+                *out_clus = clu;
+                *out_off = off;
+                return 0;
+            }
+            //长名匹配
+            if(lfn_len > 0 && fat_lfn_eq(lfn, lfn_len, name)){
+                *out_clus = clu;
+                *out_off = off;
+                return 0;
+            }
+            lfn_len = 0;
         }
         clu = fat_get_entry(clu);
     }
     return -1;
+}
+
+//目录查找
+static fs_node_t *fat_lookup(fs_node_t *dir, const char *name){
+    uint32_t clu, off;
+    if(fat_find_dirent(dir, name, &clu, &off) != 0)return NULL;
+    if(fat_read_cluster(clu))return NULL;
+    fat_dir_entry_t *de = (fat_dir_entry_t*)(g_fat.cluster_buf + off);
+    uint32_t first = ((uint32_t)de->fst_clus_hi << 16) | de->fst_clus_lo;
+    uint32_t size = de->file_size;
+    int type = (de->attr & FAT_ATTR_DIRECTORY) ? FT_DIR : FT_FILE;
+    return fat_new_node(name, type, first, size, clu, off);
 }
 
 //文件读取

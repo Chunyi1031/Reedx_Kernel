@@ -50,6 +50,7 @@ typedef struct task_struct {
     int                 futex_timedout;//futex等待是否因超时被唤醒
     void*               kernel_stack;//内核栈指针
     uint64_t            stack_size; //内核栈大小
+    uint64_t            sigmask;    //信号掩码
     struct list_node    list;       //就绪链表节点
     struct list_node    wait_node;  //等待队列节点
     uint64_t            wake_up_ticks;//msleep超时tick

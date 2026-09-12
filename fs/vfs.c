@@ -2,6 +2,7 @@
 #include <syscalls.h>
 
 static fs_node_t *fs_root = NULL;
+static spinlock_t g_fs_lock = {0};//全局文件系统锁
 
 fs_node_t *FsRoot(void){
     return fs_root;
@@ -28,7 +29,11 @@ static fs_node_t *resolve(const char *path){
 }
 //公开的路径解析
 fs_node_t *FsResolve(const char *path){
-    return resolve(path);
+    uint64_t flags;
+    spin_lock_irqsave(&g_fs_lock, flags);
+    fs_node_t *n = resolve(path);
+    spin_unlock_irqrestore(&g_fs_lock, flags);
+    return n;
 }
 //解析父目录与末段名:/a/b/c → parent=/a/b, name=c
 static int resolve_parent(const char *path, fs_node_t **parent, char name[MAX_NAME]){
@@ -52,7 +57,10 @@ static int resolve_parent(const char *path, fs_node_t **parent, char name[MAX_NA
 /*DeepSeek V4 Pro-END*/
 
 int FsOpen(const char *path, int flags, fs_file_t *out){
-    if(!out)return -1;
+    uint64_t iflags;
+    spin_lock_irqsave(&g_fs_lock, iflags);
+    int r = -1;
+    if(!out)goto done;
     fs_node_t *node = resolve(path);//解析文件节点
     //解析父目录与末段名
     if(!node && (flags & O_CREAT)){
@@ -61,8 +69,8 @@ int FsOpen(const char *path, int flags, fs_file_t *out){
         if(resolve_parent(path, &parent, name) == 0 && parent->ops->create)node = parent->ops->create(parent, name, FT_FILE);//如果文件不存在则创建
     }
     //检查节点是否存在或非文件
-    if(!node)return -1;
-    if(node->type != FT_FILE)return -1;
+    if(!node)goto done;
+    if(node->type != FT_FILE)goto done;
     if(flags & O_TRUNC){
         if(node->ops->truncate)node->ops->truncate(node);
     }
@@ -72,84 +80,130 @@ int FsOpen(const char *path, int flags, fs_file_t *out){
     out->flags = flags;
     out->off = (flags & O_APPEND) ? node->size : 0;
     out->used = true;
-    return 0;
+    r = 0;
+done:
+    spin_unlock_irqrestore(&g_fs_lock, iflags);
+    return r;
 }
 
 void FsClose(fs_file_t *f){
-    if(!f || !f->used)return;//检查是否存在且已打开
-    //清理数据
-    f->used = false;
-    f->node = NULL;
-    f->off = 0;
+    uint64_t flags;
+    spin_lock_irqsave(&g_fs_lock, flags);
+    if(f && f->used){
+        //清理数据
+        f->used = false;
+        f->node = NULL;
+        f->off = 0;
+    }
+    spin_unlock_irqrestore(&g_fs_lock, flags);
 }
 
 uint64_t FsRead(fs_file_t *f, void *buf, uint64_t len){
-    if(!f || !f->used || !f->node || !f->node->ops->read) return 0;
-    if((f->flags & O_ACCMODE) == O_WRONLY)return 0;//只写打开的文件不可读
-    uint64_t n = f->node->ops->read(f->node, f->off, buf, len);
-    f->off += n;
+    uint64_t flags;
+    spin_lock_irqsave(&g_fs_lock, flags);
+    uint64_t n = 0;
+    if(f && f->used && f->node && f->node->ops->read && (f->flags & O_ACCMODE) != O_WRONLY){//只写打开的文件不可读
+        n = f->node->ops->read(f->node, f->off, buf, len);
+        f->off += n;
+    }
+    spin_unlock_irqrestore(&g_fs_lock, flags);
     return n;
 }
 
 uint64_t FsWrite(fs_file_t *f, const void *buf, uint64_t len){
-    if(!f || !f->used || !f->node || !f->node->ops->write) return 0;
-    if((f->flags & O_ACCMODE) == O_RDONLY)return 0;//只读打开的文件不可写
-    if(f->flags & O_APPEND) f->off = f->node->size;//追加模式每次写强制写到文件末尾
-    uint64_t n = f->node->ops->write(f->node, f->off, buf, len);
-    f->off += n;
+    uint64_t flags;
+    spin_lock_irqsave(&g_fs_lock, flags);
+    uint64_t n = 0;
+    if(f && f->used && f->node && f->node->ops->write && (f->flags & O_ACCMODE) != O_RDONLY){//只读打开的文件不可写
+        if(f->flags & O_APPEND) f->off = f->node->size;//追加模式每次写强制写到文件末尾
+        n = f->node->ops->write(f->node, f->off, buf, len);
+        f->off += n;
+    }
+    spin_unlock_irqrestore(&g_fs_lock, flags);
     return n;
 }
 
 int FsSeek(fs_file_t *f, int64_t off, int whence){
-    if(!f || !f->used || !f->node) return -1;
-    int64_t base;
-    if(whence == SEEK_SET) base = 0;
-    else if(whence == SEEK_CUR) base = (int64_t)f->off;
-    else if(whence == SEEK_END) base = (int64_t)f->node->size;
-    else return -1;
-    int64_t npos = base + off;
-    if(npos < 0) return -1;
-    f->off = (uint64_t)npos;
-    return (int)f->off;
+    uint64_t flags;
+    spin_lock_irqsave(&g_fs_lock, flags);
+    int r = -1;
+    if(f && f->used && f->node){
+        int64_t base;
+        if(whence == SEEK_SET) base = 0;
+        else if(whence == SEEK_CUR) base = (int64_t)f->off;
+        else if(whence == SEEK_END) base = (int64_t)f->node->size;
+        else goto done;
+        int64_t npos = base + off;
+        if(npos < 0)goto done;
+        f->off = (uint64_t)npos;
+        r = (int)f->off;
+    }
+done:
+    spin_unlock_irqrestore(&g_fs_lock, flags);
+    return r;
 }
 
 uint64_t FsSize(fs_file_t *f){
-    if(!f || !f->used || !f->node) return 0;
-    return f->node->size;
+    uint64_t flags;
+    spin_lock_irqsave(&g_fs_lock, flags);
+    uint64_t r = (f && f->used && f->node) ? f->node->size : 0;
+    spin_unlock_irqrestore(&g_fs_lock, flags);
+    return r;
 }
 
 int FsMkdir(const char *path, int mode){
-    if(!path) return -1;
-    fs_node_t *parent = NULL;
-    char name[MAX_NAME];
-    if(resolve_parent(path, &parent, name) != 0) return -1;
-    if(!parent->ops->mkdir) return -1;
-    return parent->ops->mkdir(parent, name, mode);
+    uint64_t flags;
+    spin_lock_irqsave(&g_fs_lock, flags);
+    int r = -1;
+    if(path){
+        fs_node_t *parent = NULL;
+        char name[MAX_NAME];
+        if(resolve_parent(path, &parent, name) == 0 && parent->ops->mkdir)
+            r = parent->ops->mkdir(parent, name, mode);
+    }
+    spin_unlock_irqrestore(&g_fs_lock, flags);
+    return r;
 }
 
 int FsUnlink(const char *path){
-    if(!path) return -1;
-    fs_node_t *parent = NULL;
-    char name[MAX_NAME];
-    if(resolve_parent(path, &parent, name) != 0) return -1;
-    if(!parent->ops->unlink) return -1;
-    return parent->ops->unlink(parent, name);
+    uint64_t flags;
+    spin_lock_irqsave(&g_fs_lock, flags);
+    int r = -1;
+    if(path){
+        fs_node_t *parent = NULL;
+        char name[MAX_NAME];
+        if(resolve_parent(path, &parent, name) == 0 && parent->ops->unlink)
+            r = parent->ops->unlink(parent, name);
+    }
+    spin_unlock_irqrestore(&g_fs_lock, flags);
+    return r;
 }
 
 int FsRename(const char *oldpath, const char *newpath){
     if(!oldpath || !newpath) return -1;
-    if(strcmp(oldpath, newpath) == 0) return 0;
-    if(FsResolve(newpath)){
-        if(FsUnlink(newpath) != 0) return -1;
-    }
-    fs_node_t *oldparent = NULL;
-    char oldname[MAX_NAME];
-    fs_node_t *newparent = NULL;
-    char newname[MAX_NAME];
-    if(resolve_parent(oldpath, &oldparent, oldname) != 0) return -1;
-    if(resolve_parent(newpath, &newparent, newname) != 0) return -1;
-    if(!oldparent->ops->rename) return -1;
-    return oldparent->ops->rename(oldparent, oldname, newparent, newname);
+    uint64_t flags;
+    spin_lock_irqsave(&g_fs_lock, flags);
+    int r = -1;
+    do{
+        if(strcmp(oldpath, newpath) == 0){ r = 0; break; }//同一路径无需操作
+        //目标已存在则先删除
+        if(resolve(newpath)){
+            fs_node_t *tparent = NULL;
+            char tname[MAX_NAME];
+            if(resolve_parent(newpath, &tparent, tname) != 0 || !tparent->ops->unlink) break;
+            if(tparent->ops->unlink(tparent, tname) != 0) break;
+        }
+        fs_node_t *oldparent = NULL;
+        char oldname[MAX_NAME];
+        fs_node_t *newparent = NULL;
+        char newname[MAX_NAME];
+        if(resolve_parent(oldpath, &oldparent, oldname) != 0) break;
+        if(resolve_parent(newpath, &newparent, newname) != 0) break;
+        if(!oldparent->ops->rename) break;
+        r = oldparent->ops->rename(oldparent, oldname, newparent, newname);
+    }while(0);
+    spin_unlock_irqrestore(&g_fs_lock, flags);
+    return r;
 }
 
 void FsInit(struct disk_info *disk){

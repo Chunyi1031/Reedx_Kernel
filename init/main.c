@@ -109,8 +109,8 @@ void KernelMain(){
     if(!InitDiskAndFs())panic("Disk init failed!");
     mm_struct* umm = vmm_create_address_space();
     if(!umm)SYSTEM_STOP();
-    if(!vmm_mmap(umm, 0x400000, PAGE_SIZE, VM_READ | VM_EXEC | VM_WRITE))SYSTEM_STOP();
-    if(!vmm_mmap(umm, umm->start_stack, PAGE_SIZE, VM_READ | VM_WRITE))SYSTEM_STOP();
+    if(vmm_mmap(umm, 0x400000, PAGE_SIZE, VM_READ | VM_EXEC | VM_WRITE))SYSTEM_STOP();
+    if(vmm_mmap(umm, umm->start_stack, PAGE_SIZE, VM_READ | VM_WRITE))SYSTEM_STOP();
     uintptr_t *code_pte = (uintptr_t*)get_pte((uintptr_t)umm->pgd, 0x400000, 0, 0);
     if(!code_pte || !pte_is_present(*code_pte))SYSTEM_STOP();
     memcpy((void*)PHYS_TO_VIRT(pte_get_paddr(*code_pte)), (void*)user_main,

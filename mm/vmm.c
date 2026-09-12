@@ -415,27 +415,28 @@ vm_area_t* find_vma(mm_struct *mm, uintptr_t addr) {
     return NULL;
 }
 
-void* vmm_mmap(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t flags) {
-    if (!mm || !length) return NULL;
+//映射一段匿名内存(0成功/-1失败)
+int vmm_mmap(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t flags) {
+    if (!mm || !length) return -1;
     vaddr &= PAGE_MASK;
     uint64_t pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
     vm_area_t *vma = vma_create(mm, vaddr, vaddr + pages * PAGE_SIZE, flags);
-    if (!vma) return NULL;
+    if (!vma) return -1;
     for (uint64_t i = 0; i < pages; i++) {
         void *pa = Pmm_Malloc(1);
-        if (!pa) return NULL;
+        if (!pa) return -1;
         memset((void*)PHYS_TO_VIRT((uintptr_t)pa), 0, PAGE_SIZE);
         uint64_t pte_flags = PTE_PRESENT | PTE_USER;
         if (flags & VM_WRITE) pte_flags |= PTE_WRITABLE;
         if (!(flags & VM_EXEC) && cpu_nx_enabled) pte_flags |= PTE_NO_EXECUTE;
         if (vmm_map_page((uintptr_t)mm->pgd, vaddr + i * PAGE_SIZE, (uintptr_t)pa, pte_flags) != 0) {
             Pmm_Free(pa, 1);
-            return NULL;
+            return -1;
         }
         mm->rss++;
     }
     vma_insert(mm, vma);
-    return (void*)vaddr;
+    return 0;
 }
 
 int vmm_map_user_page(mm_struct *mm, uintptr_t vaddr, uintptr_t paddr, uint64_t flags) {
@@ -468,10 +469,12 @@ int vmm_map_user_page(mm_struct *mm, uintptr_t vaddr, uintptr_t paddr, uint64_t 
 int vmm_munmap(mm_struct *mm, uintptr_t vaddr, uint64_t length){
     if(!mm || !length)return -1;
     vaddr &= PAGE_MASK;
-    uint64_t pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+    uintptr_t start = vaddr;
+    uintptr_t end = (vaddr + length + PAGE_SIZE - 1) & PAGE_MASK;
+    uint64_t pages = (end - start) / PAGE_SIZE;
     //解除映射并释放物理页
     for(uint64_t i = 0; i < pages; i++){
-        uintptr_t va = vaddr + i * PAGE_SIZE;
+        uintptr_t va = start + i * PAGE_SIZE;
         uintptr_t pa = 0;
         if(vmm_unmap_page((uintptr_t)mm->pgd, va, &pa) == 0){
             if(pa){
@@ -480,14 +483,39 @@ int vmm_munmap(mm_struct *mm, uintptr_t vaddr, uint64_t length){
             }
         }
     }
-    //删除覆盖该范围的VMA
-    vm_area_t *vma = find_vma(mm, vaddr);
-    if(vma){
-        list_del(&vma->vm_list);
-        mm->total_vm -= vma->vm_page_count;
-        mm->mmap_cache = NULL;
-        Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)vma), 1);
+    //拆分/删除覆盖该范围的VMA
+    vm_area_t *vma, *tmp;
+    list_for_each_entry_safe(vma, tmp, &mm->mmap, vm_list) {
+        if (vma->vm_end <= start || vma->vm_start >= end)continue;
+        //如果完全包含，删除整个VMA
+        if (vma->vm_start >= start && vma->vm_end <= end) {
+            list_del(&vma->vm_list);
+            mm->total_vm -= vma->vm_page_count;
+            Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)vma), 1);
+        //VMA完全包含munmap范围，拆成左右两段
+        }else if(vma->vm_start < start && vma->vm_end > end){
+            vm_area_t *right = vma_create(mm, end, vma->vm_end, vma->vm_flags);
+            if(!right)return -1;
+            uint64_t removed = (end - start) / PAGE_SIZE;
+            vma->vm_end = start;
+            vma->vm_page_count = (start - vma->vm_start) / PAGE_SIZE;
+            mm->total_vm -= removed;
+            vma_insert(mm, right);
+        //右重叠，截断VMA右端
+        }else if(vma->vm_start < start){
+            uint64_t orig = vma->vm_page_count;
+            vma->vm_end = start;
+            vma->vm_page_count = (start - vma->vm_start) / PAGE_SIZE;
+            mm->total_vm -= orig - vma->vm_page_count;
+        //左重叠，截断VMA左端
+        }else{
+            uint64_t orig = vma->vm_page_count;
+            vma->vm_start = end;
+            vma->vm_page_count = (vma->vm_end - end) / PAGE_SIZE;
+            mm->total_vm -= orig - vma->vm_page_count;
+        }
     }
+    mm->mmap_cache = NULL;
     return 0;
 }
 

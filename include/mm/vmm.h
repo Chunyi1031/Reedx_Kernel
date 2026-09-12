@@ -73,7 +73,7 @@ vm_area_t* find_vma(mm_struct *mm, uintptr_t addr);
  * @return 成功返回映射的虚拟地址，失败返回 NULL
  * @author DeepSeek V4 Pro
  */
-void* vmm_mmap(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t flags);
+int vmm_mmap(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t flags);
 /**
  * @brief 为用户地址空间映射一页
  * @param mm: 地址空间

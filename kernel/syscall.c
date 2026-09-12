@@ -138,6 +138,54 @@ static long sys_write(long fd, long buf, long count, long a4, long a5, long a6){
 }
 
 /*
+ * ssize_t pread64(int fd, void *buf, size_t count, off_t offset)
+ * 系统调用:pread64  从offset处读, 不改变文件当前位置
+ */
+static long sys_pread64(long fd, long buf, long count, long off, long a5, long a6){
+	(void)a5; (void)a6;
+	if(!current_task)return -EBADF;
+	if(count < 0)return -EINVAL;
+	if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+	if((current_task->files[fd].flags & O_ACCMODE) == O_WRONLY)return -EBADF;
+	uint64_t old_off = current_task->files[fd].off;
+	FsSeek(&current_task->files[fd], (int64_t)off, SEEK_SET);
+	long total = 0;
+	char kbuf[512];
+	while(total < count){
+		long chunk = count - total;
+		if(chunk > (long)sizeof(kbuf))chunk = sizeof(kbuf);
+		uint64_t n = FsRead(&current_task->files[fd], kbuf, (uint64_t)chunk);
+		if(n == 0)break;//EOF
+		if(copy_to_user((char*)buf + total, kbuf, n)){ total = -EFAULT; break; }
+		total += (long)n;
+	}
+	FsSeek(&current_task->files[fd], (int64_t)old_off, SEEK_SET);//恢复原位置
+	return total;
+}
+
+/*
+ * int rt_sigprocmask(int how, const sigset_t *set, sigset_t *oldset, size_t sigsetsize)
+ */
+static long sys_rt_sigprocmask(long how, long set, long oldset, long sigsetsize, long a5, long a6){
+	(void)a5; (void)a6;
+	if(!current_task)return -ENOSYS;
+	if(sigsetsize != 8)return -EINVAL;
+	uint64_t old = current_task->sigmask;
+	if(oldset){
+		if(copy_to_user((void*)oldset, &old, 8))return -EFAULT;
+	}
+	if(set){
+		uint64_t mask;
+		if(copy_from_user(&mask, (void*)set, 8))return -EFAULT;
+		if(how == SIG_BLOCK)current_task->sigmask |= mask;
+		else if(how == SIG_UNBLOCK)current_task->sigmask &= ~mask;
+		else if(how == SIG_SETMASK)current_task->sigmask = mask;
+		else return -EINVAL;
+	}
+	return 0;
+}
+
+/*
  * int open(const char *pathname, int flags, mode_t mode)
  * 系统调用：open
  * 打开文件
@@ -852,7 +900,7 @@ static long sys_brk(long addr, long a2, long a3, long a4, long a5, long a6){
 		uintptr_t start = (mm->brk + PAGE_SIZE - 1) & PAGE_MASK;
 		uintptr_t end = (new_brk + PAGE_SIZE - 1) & PAGE_MASK;
 		if(end > start){
-			if(!vmm_mmap(mm, start, end - start, VM_READ | VM_WRITE))return (long)mm->brk;
+			if(vmm_mmap(mm, start, end - start, VM_READ | VM_WRITE))return (long)mm->brk;
 		}
 	//小于原堆，收缩堆
 	}else if(new_brk < mm->brk){
@@ -867,14 +915,39 @@ static long sys_brk(long addr, long a2, long a3, long a4, long a5, long a6){
 
 /*
  * void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
- * 仅支持匿名私有映射(fd=-1或MAP_ANONYMOUS)
+ * 支持匿名私有映射与文件私有映射
  */
 static uintptr_t g_mmap_hint = 0x10000000;
+
+//把内核数据写入mm的已映射页(文件映射填充用)
+static int mmap_write_mem(mm_struct *mm, uintptr_t vaddr, const void *src, uint64_t len){
+    while(len){
+        uintptr_t page = vaddr & PAGE_MASK;
+        uintptr_t off  = vaddr & (PAGE_SIZE - 1);
+        uint64_t chunk = len;
+        if(chunk > PAGE_SIZE - off) chunk = PAGE_SIZE - off;
+        uintptr_t *pte = (uintptr_t*)get_pte((uintptr_t)mm->pgd, page, 0, 0);
+        if(!pte || !pte_is_present(*pte)) return -1;
+        memcpy((void*)PHYS_TO_VIRT(pte_get_paddr(*pte) + off), src, chunk);
+        vaddr += chunk;
+        src = (const uint8_t*)src + chunk;
+        len -= chunk;
+    }
+    return 0;
+}
+
 static long sys_mmap(long addr, long length, long prot, long flags, long fd, long offset){
-	(void)offset;
 	if(!current_task || !current_task->mm)return -ENOMEM;
 	if(length <= 0)return -EINVAL;
-	if((long)fd >= 0 && !(flags & MAP_ANONYMOUS))return -ENODEV;//暂不支持文件映射
+	if(offset & (PAGE_SIZE - 1))return -EINVAL;//文件偏移必须页对齐
+	if(flags & MAP_SHARED)return -ENODEV;//暂不支持共享映射
+	fs_file_t *ff = NULL;
+	if((long)fd >= 0 && !(flags & MAP_ANONYMOUS)){
+		//校验fd与读权限
+		if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+		if((current_task->files[fd].flags & O_ACCMODE) == O_WRONLY)return -EACCES;
+		ff = &current_task->files[fd];
+	}
 	//权限转换
 	uint64_t vm_flags = 0;
 	if(prot & PROT_READ) vm_flags |= VM_READ;
@@ -888,9 +961,27 @@ static long sys_mmap(long addr, long length, long prot, long flags, long fd, lon
 		vaddr = g_mmap_hint;
 		g_mmap_hint += ((uint64_t)length + PAGE_SIZE) & PAGE_MASK;
 	}
-	void *r = vmm_mmap(current_task->mm, vaddr, (uint64_t)length, vm_flags);
-	if(!r) return -ENOMEM;
-	return (long)r;
+	//MAP_FIXED，先解除目标范围的旧映射
+	if(flags & MAP_FIXED){
+		vmm_munmap(current_task->mm, vaddr, (uint64_t)length);
+	}
+	if(vmm_mmap(current_task->mm, vaddr, (uint64_t)length, vm_flags)) return -ENOMEM;
+	//文件映射
+	if(ff){
+		FsSeek(ff, (int64_t)offset, SEEK_SET);
+		uint64_t remain = (uint64_t)length;
+		uint64_t off = 0;
+		char kbuf[512];
+		while(remain){
+			uint64_t chunk = remain > sizeof(kbuf) ? sizeof(kbuf) : remain;
+			uint64_t n = FsRead(ff, kbuf, chunk);
+			if(n == 0)break;//EOF，剩余保持零
+			if(mmap_write_mem(current_task->mm, vaddr + off, kbuf, n))return -ENOMEM;
+			off += n;
+			remain -= n;
+		}
+	}
+	return (long)vaddr;
 }
 
 /*
@@ -965,6 +1056,7 @@ void InitSyscall(void){
 	memset(syscall_table, 0, sizeof(syscall_table));
 	syscall_table[SYS_READ]       = sys_read;
 	syscall_table[SYS_WRITE]      = sys_write;
+	syscall_table[SYS_PREAD64]    = sys_pread64;
 	syscall_table[SYS_OPEN]       = sys_open;
 	syscall_table[SYS_CLOSE]      = sys_close;
 	syscall_table[SYS_STAT]       = sys_newstat;
@@ -990,6 +1082,7 @@ void InitSyscall(void){
 	syscall_table[SYS_NANOSLEEP]  = sys_nanosleep;
 	syscall_table[SYS_POLL]       = sys_poll;
 	syscall_table[SYS_RT_SIGACTION]     = sys_rt_sigaction;
+	syscall_table[SYS_RT_SIGPROCMASK]   = sys_rt_sigprocmask;
 	syscall_table[SYS_SIGALTSTACK]      = sys_sigaltstack;
 	syscall_table[SYS_FCNTL]            = sys_fcntl;
 	syscall_table[SYS_PRCTL]            = sys_prctl;

@@ -3,6 +3,7 @@
 #include <elf.h>
 #include <fs.h>
 #include <klib.h>
+#include <print.h>
 #include <idt.h>
 #include <delay.h>
 #include <mm/pmm.h>
@@ -24,11 +25,16 @@ static inline void exec_wrmsr(uint32_t msr, uint64_t val){
 
 //ELF加载结果
 typedef struct elf_load_info {
-    uint64_t entry;      //程序入口
-    uint64_t phdr_addr;  //程序头表在内存中的地址(AT_PHDR)
-    uint64_t phentsize;  //程序头表项大小(AT_PHENT)
-    uint64_t phnum;      //程序头表项数(AT_PHNUM)
+    uint64_t entry;        //程序入口
+    uint64_t phdr_addr;    //程序头表在内存中的地址(AT_PHDR)
+    uint64_t phentsize;    //程序头表项大小(AT_PHENT)
+    uint64_t phnum;        //程序头表项数(AT_PHNUM)
+    uint64_t load_base;    //文件偏移0映射到的地址(AT_BASE)
+    uint64_t dynamic_addr; //PT_DYNAMIC段地址
+    char     interp[256];  //PT_INTERP解释器路径
 } elf_load_info_t;
+
+#define INTERP_BASE 0x7f8000000000ULL //动态链接器(ld.so)加载基址
 
 //向新地址空间写数据
 static int exec_write_mem(mm_struct *mm, uintptr_t vaddr, const void *src, uint64_t len){
@@ -47,8 +53,8 @@ static int exec_write_mem(mm_struct *mm, uintptr_t vaddr, const void *src, uint6
     return 0;
 }
 
-//解析ELF文件并把PT_LOAD段映射进新地址空间,返回入口/程序头信息
-static int elf_load(fs_file_t *f, mm_struct *mm, elf_load_info_t *info){
+//解析ELF文件并把PT_LOAD段映射进新地址空间,返回入口/程序头/解释器信息
+static int elf_load(fs_file_t *f, mm_struct *mm, uint64_t preferred_base, elf_load_info_t *info){
     //读ELF头
     Elf64_Ehdr eh;
     if(FsSeek(f, 0, SEEK_SET) < 0)return -1;
@@ -56,8 +62,7 @@ static int elf_load(fs_file_t *f, mm_struct *mm, elf_load_info_t *info){
     //魔数与属性校验
     if(eh.e_ident[EI_MAG0] != ELFMAG0 || eh.e_ident[EI_MAG1] != ELFMAG1 || eh.e_ident[EI_MAG2] != ELFMAG2 || eh.e_ident[EI_MAG3] != ELFMAG3)return -1;
     if(eh.e_ident[EI_CLASS] != ELFCLASS64 || eh.e_ident[EI_DATA] != ELFDATA2LSB)return -1;
-    if(eh.e_type != ET_EXEC || eh.e_machine != EM_X86_64)return -1;
-    if(eh.e_entry >= USER_VADDR_MAX)return -1;
+    if((eh.e_type != ET_EXEC && eh.e_type != ET_DYN) || eh.e_machine != EM_X86_64)return -1;
     if(eh.e_phentsize != sizeof(Elf64_Phdr))return -1;
     if(!eh.e_phnum || eh.e_phnum > 64)return -1;
     //读程序头表
@@ -68,33 +73,58 @@ static int elf_load(fs_file_t *f, mm_struct *mm, elf_load_info_t *info){
         Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ph_buf), 1);
         return -1;
     }
+    //提取PT_INTERP路径/PT_DYNAMIC地址
+    uint64_t base_off = 0;//首个PT_LOAD
+    uint64_t dyn_va = 0;
+    int found_base = 0;
+    //遍历程序头表
+    for(uint64_t i = 0; i < eh.e_phnum; i++){
+        Elf64_Phdr *ph = (Elf64_Phdr*)((uint8_t*)ph_buf + i * sizeof(Elf64_Phdr));
+        if(ph->p_type == PT_INTERP){
+            uint64_t ilen = ph->p_filesz;
+            if(ilen > sizeof(info->interp) - 1) ilen = sizeof(info->interp) - 1;
+            if(FsSeek(f, ph->p_offset, SEEK_SET) >= 0){
+                memset(info->interp, 0, sizeof(info->interp));
+                FsRead(f, info->interp, ilen);
+            }
+        }
+        if(ph->p_type == PT_DYNAMIC) dyn_va = ph->p_vaddr;
+        if(ph->p_type == PT_LOAD && !found_base){
+            base_off = ph->p_vaddr - ph->p_offset;
+            found_base = 1;
+        }
+    }
+    if(!found_base){
+        Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ph_buf), 1);
+        return -1;
+    }
+    uint64_t load_base = (eh.e_type == ET_DYN) ? (preferred_base & PAGE_MASK) : base_off;
     //文件内容中转缓冲
     void *kbuf = (void*)PHYS_TO_VIRT(Pmm_Malloc(32));
     if(!kbuf){
         Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ph_buf), 1);
         return -1;
     }
-    //遍历程序头,加载PT_LOAD段
-    uint64_t load_base = 0; //第一个PT_LOAD的加载基址
+    //加载PT_LOAD段
     for(uint64_t i = 0; i < eh.e_phnum; i++){
         Elf64_Phdr *ph = (Elf64_Phdr*)((uint8_t*)ph_buf + i * sizeof(Elf64_Phdr));
         if(ph->p_type != PT_LOAD) continue;
-        if(ph->p_memsz < ph->p_filesz || ph->p_vaddr >= USER_VADDR_MAX){
+        //段运行时虚拟地址
+        uint64_t seg_va = load_base + ph->p_vaddr - base_off;
+        if(ph->p_memsz < ph->p_filesz || seg_va >= USER_VADDR_MAX || seg_va + ph->p_memsz > USER_VADDR_MAX){
             Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ph_buf), 1);
             Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 32);
             return -1;
         }
-        //记录加载基址(第一个PT_LOAD)
-        if(!load_base) load_base = ph->p_vaddr - ph->p_offset;
         //权限转换
         uint64_t prot = 0;
         if(ph->p_flags & PF_R) prot |= VM_READ;
         if(ph->p_flags & PF_W) prot |= VM_WRITE;
         if(ph->p_flags & PF_X) prot |= VM_EXEC;
         //页对齐映射整段
-        uintptr_t map_start = ph->p_vaddr & PAGE_MASK;
-        uint64_t map_end   = (ph->p_vaddr + ph->p_memsz + PAGE_SIZE - 1) & PAGE_MASK;
-        if(!vmm_mmap(mm, map_start, map_end - map_start, prot)){
+        uintptr_t map_start = seg_va & PAGE_MASK;
+        uint64_t map_end   = (seg_va + ph->p_memsz + PAGE_SIZE - 1) & PAGE_MASK;
+        if(vmm_mmap(mm, map_start, map_end - map_start, prot)){
             Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ph_buf), 1);
             Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 32);
             return -1;
@@ -109,7 +139,7 @@ static int elf_load(fs_file_t *f, mm_struct *mm, elf_load_info_t *info){
         while(copied < ph->p_filesz){
             uint64_t chunk = ph->p_filesz - copied;
             if(chunk > 32 * PAGE_SIZE)chunk = 32 * PAGE_SIZE;
-            if((FsRead(f, kbuf, chunk) != chunk) || exec_write_mem(mm, ph->p_vaddr + copied, kbuf, chunk)){
+            if((FsRead(f, kbuf, chunk) != chunk) || exec_write_mem(mm, seg_va + copied, kbuf, chunk)){
                 Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ph_buf), 1);
                 Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 32);
                 return -1;
@@ -119,7 +149,11 @@ static int elf_load(fs_file_t *f, mm_struct *mm, elf_load_info_t *info){
     }
     Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ph_buf), 1);
     Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)kbuf), 32);
-    info->entry = eh.e_entry;
+    //入口 = 加载基址 + (e_entry - base_off)
+    info->entry = load_base + eh.e_entry - base_off;
+    if(info->entry >= USER_VADDR_MAX)return -1;
+    info->load_base = load_base;
+    info->dynamic_addr = dyn_va ? (load_base + dyn_va - base_off) : 0;
     info->phentsize = eh.e_phentsize;
     info->phnum = eh.e_phnum;
     info->phdr_addr = load_base + eh.e_phoff;
@@ -141,18 +175,38 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
     //加载程序段
     elf_load_info_t info;
     memset(&info, 0, sizeof(info));
-    if(elf_load(&f, new_mm, &info)){
+    if(elf_load(&f, new_mm, 0, &info)){
         FsClose(&f);
         vmm_destroy_address_space(new_mm);
         return -1;
     }
     FsClose(&f);//关闭文件
+    //若有PT_INTERP, 加载动态链接器到同一地址空间, 执行入口改为解释器入口
+    uint64_t exec_entry = info.entry;
+    uint64_t at_base = 0;
+    if(info.interp[0]){
+        fs_file_t lf;
+        if(FsOpen(info.interp, O_RDONLY, &lf) != 0){
+            vmm_destroy_address_space(new_mm);
+            return -1;
+        }
+        elf_load_info_t ldi;
+        memset(&ldi, 0, sizeof(ldi));
+        int lr = elf_load(&lf, new_mm, INTERP_BASE, &ldi);
+        FsClose(&lf);
+        if(lr){
+            vmm_destroy_address_space(new_mm);
+            return -1;
+        }
+        exec_entry = ldi.entry;
+        at_base = ldi.load_base;
+    }
     //映射用户栈
     uintptr_t stack_base = new_mm->start_stack;
     uint64_t stack_size = (uint64_t)EXEC_STACK_PAGES * PAGE_SIZE;
     uintptr_t stack_top = stack_base + PAGE_SIZE;
     uintptr_t stack_bottom = stack_top - stack_size;
-    if(!vmm_mmap(new_mm, stack_bottom, stack_size, VM_READ | VM_WRITE)){
+    if(vmm_mmap(new_mm, stack_bottom, stack_size, VM_READ | VM_WRITE)){
         vmm_destroy_address_space(new_mm);
         return -1;
     }
@@ -187,21 +241,31 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
     sp -= 16;
     if(exec_write_mem(new_mm, sp, rnd, 16)) goto fail;
     uintptr_t random_addr = sp;
+    //AT_HWCAP
+    uint32_t cpuid_edx;
+    {
+        uint32_t a, b, c, d;
+        __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1));
+        cpuid_edx = d;
+    }
     //auxv辅助向量
     uint64_t auxv[][2] = {
         {AT_PHDR,   info.phdr_addr},
         {AT_PHENT,  info.phentsize},
         {AT_PHNUM,  info.phnum},
+        {AT_BASE,   at_base},
         {AT_PAGESZ, PAGE_SIZE},
+        {AT_HWCAP,  (uint64_t)cpuid_edx},
         {AT_ENTRY,  info.entry},
         {AT_SECURE, 0},
         {AT_RANDOM, random_addr},
         {AT_NULL,   0},
     };
+    int auxv_cnt = (int)(sizeof(auxv) / sizeof(auxv[0]));
     sp -= 8;                          //argc
     sp -= 8 * ((uint64_t)argc + 1);   //argv指针数组
     sp -= 8 * ((uint64_t)envc + 1);   //envp指针数组
-    sp -= 8 * 2 * 8;                  //auxv数组
+    sp -= 8 * 2 * (uint64_t)auxv_cnt; //auxv数组
     sp &= ~0xFULL;
     uintptr_t argc_addr = sp;
     uintptr_t argv_arr  = sp + 8;
@@ -214,7 +278,7 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
     if(exec_write_mem(new_mm, argv_arr + 8 * argc, &null_ptr, 8))goto fail;
     for(int i = 0; i < envc; i++)if(exec_write_mem(new_mm, envp_arr + 8 * i, &envp_va[i], 8))goto fail;
     if(exec_write_mem(new_mm, envp_arr + 8 * envc, &null_ptr, 8))goto fail;
-    for(int i = 0; i < 8; i++){
+    for(int i = 0; i < auxv_cnt; i++){
         if(exec_write_mem(new_mm, auxv_arr + i * 16, auxv[i], 16)) goto fail;
     }
     sp = argc_addr;
@@ -234,7 +298,7 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
     p[4]  = 0x202;//用户RFLAGS(IF)
     p[9]  = argc_val;//rdi=argc
     p[10] = argv_arr;//rsi=argv
-    p[12] = info.entry;//用户程序入口
+    p[12] = exec_entry;//用户程序入口(有解释器时为ld.so入口)
     p[14] = 0;//rax=0
     p[15] = sp;//用户RSP=新栈顶
     return 0;
