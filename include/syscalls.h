@@ -42,6 +42,7 @@
 #define SYS_SIGALTSTACK     131
 #define SYS_PRCTL           157
 #define SYS_ARCH_PRCTL      158
+#define SYS_REBOOT          169
 #define SYS_GETTID          186
 #define SYS_TIME            201
 #define SYS_FUTEX           202

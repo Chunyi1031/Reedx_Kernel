@@ -22,6 +22,7 @@ static struct list_node task_list_head = {&task_list_head, &task_list_head};//�
 task_struct* current_task = NULL;//当前运行的任务
 task_struct* kernel_task = NULL;//内核任务
 task_struct* idle_task = NULL;//idle任务
+task_struct* init_task = NULL;//首个用户程序(init)任务
 uint64_t user_kernel_stack_top = 0;//当前用户任务的内核栈顶
 //PID分配器
 static pid_t next_pid = 1;
@@ -232,6 +233,7 @@ void TaskKill(task_struct* t){
     if(t == current_task)schedule();//如果杀死的是当前任务，立即调度
     cli();
     TaskListRemove(t);//从就绪队列移除
+    if(list_has_node(&t->wait_node))list_del(&t->wait_node);
     if(t->kernel_stack)Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)t->kernel_stack),t->stack_size / 4096);
     if(t->mm){ mmput(t->mm); t->mm = NULL; }//释放用户地址空间
     memset(t,0,4096);

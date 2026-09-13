@@ -61,6 +61,7 @@ static int path_normalize(const char *path, char *out, int outsz){
 //解析路径,返回节点(文件或目录),不存在返回NULL
 static fs_node_t *resolve(const char *path){
     char norm[512];
+    if(!fs_root) return NULL;//文件系统尚未初始化
     if(path_normalize(path, norm, sizeof(norm)) != 0) return NULL;
     fs_node_t *cur = fs_root;
     char comp[MAX_NAME];

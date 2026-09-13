@@ -15,6 +15,7 @@
 #include <rtc.h>
 #include <delay.h>
 #include <irq.h>
+#include <acpi/power.h>
 
 static inline uint64_t rdmsr(uint32_t msr){
 	uint32_t low, high;
@@ -844,6 +845,7 @@ static long sys_nanosleep(long req, long rem, long unused, long a4, long a5, lon
 //进程退出
 static long __attribute__((noreturn)) do_exit(long status){
 	if(current_task && current_task->mm){
+		if(current_task == init_task && (int)status == -1)panic("Init failed: cannot execute init");
 		//通知clear_child_tid(写入0, 供futex/线程库检测退出)
 		if(current_task->clear_child_tid){
 			uint32_t zero = 0;
@@ -1112,10 +1114,44 @@ static long sys_set_tid_address(long tidptr, long a2, long a3, long a4, long a5,
 	return current_task->pid;
 }
 
+/*
+ * int uname(struct utsname *buf)
+ * 返回系统信息
+ */
 static long sys_uname(long name, long a2, long a3, long a4, long a5, long a6){
 	(void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
 	if(!name)return -EFAULT;
 	if(copy_to_user((void*)name,&system_utsname,sizeof(system_utsname)) != 0)return -EFAULT;
+	return 0;
+}
+
+/* 
+ * int reboot(int magic,int magic2,int cmd, void *arg)
+ * 重启/关机/挂起系统
+ */
+static long sys_reboot(long magic,long magic2,long cmd,long arg,long a5,long a6){
+	(void)arg; (void)a5; (void)a6;
+	//魔数校验+
+	if((uint32_t)magic != (uint32_t)LINUX_REBOOT_MAGIC1)return -EINVAL;
+	uint32_t m2 = (uint32_t)magic2;
+	if(m2 != (uint32_t)LINUX_REBOOT_MAGIC2 && m2 != (uint32_t)LINUX_REBOOT_MAGIC2A &&
+	   m2 != (uint32_t)LINUX_REBOOT_MAGIC2B && m2 != (uint32_t)LINUX_REBOOT_MAGIC2C)return -EINVAL;
+	switch((uint32_t)cmd){
+		//重启
+		case (uint32_t)LINUX_REBOOT_CMD_RESTART:
+			SYSTEM_Restart();
+			break;
+		//关机
+		case (uint32_t)LINUX_REBOOT_CMD_POWER_OFF:
+			SYSTEM_Shutdown();
+			break;
+		//停机
+		case (uint32_t)LINUX_REBOOT_CMD_HALT:
+			SYSTEM_Halt();
+			break;
+		default:
+			return -EINVAL;
+	}
 	return 0;
 }
 
@@ -1180,6 +1216,7 @@ void InitSyscall(void){
 	syscall_table[SYS_MUNMAP]     = sys_munmap;
 	syscall_table[SYS_MPROTECT]   = sys_mprotect;
 	syscall_table[SYS_UNAME]	  = sys_uname;
+	syscall_table[SYS_REBOOT]	  = sys_reboot;
 	//启用SYSCALL/SYSRET
 	{
 		uint64_t efer = rdmsr(IA32_EFER) | (1ULL << 0);//SCE

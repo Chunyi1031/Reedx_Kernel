@@ -33,11 +33,13 @@ _Bool InitDiskAndFs(){
         }
         //初始化磁盘设备
         if(DiskInit(&disk) != 0){
-            printk(PRINTK_INFO"Disk driver not ready");
+            printk(PRINTK_WARNING"Disk driver not ready");
+            FsInit(NULL);//磁盘不可用, 回退到ramfs
             return false;
         }
     }else{
-        printk(PRINTK_INFO"Disk controller not found");
+        printk(PRINTK_WARNING"Disk controller not found");
+        FsInit(NULL);//未找到磁盘控制器, 回退到ramfs
         return false;
     }
     FsInit(&disk);//初始化文件系统

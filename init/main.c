@@ -106,7 +106,7 @@ void KernelMain(){
     sti();
     rtc_time_t time;
     rtc_get_local(&time);
-    if(!InitDiskAndFs())panic("Disk init failed!");
+    if(!InitDiskAndFs())printk(PRINTK_WARNING"Disk init failed!");
     mm_struct* umm = vmm_create_address_space();
     if(!umm)SYSTEM_STOP();
     if(vmm_mmap(umm, 0x400000, PAGE_SIZE, VM_READ | VM_EXEC | VM_WRITE))SYSTEM_STOP();
@@ -115,7 +115,8 @@ void KernelMain(){
     if(!code_pte || !pte_is_present(*code_pte))SYSTEM_STOP();
     memcpy((void*)PHYS_TO_VIRT(pte_get_paddr(*code_pte)), (void*)user_main,
            (uintptr_t)user_main_end - (uintptr_t)user_main);
-    CreateProcess(0x400000, umm, "UserTask");//创建用户任务
+    init_task = CreateProcess(0x400000, umm, "UserTask");//创建首个用户程序
+    if(!init_task)panic("Cannot create init task");
     SYSTEM_STOP();
 }
 
