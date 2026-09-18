@@ -1,11 +1,13 @@
 #include <klib.h>
 #include <print.h>
 #include <drives/disk.h>
+#include <drives/ahci.h>
 #include <fs.h>
 
 _Bool InitDiskAndFs(){
     //初始化磁盘驱动
     AtaRegisterDriver();//注册ATA驱动
+    AhciRegisterDriver();//注册AHCI驱动
     //解析磁盘路径
     disk_info_t disk = {0};
     device_path_info_t Device;
