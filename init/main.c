@@ -38,16 +38,17 @@ spinlock_t lock_test;
 
 //内核入口
 void KernelStart(BootParam* boot_param){
-    memset(__bss_start, 0, __bss_end - __bss_start);
-    setup_gdt();
-    if(!LoadBootParam(boot_param))SYSTEM_STOP();
+    memset(__bss_start, 0, __bss_end - __bss_start);//BSS清零
+    setup_gdt();//初步初始化GDT
+    if(!LoadBootParam(boot_param))SYSTEM_STOP();//加载启动参数
+    //初步初始化系统
     int status = InitSystem();
     if(status != 0){
         print_error();
         early_printk("Kernel init failed:%d\n",status);
         SYSTEM_STOP();
     }
-    //跳转到高地址
+    //跳转到高半区
     void (*entry)(void) = (void*)PHYS_TO_VIRT((uintptr_t)KernelMain);
     entry();
     SYSTEM_STOP();
@@ -89,35 +90,35 @@ void fill_utsname(){
 }
 
 void KernelMain(){
+    //初始化系统表
     setup_gdt();
     setup_tss();
     setup_idt();
     setup_exceptions();
-    tsc_calibrate();
-    rtc_init();
-    InitAPIC();
-    TaskInit();
-    InitPrintk();
-    KeyboardInit();
-    InitSyscall();
+    tsc_calibrate();//校准TSC
+    rtc_init();//初始化时钟
+    InitAPIC();//初始化APIC
+    TaskInit();//初始化多任务管理
+    InitPrintk();//初始化printk
+    KeyboardInit();//初始化键盘
+    InitSyscall();//初始化系统调用
+    //彻底切换内核所有信息到高半区
     switch_kernel_info_to_high();
     switch_kernel_stack_to_high();
-    fill_utsname();
-    sti();
-    rtc_time_t time;
-    rtc_get_local(&time);
-    if(!InitDiskAndFs())printk(PRINTK_WARNING"Disk init failed!");
+    fill_utsname();//填充系统信息
+    sti();//启用中断
+    if(!InitDiskAndFs())printk(PRINTK_WARNING"Disk init failed!");//初始化磁盘及文件系统
+    //创建首个用户程序
     mm_struct* umm = vmm_create_address_space();
     if(!umm)SYSTEM_STOP();
     if(vmm_mmap(umm, 0x400000, PAGE_SIZE, VM_READ | VM_EXEC | VM_WRITE))SYSTEM_STOP();
     if(vmm_mmap(umm, umm->start_stack, PAGE_SIZE, VM_READ | VM_WRITE))SYSTEM_STOP();
     uintptr_t *code_pte = (uintptr_t*)get_pte((uintptr_t)umm->pgd, 0x400000, 0, 0);
     if(!code_pte || !pte_is_present(*code_pte))SYSTEM_STOP();
-    memcpy((void*)PHYS_TO_VIRT(pte_get_paddr(*code_pte)), (void*)user_main,
-           (uintptr_t)user_main_end - (uintptr_t)user_main);
-    init_task = CreateProcess(0x400000, umm, "UserTask");//创建首个用户程序
+    memcpy((void*)PHYS_TO_VIRT(pte_get_paddr(*code_pte)), (void*)user_main,(uintptr_t)user_main_end - (uintptr_t)user_main);
+    init_task = CreateProcess(0x400000, umm, "UserTask");
     if(!init_task)panic("Cannot create init task");
-    SYSTEM_STOP();
+    SYSTEM_STOP();//内核挂起
 }
 
 _Bool LoadBootParam(BootParam* boot_param){

@@ -72,12 +72,15 @@ static uint64_t tsc_from_pit(void){
 	outb(PIT_CHL0_DATA_PORT, (pit_count >> 8) & 0xFF);
 	io_wait();
 	tsc_start = rdtsc_serialized();
-	for (;;) {
-		uint16_t cur;
-		outb(PIT_CMD_MODE_PORT, 0x00);
-		cur = inb(PIT_CHL0_DATA_PORT);
-		cur |= (uint16_t)inb(PIT_CHL0_DATA_PORT) << 8;
-		if(cur == 0 || cur > pit_count)break;
+	{
+		uint32_t guard = 0;
+		while (guard++ < 10000000) {
+			uint16_t cur;
+			outb(PIT_CMD_MODE_PORT, 0x00);
+			cur = inb(PIT_CHL0_DATA_PORT);
+			cur |= (uint16_t)inb(PIT_CHL0_DATA_PORT) << 8;
+			if(cur == 0 || cur > pit_count)break;
+		}
 	}
 	tsc_end = rdtsc_serialized();
 	tsc_diff = tsc_end - tsc_start;

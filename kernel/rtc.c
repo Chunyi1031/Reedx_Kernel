@@ -151,7 +151,8 @@ static void cmos_read_time(rtc_time_t *tm){
 	//清空 Register C
 	(void)cmos_read(RTC_REG_C);
 	for (tries = 0; tries < 5; tries++) {
-		while (cmos_read(RTC_REG_A) & RTC_UIP);
+		int spin = 0;
+		while ((cmos_read(RTC_REG_A) & RTC_UIP) && ++spin < 10000);
 		sec  = cmos_read(RTC_SECONDS);
 		min  = cmos_read(RTC_MINUTES);
 		hour = cmos_read(RTC_HOURS);

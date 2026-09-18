@@ -17,6 +17,7 @@
 #include <delay.h>
 #include <klib.h>
 #include <mm/vmm.h>
+#include <mm/pgtables.h>
 
 //LAPIC基址（xAPIC MMIO 模式），x2APIC模式下不使用MMIO但保留此变量
 static uintptr_t lapic_base = 0;
@@ -71,7 +72,6 @@ void lapic_write(uint32_t reg, uint32_t val){
 _Bool lapic_is_x2apic(void){return lapic_x2apic_mode;}
 
 //从IA32_APIC_BASE MSR读取LAPIC物理基址
-//原理：xAPIC模式下返回MMIO基址（bits 12-35），x2APIC启用后MMIO基址仍保留在MSR中但不可用
 uintptr_t lapic_get_base(void){
 	uint64_t msr;
 	msr = rdmsr(MSR_IA32_APICBASE);
@@ -82,43 +82,144 @@ uintptr_t lapic_get_base(void){
 static volatile uintptr_t apic_saved_rsp = 0;
 static volatile uintptr_t apic_saved_rbp = 0;
 
+static int lapic_x2apic_try_on(uint64_t base_msr){
+	__label__ fail;
+	uint64_t want, got;
+	int pre = (base_msr & MSR_IA32_APICBASE_X2APIC) != 0;
+	if (!pre && !cpu_has_x2apic()) return -1;
+	gp_recover_ip = (uintptr_t)&&fail;
+	gp_probe_active = 1;
+	want = base_msr | MSR_IA32_APICBASE_ENABLE;
+	if (!pre) want |= MSR_IA32_APICBASE_X2APIC;
+	wrmsr(MSR_IA32_APICBASE, want);
+	//回读确认写入真的生效
+	got = rdmsr(MSR_IA32_APICBASE);
+	if (!(got & MSR_IA32_APICBASE_ENABLE)) goto fail;//EN未生效
+	if (!pre && !(got & MSR_IA32_APICBASE_X2APIC)) goto fail;//EXTD未生效
+	wrmsr(X2APIC_MSR(LAPIC_TPR), 0);
+	gp_probe_active = 0;
+	gp_recover_ip = 0;
+	return 0;
+fail:
+	gp_probe_active = 0;
+	gp_recover_ip = 0;
+	return -1;
+}
+
+//探测APIC定时器是否真的在计数
+static int lapic_timer_probe(void){
+	__label__ fail;
+	uint32_t c1, c2;
+	volatile int i;
+	int ret;
+	gp_recover_ip = (uintptr_t)&&fail;
+	gp_probe_active = 1;
+	lapic_timer_set_divisor(LAPIC_TIMER_DIV_1);
+	lapic_write(LAPIC_LVT_TIMER, LAPIC_LVT_TIMER_ONESHOT | LAPIC_LVT_MASKED);
+	lapic_write(LAPIC_TIMER_INITCNT, 0xFFFFFFFF);
+	c1 = lapic_read(LAPIC_TIMER_CURCNT);
+	for(i = 0; i < 100000; i++)__asm__ volatile("pause");
+	c2 = lapic_read(LAPIC_TIMER_CURCNT);
+	lapic_write(LAPIC_TIMER_INITCNT, 0);
+	if (c2 < c1) {
+		gp_probe_active = 0;
+		gp_recover_ip = 0;
+		return 0;
+	}
+	lapic_write(LAPIC_TIMER_INITCNT, 0xFFFFFFFF);
+	c1 = lapic_read(LAPIC_TIMER_CURCNT);
+	for(i = 0; i < 100000; i++)__asm__ volatile("pause");
+	c2 = lapic_read(LAPIC_TIMER_CURCNT);
+	lapic_write(LAPIC_TIMER_INITCNT, 0);
+	ret = (c2 < c1) ? 0 : -1;//计数应在递减
+	gp_probe_active = 0;
+	gp_recover_ip = 0;
+	return ret;
+fail:
+	gp_probe_active = 0;
+	gp_recover_ip = 0;
+	return -1;
+}
+
+//回退xAPIC
+static int lapic_x2apic_fallback(void){
+	__label__ done;
+	uint64_t msr;
+	gp_recover_ip = (uintptr_t)&&done;
+	gp_probe_active = 1;
+	msr = rdmsr(MSR_IA32_APICBASE);
+	if (!(msr & MSR_IA32_APICBASE_ENABLE)) {
+		wrmsr(MSR_IA32_APICBASE, msr | MSR_IA32_APICBASE_ENABLE);
+	}
+	gp_probe_active = 0;
+	gp_recover_ip = 0;
+	return (rdmsr(MSR_IA32_APICBASE) & MSR_IA32_APICBASE_X2APIC) ? -1 : 0;
+done:
+	gp_probe_active = 0;
+	gp_recover_ip = 0;
+	return -1;
+}
+
 //使能本地APIC
 void lapic_enable(void){
-	__label__ probe_recover;
+	__label__ apic_fail;
 	uint64_t msr;
-	__asm__ volatile("movq %%rsp, %0\n\tmovq %%rbp, %1" : "=r"(apic_saved_rsp), "=r"(apic_saved_rbp) : : "memory");////保存本函数栈帧
-	lapic_base = lapic_get_base();
-	if (!lapic_x2apic_mode) lapic_base = PHYS_TO_VIRT(lapic_base);
+	uintptr_t base;
+	__asm__ volatile("movq %%rsp, %0\n\tmovq %%rbp, %1" : "=r"(apic_saved_rsp), "=r"(apic_saved_rbp) : : "memory");//保存本函数栈帧
+	base = lapic_get_base();
+	vmm_map_page(KERNEL_PML4, PHYS_TO_VIRT(base), base, PTE_PRESENT | PTE_WRITABLE);//确保LAPIC MMIO已映射
+	lapic_base = PHYS_TO_VIRT(base);
 	msr = rdmsr(MSR_IA32_APICBASE);
-	gp_recover_ip = (uintptr_t)&&probe_recover;
-	gp_probe_active = 1;
-	//若hypervisor预启用了x2APIC(bit10),先关闭它
-	if (msr & MSR_IA32_APICBASE_X2APIC) {
-		wrmsr(MSR_IA32_APICBASE, msr & ~MSR_IA32_APICBASE_X2APIC);
-		msr &= ~MSR_IA32_APICBASE_X2APIC;
+	//优先启用x2APIC
+	lapic_x2apic_mode = false;
+	if (lapic_x2apic_try_on(msr) == 0 && lapic_timer_probe() == 0) {
+		lapic_x2apic_mode = true;//x2APIC已启用且定时器正常
+	} else {
+		//回退xAPIC
+		if (lapic_x2apic_fallback() == 0) {
+			lapic_x2apic_mode = false;
+			lapic_base = PHYS_TO_VIRT(lapic_get_base());
+		} else {
+			lapic_x2apic_mode = true;//EXTD仍在, 硬件处于x2APIC模式
+		}
+		if (lapic_timer_probe() != 0) panic("APIC timer not counting");
 	}
-	//确保xAPIC使能(bit11)
-	if (!(msr & MSR_IA32_APICBASE_ENABLE)) {
-		msr |= MSR_IA32_APICBASE_ENABLE;
-		wrmsr(MSR_IA32_APICBASE, msr);
+	//使能APIC(SIVR)
+	//硬件兼容: 部分真硬件在x2APIC下写SIVR(MSR 0x80F)会挂死整机, 且固件通常已使能APIC.
+	//故先读取: 已"使能且虚假向量=0xFF"时完全跳过写入; 必须写时绝不置bit9(保留位).
+	{
+		uint32_t svr = lapic_read(LAPIC_SPURIOUS);
+		if (!((svr & LAPIC_SPURIOUS_ENABLE) && (svr & 0xFF) == SPURIOUS_APIC_VECTOR)) {
+			uint32_t nv = (svr & ~0xFFu) | SPURIOUS_APIC_VECTOR | LAPIC_SPURIOUS_ENABLE;
+			nv &= ~LAPIC_SPURIOUS_FOCUS_DISABLE;//bit9为保留位, x2APIC下写1属未定义行为
+			gp_recover_ip = (uintptr_t)&&apic_fail;
+			gp_probe_active = 1;
+			lapic_write(LAPIC_SPURIOUS, nv);
+			gp_probe_active = 0;
+			gp_recover_ip = 0;
+		}
 	}
-
-probe_recover:
+	return;
+apic_fail:
 	__asm__ volatile("movq %0, %%rsp\n\tmovq %1, %%rbp"
 		: : "r"(apic_saved_rsp), "r"(apic_saved_rbp) : "memory");
 	gp_probe_active = 0;
 	gp_recover_ip = 0;
-	lapic_x2apic_mode = false;//始终使用xAPIC MMIO
-	lapic_write(LAPIC_SPURIOUS,SPURIOUS_APIC_VECTOR | LAPIC_SPURIOUS_ENABLE | LAPIC_SPURIOUS_FOCUS_DISABLE);
+	early_printk("APIC: SIVR write failed (hardware unavailable?)\n");
+	panic("APIC init failed");
 }
 
 //向LAPIC发送中断结束信号
-void lapic_send_eoi(void){lapic_write(LAPIC_EOI, 0);}
+void lapic_send_eoi(void){
+	lapic_write(LAPIC_EOI, 0);
+}
 
 //设置APIC定时器分频值
-void lapic_timer_set_divisor(uint32_t divisor){lapic_write(LAPIC_TIMER_DIV, divisor);}
+void lapic_timer_set_divisor(uint32_t divisor){
+	lapic_write(LAPIC_TIMER_DIV, divisor);
+}
 
-//获取当前LAPIC ID（xAPIC: bits 24-31, x2APIC: 全32位）
+//获取当前LAPIC ID
 uint32_t lapic_get_id(void){
 	if (lapic_x2apic_mode)return lapic_read(LAPIC_ID);//x2APIC ID寄存器返回完整32位
 	return (lapic_read(LAPIC_ID) >> 24) & 0xFF;
@@ -126,9 +227,12 @@ uint32_t lapic_get_id(void){
 
 //使用TSC精确定时校准APIC定时器频率
 uint32_t lapic_timer_calibrate(void){
+	__label__ fail;
 	uint32_t initial_ticks, remaining_ticks, elapsed_ticks;
 	uint32_t freq_hz;
 	uint64_t tsc_start, tsc_target;
+	gp_recover_ip = (uintptr_t)&&fail;
+	gp_probe_active = 1;
 	lapic_timer_set_divisor(LAPIC_TIMER_DIV_1);
 	lapic_write(LAPIC_LVT_TIMER, LAPIC_LVT_TIMER_ONESHOT | LAPIC_LVT_MASKED);
 	tsc_start = rdtsc();
@@ -138,9 +242,15 @@ uint32_t lapic_timer_calibrate(void){
 	while (rdtsc() < tsc_target)__asm__ volatile ("pause");
 	remaining_ticks = lapic_read(LAPIC_TIMER_CURCNT);
 	elapsed_ticks = initial_ticks - remaining_ticks;
+	gp_probe_active = 0;
+	gp_recover_ip = 0;
 	freq_hz = elapsed_ticks * (1000 / CALIBRATION_MS);
 	if (freq_hz < 1000000)freq_hz = 1000000000;
 	return freq_hz;
+fail:
+	gp_probe_active = 0;
+	gp_recover_ip = 0;
+	return 1000000000;
 }
 
 //以指定频率启动周期定时器
