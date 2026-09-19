@@ -23,6 +23,8 @@
 #define SYS_WRITEV          20
 #define SYS_ACCESS          21
 #define SYS_PIPE            22
+#define SYS_DUP             32
+#define SYS_DUP2            33
 #define SYS_NANOSLEEP       35
 #define SYS_GETPID          39
 #define SYS_CLONE           56
@@ -61,6 +63,7 @@
 #define SYS_RENAMEAT        264
 #define SYS_READLINKAT      267
 #define SYS_SET_ROBUST_LIST 273
+#define SYS_DUP3            292
 #define SYS_PIPE2           293
 #define SYS_PRLIMIT64       302
 #define SYS_RENAMEAT2       316
@@ -91,6 +94,7 @@
 #define F_SETFD   2
 #define F_GETFL   3
 #define F_SETFL   4
+#define F_DUPFD_CLOEXEC 1030
 
 //lseek whence
 #define SEEK_SET    0

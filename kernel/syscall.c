@@ -100,6 +100,12 @@ static long sys_getdents64(long fd, long buf, long count, long a4, long a5, long
 	return n;
 }
 
+//判断fd是否为控制台表项
+static inline _Bool fd_is_console(long fd){
+	if(!current_task || fd < 0 || fd >= MAX_FD)return false;
+	return current_task->files[fd].used && !current_task->files[fd].node && !current_task->files[fd].pipe;
+}
+
 /*
  * ssize_t read(int fd, void *buf, size_t count)
  * 系统调用:read
@@ -110,7 +116,7 @@ static long sys_read(long fd, long buf, long count, long a4, long a5, long a6){
 	if(count < 0)return -EINVAL;
 	if(!buf)return -EFAULT;
 	//键盘读取
-	if(fd == 0) {
+	if((fd == 0 && (!current_task || !current_task->files[0].used)) || (fd_is_console(fd) && (current_task->files[fd].flags & O_ACCMODE) != O_WRONLY)){
 		if(count == 0)return 0;
 		sti();
 		char kbuf[KEYBOARD_BUFFER_SIZE];
@@ -127,7 +133,7 @@ static long sys_read(long fd, long buf, long count, long a4, long a5, long a6){
 	}
 	//文件读取
 	if(!current_task)return -EBADF;
-	if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+	if(fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
 	if((current_task->files[fd].flags & O_ACCMODE) == O_WRONLY)return -EBADF;
 	long total = 0;
 	char kbuf[512];
@@ -160,8 +166,9 @@ static long sys_write(long fd, long buf, long count, long a4, long a5, long a6){
 	(void)a4; (void)a5; (void)a6;
 	if(count < 0) return -EINVAL;
 	if(!buf) return -EFAULT;
-	//输出到用户缓冲区和TTY
-	if((fd == 1) || (fd == 2)) {
+	//输出到TTY
+	_Bool __con_out = fd_is_console(fd) && (current_task->files[fd].flags & O_ACCMODE) != O_RDONLY;
+	if(((fd == 1 || fd == 2) && (!current_task || !current_task->files[fd].used)) || __con_out) {
 		char kbuf[512];
 		long written = 0;
 		while (written < count) {
@@ -177,7 +184,7 @@ static long sys_write(long fd, long buf, long count, long a4, long a5, long a6){
 	}
 	//文件写入
 	if(!current_task)return -EBADF;
-	if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+	if(fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
 	if((current_task->files[fd].flags & O_ACCMODE) == O_RDONLY)return -EBADF;
 	long total = 0;
 	char kbuf[512];
@@ -271,6 +278,47 @@ static long sys_open(long path, long flags, long mode, long a4, long a5, long a6
 	return fd;
 }
 
+//关闭单个文件描述符
+static void fd_close_one(long fd){
+	if(!current_task)return;
+	if(fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return;
+	if(current_task->files[fd].pipe){
+		pipeCloseEnd((struct pipe*)current_task->files[fd].pipe,(current_task->files[fd].flags & O_ACCMODE) == O_WRONLY);
+	}else{
+		FsClose(&current_task->files[fd]);
+	}
+	current_task->files[fd].used = false;
+	current_task->files[fd].pipe = NULL;
+	current_task->files[fd].node = NULL;
+	current_task->files[fd].off = 0;
+}
+
+//复制文件描述符表项
+static long fd_dup_to(long oldfd, long newfd){
+	if(!current_task)return -EBADF;
+	if(oldfd < 0 || oldfd >= MAX_FD)return -EBADF;
+	if(newfd < 0 || newfd >= MAX_FD)return -EBADF;
+	if(oldfd == newfd)return newfd;
+	//如果旧fd未使用
+	if(!current_task->files[oldfd].used){
+		//小于3的虚拟文件描述符，物化为控制台表项
+		if(oldfd < 3){
+			fd_close_one(newfd);
+			memset(&current_task->files[newfd], 0, sizeof(fs_file_t));
+			current_task->files[newfd].used = true;
+			current_task->files[newfd].flags = (oldfd == 0) ? O_RDONLY : O_WRONLY;
+			return newfd;
+		}
+		return -EBADF;
+	}
+	fd_close_one(newfd);//目标已占用则先关闭
+	current_task->files[newfd] = current_task->files[oldfd];//复制描述符
+	//引用计数
+	if(current_task->files[newfd].node)current_task->files[newfd].node->refs++;
+	if(current_task->files[newfd].pipe)pipeForkRef((struct pipe*)current_task->files[newfd].pipe,(current_task->files[newfd].flags & O_ACCMODE) == O_WRONLY);
+	return newfd;
+}
+
 /*
  * int close(int fd)
  * 系统调用:close
@@ -279,18 +327,10 @@ static long sys_open(long path, long flags, long mode, long a4, long a5, long a6
 static long sys_close(long fd, long b, long c, long a4, long a5, long a6){
 	(void)b; (void)c; (void)a4; (void)a5; (void)a6;
 	if (!current_task) return -EBADF;
-	if (fd >= 0 && fd < 3)return 0;
-	if (fd < 0 || fd >= MAX_FD || !current_task->files[fd].used) return -EBADF;
-	//如果为管道，关闭管道
-	if(current_task->files[fd].pipe){
-		pipeCloseEnd((struct pipe*)current_task->files[fd].pipe,(current_task->files[fd].flags & O_ACCMODE) == O_WRONLY);
-		current_task->files[fd].used = false;
-		current_task->files[fd].pipe = NULL;
-		current_task->files[fd].node = NULL;
-		current_task->files[fd].off = 0;
-		return 0;
-	}
-	FsClose(&current_task->files[fd]);//关闭文件描述符
+	if(fd < 0 || fd >= MAX_FD)return -EBADF;
+	if(fd < 3 && !current_task->files[fd].used)return 0;
+	if(!current_task->files[fd].used)return -EBADF;
+	fd_close_one(fd);
 	return 0;
 }
 
@@ -342,6 +382,40 @@ static long sys_pipe2(long fds, long flags, long a3, long a4, long a5, long a6){
 static long sys_pipe(long fds, long a2, long a3, long a4, long a5, long a6){
 	(void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
 	return sys_pipe2(fds, 0, 0, 0, 0, 0);
+}
+
+/*
+ * int dup(int oldfd)
+ * 复制描述符到最小空闲fd
+ */
+static long sys_dup(long oldfd, long a2, long a3, long a4, long a5, long a6){
+	(void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EBADF;
+	if(oldfd < 0 || oldfd >= MAX_FD)return -EBADF;
+	if(!current_task->files[oldfd].used && oldfd >= 3)return -EBADF;
+	for(int i = 3; i < MAX_FD; i++){
+		if(!current_task->files[i].used)return fd_dup_to(oldfd, i);
+	}
+	return -ENFILE;
+}
+
+/*
+ * int dup2(int oldfd, int newfd)
+ * 复制描述符到指定位置(覆盖已有描述符)
+ */
+static long sys_dup2(long oldfd, long newfd, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	return fd_dup_to(oldfd, newfd);
+}
+
+/*
+ * int dup3(int oldfd, int newfd, int flags)
+ */
+static long sys_dup3(long oldfd, long newfd, long flags, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(oldfd == newfd)return -EINVAL;
+	if(flags & ~(long)O_CLOEXEC)return -EINVAL;
+	return fd_dup_to(oldfd, newfd);
 }
 
 /*
@@ -443,7 +517,7 @@ static long sys_renameat2(long olddirfd, long oldpath, long newdirfd, long newpa
 static long sys_lseek(long fd, long off, long whence, long a4, long a5, long a6){
 	(void)a4; (void)a5; (void)a6;
 	if (!current_task) return -EBADF;
-	if (fd < 3 || fd >= MAX_FD || !current_task->files[fd].used) return -EBADF;
+	if (fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
 	int r = FsSeek(&current_task->files[fd], off, (int)whence);
 	if (r < 0) return -EINVAL;
 	return r;
@@ -506,8 +580,8 @@ static long sys_newfstat(long fd, long buf, long a3, long a4, long a5, long a6){
 	if(!current_task)return -EBADF;
 	if(!buf)return -EFAULT;
 	stat_t st;
-	if(fd < 3){
-		//标准输入/输出/错误: 当作字符设备(glibc据此判断缓冲策略)
+	if(fd < 0 || fd >= MAX_FD)return -EBADF;
+	if((fd < 3 && !current_task->files[fd].used) || fd_is_console(fd)){
 		memset(&st, 0, sizeof(st));
 		st.st_dev = 1;
 		st.st_ino = (uint64_t)(uintptr_t)&current_task->files[fd];
@@ -520,8 +594,21 @@ static long sys_newfstat(long fd, long buf, long a3, long a4, long a5, long a6){
 		st.st_mtime = (int64_t)now;
 		st.st_ctime = (int64_t)now;
 	}else{
-		if(fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
-		fill_stat(&st, current_task->files[fd].node);
+		if(!current_task->files[fd].used)return -EBADF;
+		if(current_task->files[fd].pipe){
+			memset(&st, 0, sizeof(st));
+			st.st_dev = 1;
+			st.st_ino = (uint64_t)(uintptr_t)current_task->files[fd].pipe;
+			st.st_nlink = 1;
+			st.st_mode = S_IFIFO | 0600;
+			st.st_blksize = 4096;
+			uint64_t now = rtc_get_epoch();
+			st.st_atime = (int64_t)now;
+			st.st_mtime = (int64_t)now;
+			st.st_ctime = (int64_t)now;
+		}else{
+			fill_stat(&st, current_task->files[fd].node);
+		}
 	}
 	if(copy_to_user((void*)buf, &st, sizeof(st)))return -EFAULT;
 	return 0;
@@ -620,15 +707,21 @@ static long sys_writev(long fd, long iov, long iovcnt, long a4, long a5, long a6
 				uint64_t chunk = len - done;
 				if(chunk > sizeof(kbuf))chunk = sizeof(kbuf);
 				if(copy_from_user(kbuf, (const char*)base + done, chunk))return total ? total : -EFAULT;
-				if((fd == 1) || (fd == 2)){
+				_Bool __wc = fd_is_console(fd) && (current_task->files[fd].flags & O_ACCMODE) != O_RDONLY;
+				if(((fd == 1 || fd == 2) && (!current_task || !current_task->files[fd].used)) || __wc){
 					//TTY输出
 					for(uint64_t j = 0; j < chunk; j++)TTY_PrintChar(kbuf[j], CurrentConsoleStyle.TextColor);
 				}else{
-					//文件写入
+					//文件/管道写入
 					if(!current_task)return -EBADF;
-					if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+					if(fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
 					if((current_task->files[fd].flags & O_ACCMODE) == O_RDONLY)return -EBADF;
-					FsWrite(&current_task->files[fd], kbuf, chunk);
+					if(current_task->files[fd].pipe){
+						long pw = pipeWrite((struct pipe*)current_task->files[fd].pipe, kbuf, chunk);
+						if(pw <= 0)return total ? total : (pw < 0 ? pw : -ENOSPC);
+					}else{
+						FsWrite(&current_task->files[fd], kbuf, chunk);
+					}
 				}
 				done += chunk;
 				total += (long)chunk;
@@ -810,16 +903,28 @@ static long sys_clock_nanosleep(long clk, long flags, long req, long rem, long a
  */
 static long sys_fcntl(long fd, long cmd, long arg, long a4, long a5, long a6){
 	(void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EBADF;
 	if(fd < 0 || fd >= MAX_FD)return -EBADF;
-	if(fd >= 3 && !current_task->files[fd].used)return -EBADF;
+	_Bool real = current_task->files[fd].used;//是否为真实表项(文件/管道/已重定向或复制的标准fd)
+	if(!real && fd >= 3)return -EBADF;
 	switch(cmd){
+	case F_DUPFD://0: 复制到最小空闲fd(>=arg)
+	case F_DUPFD_CLOEXEC://1030
+	{
+		long minfd = arg;
+		if(minfd < 3)minfd = 3;
+		for(long i = minfd; i < MAX_FD; i++){
+			if(!current_task->files[i].used)return fd_dup_to(fd, i);
+		}
+		return -EINVAL;
+	}
 	case F_GETFD://1
 		return 0;
 	case F_GETFL://3
-		if(fd < 3)return O_RDWR;
+		if(!real)return O_RDWR;
 		return current_task->files[fd].flags;
 	case F_SETFL://4
-		if(fd < 3)return 0;
+		if(!real)return 0;
 		current_task->files[fd].flags = (current_task->files[fd].flags & ~O_ACCMODE) | ((int)arg & O_ACCMODE);
 		return 0;
 	default:
@@ -929,19 +1034,7 @@ static long __attribute__((noreturn)) do_exit(long status){
 			uint32_t zero = 0;
 			copy_to_user(current_task->clear_child_tid, &zero, sizeof(zero));
 		}
-		//关闭所有打开的文件描述符
-		for(int i = 0; i < MAX_FD; i++){
-			if(!current_task->files[i].used)continue;
-			if(current_task->files[i].pipe){
-				pipeCloseEnd((struct pipe*)current_task->files[i].pipe,
-					(current_task->files[i].flags & O_ACCMODE) == O_WRONLY);
-			}else{
-				FsClose(&current_task->files[i]);
-			}
-			current_task->files[i].used = false;
-			current_task->files[i].pipe = NULL;
-			current_task->files[i].node = NULL;
-		}
+		for(int i = 0; i < MAX_FD; i++)fd_close_one(i);//关闭所有打开的文件描述符
 		current_task->exit_code = (int)status;//保存退出码
 		TaskExit();//退出任务
 	}
@@ -1267,6 +1360,9 @@ void InitSyscall(void){
 	syscall_table[SYS_IOCTL]      = sys_ioctl;
 	syscall_table[SYS_PIPE]       = sys_pipe;
 	syscall_table[SYS_PIPE2]      = sys_pipe2;
+	syscall_table[SYS_DUP]        = sys_dup;
+	syscall_table[SYS_DUP2]       = sys_dup2;
+	syscall_table[SYS_DUP3]       = sys_dup3;
 	syscall_table[SYS_WRITEV]     = sys_writev;
 	syscall_table[SYS_READLINKAT]      = sys_readlinkat;
 	syscall_table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
