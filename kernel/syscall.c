@@ -12,6 +12,7 @@
 #include <fork.h>
 #include <fs.h>
 #include <futex.h>
+#include <pipe.h>
 #include <rtc.h>
 #include <delay.h>
 #include <irq.h>
@@ -133,8 +134,17 @@ static long sys_read(long fd, long buf, long count, long a4, long a5, long a6){
 	while(total < count) {
 		long chunk = count - total;
 		if(chunk > (long)sizeof(kbuf))chunk = sizeof(kbuf);
-		uint64_t n = FsRead(&current_task->files[fd], kbuf, (uint64_t)chunk);//读取内容
-		if(n == 0)break;//EOF
+		uint64_t n;
+		//管道读取
+		if(current_task->files[fd].pipe){
+			long pr = pipeRead((struct pipe*)current_task->files[fd].pipe, kbuf, (uint64_t)chunk);
+			if(pr <= 0){ if(pr == 0)break; return pr; }
+			n = (uint64_t)pr;
+		//文件读取
+		}else{
+			n = FsRead(&current_task->files[fd], kbuf, (uint64_t)chunk);//读取内容
+			if(n == 0)break;//EOF
+		}
 		if(copy_to_user((char*)buf + total, kbuf, n))return -EFAULT;//复制到用户空间
 		total += (long)n;
 	}
@@ -175,8 +185,17 @@ static long sys_write(long fd, long buf, long count, long a4, long a5, long a6){
 		long chunk = count - total;
 		if(chunk > (long)sizeof(kbuf))chunk = sizeof(kbuf);
 		if(copy_from_user(kbuf, (const char*)buf + total, (unsigned long)chunk))return -EFAULT;//复制到内核空间
-		uint64_t n = FsWrite(&current_task->files[fd], kbuf, (uint64_t)chunk);//写入文件
-		if(n == 0)return -ENOSPC;
+		uint64_t n;
+		//管道写入
+		if(current_task->files[fd].pipe){
+			long pw = pipeWrite((struct pipe*)current_task->files[fd].pipe, kbuf, (uint64_t)chunk);
+			if(pw <= 0)return pw < 0 ? pw : -ENOSPC;
+			n = (uint64_t)pw;
+		//文件写入
+		}else{
+			n = FsWrite(&current_task->files[fd], kbuf, (uint64_t)chunk);
+			if(n == 0)return -ENOSPC;
+		}
 		total += (long)n;
 	}
 	return total;
@@ -262,8 +281,67 @@ static long sys_close(long fd, long b, long c, long a4, long a5, long a6){
 	if (!current_task) return -EBADF;
 	if (fd >= 0 && fd < 3)return 0;
 	if (fd < 0 || fd >= MAX_FD || !current_task->files[fd].used) return -EBADF;
-	FsClose(&current_task->files[fd]);
+	//如果为管道，关闭管道
+	if(current_task->files[fd].pipe){
+		pipeCloseEnd((struct pipe*)current_task->files[fd].pipe,(current_task->files[fd].flags & O_ACCMODE) == O_WRONLY);
+		current_task->files[fd].used = false;
+		current_task->files[fd].pipe = NULL;
+		current_task->files[fd].node = NULL;
+		current_task->files[fd].off = 0;
+		return 0;
+	}
+	FsClose(&current_task->files[fd]);//关闭文件描述符
 	return 0;
+}
+
+/*
+ * int pipe2(int fds[2], int flags)
+ * 创建管道
+ */
+static long sys_pipe2(long fds, long flags, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -ENOSYS;
+	if(!fds)return -EFAULT;
+	//分配文件描述符
+	int rfd = -1, wfd = -1;
+	for(int i = 3; i < MAX_FD; i++){
+		if(!current_task->files[i].used){
+			if(rfd < 0){
+				rfd = i;
+			}else{
+				wfd = i;
+				break;
+			}
+		}
+	}
+	if(wfd < 0)return -ENFILE;
+	//创建管道
+	struct pipe *p = NULL;
+	int rc = pipeCreate(&p, (int)flags);
+	if(rc != 0)return rc;
+	//初始化文件描述符
+	current_task->files[rfd].used = true;
+	current_task->files[rfd].node = NULL;
+	current_task->files[rfd].pipe = p;
+	current_task->files[rfd].off = 0;
+	current_task->files[rfd].flags = O_RDONLY;
+	current_task->files[wfd].used = true;
+	current_task->files[wfd].node = NULL;
+	current_task->files[wfd].pipe = p;
+	current_task->files[wfd].off = 0;
+	current_task->files[wfd].flags = O_WRONLY;
+	//输出到用户空间
+	int out[2] = {rfd, wfd};
+	if(copy_to_user((void*)fds, out, sizeof(out)))return -EFAULT;
+	return 0;
+}
+
+/*
+ * int pipe(int fds[2])
+ */
+static long sys_pipe(long fds, long a2, long a3, long a4, long a5, long a6){
+	(void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	return sys_pipe2(fds, 0, 0, 0, 0, 0);
 }
 
 /*
@@ -851,6 +929,19 @@ static long __attribute__((noreturn)) do_exit(long status){
 			uint32_t zero = 0;
 			copy_to_user(current_task->clear_child_tid, &zero, sizeof(zero));
 		}
+		//关闭所有打开的文件描述符
+		for(int i = 0; i < MAX_FD; i++){
+			if(!current_task->files[i].used)continue;
+			if(current_task->files[i].pipe){
+				pipeCloseEnd((struct pipe*)current_task->files[i].pipe,
+					(current_task->files[i].flags & O_ACCMODE) == O_WRONLY);
+			}else{
+				FsClose(&current_task->files[i]);
+			}
+			current_task->files[i].used = false;
+			current_task->files[i].pipe = NULL;
+			current_task->files[i].node = NULL;
+		}
 		current_task->exit_code = (int)status;//保存退出码
 		TaskExit();//退出任务
 	}
@@ -1174,6 +1265,8 @@ void InitSyscall(void){
 	syscall_table[SYS_GETCWD]     = sys_getcwd;
 	syscall_table[SYS_CHDIR]      = sys_chdir;
 	syscall_table[SYS_IOCTL]      = sys_ioctl;
+	syscall_table[SYS_PIPE]       = sys_pipe;
+	syscall_table[SYS_PIPE2]      = sys_pipe2;
 	syscall_table[SYS_WRITEV]     = sys_writev;
 	syscall_table[SYS_READLINKAT]      = sys_readlinkat;
 	syscall_table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;

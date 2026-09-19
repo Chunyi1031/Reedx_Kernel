@@ -66,10 +66,11 @@ struct fs_node{
 
 //打开文件描述
 typedef struct fs_file{
-    fs_node_t *node;
-    uint64_t   off;
-    int        flags;
-    _Bool      used;
+    fs_node_t *node;    //文件节点
+    void      *pipe;    //管道对象
+    uint64_t   off;     //文件指针
+    int        flags;   //打开标志
+    _Bool      used;    //是否使用
 } fs_file_t;
 
 void FsInit(struct disk_info *disk);//初始化文件系统

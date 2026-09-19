@@ -22,6 +22,7 @@
 #define SYS_PREAD64         17
 #define SYS_WRITEV          20
 #define SYS_ACCESS          21
+#define SYS_PIPE            22
 #define SYS_NANOSLEEP       35
 #define SYS_GETPID          39
 #define SYS_CLONE           56
@@ -60,6 +61,7 @@
 #define SYS_RENAMEAT        264
 #define SYS_READLINKAT      267
 #define SYS_SET_ROBUST_LIST 273
+#define SYS_PIPE2           293
 #define SYS_PRLIMIT64       302
 #define SYS_RENAMEAT2       316
 #define SYS_GETRANDOM       318
@@ -80,6 +82,8 @@
 #define O_CREAT     0x40    //文件不存在则创建
 #define O_TRUNC     0x200   //打开时截断文件长度为0
 #define O_APPEND    0x400   //每次写入追加到文件末尾
+#define O_NONBLOCK  0x800   //非阻塞
+#define O_CLOEXEC   0x80000 //exec时关闭
 
 //fcntl命令
 #define F_DUPFD   0
@@ -119,25 +123,26 @@
 #define ENOENT              2
 #define EINTR               4
 #define EIO                 5
+#define E2BIG               7
+#define ENOEXEC             8
 #define EBADF               9
+#define ECHILD              10
 #define EAGAIN              11
 #define ENOMEM              12
 #define EACCES              13
-#define ENOTDIR            20
-#define ERANGE             34
 #define EFAULT              14
 #define EBUSY               16
 #define EEXIST              17
-#define ECHILD             10
-#define EINVAL             22
-#define ENOEXEC             8
-#define E2BIG               7
-#define ENOSYS             38
-#define ENFILE             23
-#define ENOSPC             28
-#define ENODEV             19
-#define ENOTTY             25
-#define ETIMEDOUT         110
+#define ENODEV              19
+#define ENOTDIR             20
+#define EINVAL              22
+#define ENOTTY              25
+#define ENFILE              23
+#define ENOSPC              28
+#define EPIPE               32
+#define ERANGE              34
+#define ENOSYS              38
+#define ETIMEDOUT           110
 
 #define WNOHANG             1 //waitpid选项
 

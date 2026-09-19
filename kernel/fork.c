@@ -4,6 +4,7 @@
 #include <mm/vmm.h>
 #include <idt.h>
 #include <klib.h>
+#include <pipe.h>
 
 __attribute__((naked))
 void fork_trampoline(void){
@@ -82,6 +83,7 @@ pid_t do_fork(void){
 	for (int i = 0; i < MAX_FD; i++) {
 		child->files[i] = parent->files[i];
 		if (child->files[i].used && child->files[i].node) child->files[i].node->refs++;
+		if (child->files[i].used && child->files[i].pipe) pipeForkRef((struct pipe*)child->files[i].pipe, (child->files[i].flags & O_ACCMODE) == O_WRONLY);
 	}
 	TaskListAdd(child);
 	sti();
