@@ -4,6 +4,7 @@
 #include <print.h>
 #include <task.h>
 #include <futex.h>
+#include <signals.h>
 
 volatile uint64_t SYSTEM_TimerTicks = 0;
 
@@ -19,7 +20,7 @@ void send_eoi(uint8_t irq){
 	lapic_send_eoi();
 }
 
-void irq_dispatch(uint32_t vector){
+void irq_dispatch(uint32_t vector, uint64_t *frame){
 	vector -= IRQ_VECTOR_BASE;
 	switch (vector) {
 	case IRQ_TIMER:
@@ -28,6 +29,7 @@ void irq_dispatch(uint32_t vector){
 		futex_timeout_check();//检查并唤醒超时的futex等待者
 		send_eoi((uint8_t)vector);//发送EOI
 		schedule();//调度
+		SignalDeliverFromIRQ(frame);//返回用户前投递待处理信号
 		return;
 	case IRQ_KEYBOARD:
 		Keyboard_IRQ();
@@ -36,6 +38,7 @@ void irq_dispatch(uint32_t vector){
 		break;
 	}
 	send_eoi((uint8_t)vector);
+	SignalDeliverFromIRQ(frame);//返回用户前投递待处理信号
 }
 
 //APIC中断系统初始化

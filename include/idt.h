@@ -130,7 +130,7 @@ extern void default_int_handler(void);//默认中断处理程序(kernel/desc/idt
 extern void int_13_handler(void);
 extern void int_14_handler(void);
 extern void interrupt_GP(uint64_t error_code, uint64_t rip);
-extern void interrupt_PF(uint64_t fault_addr, uint64_t error_code, uintptr_t rip);
+extern void interrupt_PF(uint64_t fault_addr, uint64_t error_code, uintptr_t rip, uintptr_t user_rsp);
 
 extern volatile uintptr_t gp_recover_ip;//#GP恢复点
 extern volatile uint64_t gp_probe_active;//探测激活标志

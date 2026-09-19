@@ -15,4 +15,10 @@ pid_t do_fork(void);
  */
 long sys_fork(long a, long b, long c, long a4, long a5, long a6);
 
+/**
+ * @brief 系统调用vfork处理函数
+ * @return 父进程返回子进程PID，子进程返回 0
+ */
+long sys_vfork(long a, long b, long c, long a4, long a5, long a6);
+
 #endif

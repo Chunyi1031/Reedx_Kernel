@@ -44,6 +44,7 @@ irq_common_handler:
 	pushq %r14
 	pushq %r15
 	subq $8, %rsp
+	movq %rsp, %rsi
 	movq 128(%rsp), %rdi
 	call irq_dispatch
 	addq $8, %rsp

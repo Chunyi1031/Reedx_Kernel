@@ -468,8 +468,7 @@ int vmm_map_user_page(mm_struct *mm, uintptr_t vaddr, uintptr_t paddr, uint64_t 
 //取消一段用户内存映射并释放物理页
 int vmm_munmap(mm_struct *mm, uintptr_t vaddr, uint64_t length){
     if(!mm || !length)return -1;
-    vaddr &= PAGE_MASK;
-    uintptr_t start = vaddr;
+    uintptr_t start = vaddr & PAGE_MASK;
     uintptr_t end = (vaddr + length + PAGE_SIZE - 1) & PAGE_MASK;
     uint64_t pages = (end - start) / PAGE_SIZE;
     //解除映射并释放物理页
@@ -522,13 +521,12 @@ int vmm_munmap(mm_struct *mm, uintptr_t vaddr, uint64_t length){
 //修改一段用户内存的访问权限
 int vmm_mprotect(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t prot) {
     if (!mm || !length) return -1;
-    vaddr &= PAGE_MASK;
-    uintptr_t start = vaddr;
+    uintptr_t start = vaddr & PAGE_MASK;
     uintptr_t end = (vaddr + length + PAGE_SIZE - 1) & PAGE_MASK;
     uint64_t pages = (end - start) / PAGE_SIZE;
     //逐页修改权限
     for (uint64_t i = 0; i < pages; i++) {
-        uintptr_t va = vaddr + i * PAGE_SIZE;
+        uintptr_t va = start + i * PAGE_SIZE;
         uint64_t *pte = (uint64_t*)get_pte((uintptr_t)mm->pgd, va, 0, 0);
         if (!pte || !pte_is_present(*pte)) return -1;
         uintptr_t paddr = pte_get_paddr(*pte);

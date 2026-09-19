@@ -1,5 +1,6 @@
 #include <task.h>
 #include <syscalls.h>
+#include <signals.h>
 #include <elf.h>
 #include <fs.h>
 #include <klib.h>
@@ -165,12 +166,12 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
     if(!current_task || !current_task->mm) return -1;
     //打开ELF文件
     fs_file_t f;
-    if(FsOpen(path, O_RDONLY, &f) != 0) return -1;
+    if(FsOpen(path, O_RDONLY, &f) != 0) return -ENOENT;
     //创建全新地址空间
     mm_struct *new_mm = vmm_create_address_space();
     if(!new_mm){
         FsClose(&f);
-        return -1;
+        return -ENOMEM;
     }
     //加载程序段
     elf_load_info_t info;
@@ -178,7 +179,7 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
     if(elf_load(&f, new_mm, 0, &info)){
         FsClose(&f);
         vmm_destroy_address_space(new_mm);
-        return -1;
+        return -ENOEXEC;//非合法ELF
     }
     FsClose(&f);//关闭文件
     //若有PT_INTERP, 加载动态链接器到同一地址空间, 执行入口改为解释器入口
@@ -188,7 +189,7 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
         fs_file_t lf;
         if(FsOpen(info.interp, O_RDONLY, &lf) != 0){
             vmm_destroy_address_space(new_mm);
-            return -1;
+            return -ENOENT;//动态链接器缺失
         }
         elf_load_info_t ldi;
         memset(&ldi, 0, sizeof(ldi));
@@ -196,7 +197,7 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
         FsClose(&lf);
         if(lr){
             vmm_destroy_address_space(new_mm);
-            return -1;
+            return -ENOEXEC;
         }
         exec_entry = ldi.entry;
         at_base = ldi.load_base;
@@ -266,6 +267,7 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
     sp -= 8 * ((uint64_t)argc + 1);   //argv指针数组
     sp -= 8 * ((uint64_t)envc + 1);   //envp指针数组
     sp -= 8 * 2 * (uint64_t)auxv_cnt; //auxv数组
+    sp -= 16;                         //对齐余量
     sp &= ~0xFULL;
     uintptr_t argc_addr = sp;
     uintptr_t argv_arr  = sp + 8;
@@ -293,18 +295,25 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
     t->fs_base = 0;
     exec_wrmsr(IA32_FS_BASE, 0);
     sti();
+    SignalExecReset(t);
     //修改syscall帧
     uint64_t *p = (uint64_t*)(user_kernel_stack_top - 128);
+    for(int i = 0; i < 16; i++) p[i] = 0;
     p[4]  = 0x202;//用户RFLAGS(IF)
     p[9]  = argc_val;//rdi=argc
     p[10] = argv_arr;//rsi=argv
     p[12] = exec_entry;//用户程序入口(有解释器时为ld.so入口)
     p[14] = 0;//rax=0
     p[15] = sp;//用户RSP=新栈顶
+    if(t->vfork_parent > 0){
+        task_struct *vp = TaskFind(t->vfork_parent);
+        if(vp){ vp->vfork_waiting = 0; TaskWake(vp); }
+        t->vfork_parent = 0;
+    }
     return 0;
 fail:
     vmm_destroy_address_space(new_mm);
-    return -1;
+    return -ENOEXEC;//栈/参数构建失败
 }
 
 //系统调用入口
@@ -313,8 +322,7 @@ long sys_execve(long path, long argv, long envp, long a4, long a5, long a6){
     if(!current_task || !current_task->mm)return -ENOSYS;
     //拷贝路径
     char kpath[256];
-    if(copy_from_user(kpath, (void*)path, 255))return -EFAULT;
-    kpath[255] = 0;
+    if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
     //分配临时页存放参数字符串
     void *page = (void*)PHYS_TO_VIRT(Pmm_Malloc(2));
     if(!page)return -ENOMEM;
@@ -330,8 +338,7 @@ long sys_execve(long path, long argv, long envp, long a4, long a5, long a6){
             if(copy_from_user(&up, (void*)((char**)argv + argc), sizeof(up)))goto err;
             if(!up) break;
             if((uintptr_t)strbuf - (uintptr_t)page + EXEC_ARG_MAX > 2 * PAGE_SIZE)goto err;
-            if(copy_from_user(strbuf, (void*)up, EXEC_ARG_MAX)) goto err;
-            strbuf[EXEC_ARG_MAX - 1] = 0;
+            if(strncpy_from_user(strbuf, (void*)up, EXEC_ARG_MAX) < 0) goto err;
             kargv[argc] = strbuf;
             strbuf += strlen(strbuf) + 1;
         }
@@ -345,8 +352,7 @@ long sys_execve(long path, long argv, long envp, long a4, long a5, long a6){
             if(copy_from_user(&up, (void*)((char**)envp + envc), sizeof(up))) goto err;
             if(!up) break;
             if((uintptr_t)strbuf - (uintptr_t)page + EXEC_ARG_MAX > 2 * PAGE_SIZE) goto err;
-            if(copy_from_user(strbuf, (void*)up, EXEC_ARG_MAX)) goto err;
-            strbuf[EXEC_ARG_MAX - 1] = 0;
+            if(strncpy_from_user(strbuf, (void*)up, EXEC_ARG_MAX) < 0) goto err;
             kenvp[envc] = strbuf;
             strbuf += strlen(strbuf) + 1;
         }
@@ -355,7 +361,7 @@ long sys_execve(long path, long argv, long envp, long a4, long a5, long a6){
     //加载并执行
     int r = do_execve(kpath, argc ? kargv : NULL, envc ? kenvp : NULL);
     Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)page), 2);
-    return r < 0 ? -ENOEXEC : 0;
+    return r;
 err:
     Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)page), 2);
     return -EFAULT;

@@ -119,7 +119,7 @@ static int do_wp_page(mm_struct *mm, uintptr_t fault_addr){
 	return 0;
 }
 
-void interrupt_PF(uint64_t fault_addr, uint64_t error_code, uintptr_t rip){
+void interrupt_PF(uint64_t fault_addr, uint64_t error_code, uintptr_t rip, uintptr_t user_rsp){
 	//按需分页：用户态、页不存在、非保留位错误
 	if ((error_code & PF_ERR_USER) && !(error_code & PF_ERR_PRESENT) && !(error_code & PF_ERR_RSVD)) {
 		if (current_task && current_task->mm) {
@@ -148,8 +148,8 @@ void interrupt_PF(uint64_t fault_addr, uint64_t error_code, uintptr_t rip){
 		}
 	}
 	//写时复制
-	if ((error_code & PF_ERR_USER) && (error_code & PF_ERR_PRESENT) && (error_code & PF_ERR_WRITE)) {
-		if (current_task && current_task->mm) {
+	if ((error_code & PF_ERR_PRESENT) && (error_code & PF_ERR_WRITE)) {
+		if (current_task && current_task->mm && fault_addr < USER_VADDR_MAX) {
 			vm_area_t *vma = find_vma(current_task->mm, fault_addr);
 			if (vma && (vma->vm_flags & VM_WRITE) &&
 			    do_wp_page(current_task->mm, fault_addr) == 0) return;
@@ -157,7 +157,8 @@ void interrupt_PF(uint64_t fault_addr, uint64_t error_code, uintptr_t rip){
 	}
 pf_error:
 	print_error();
-	early_printk("%s\nRIP=%p CR2=%p Error Code=%X\n",exception_names[INT_GATE_PF],rip,fault_addr,error_code);
+	early_printk("%s pid=%d\nRIP=%p CR2=%p Error Code=%X\n",exception_names[INT_GATE_PF],current_task?(int)current_task->pid:-1,rip,fault_addr,error_code);
+	(void)user_rsp;
 	TTY_Print(error_code & PF_ERR_USER ? "[USER]" : "[SUPER]", error_code & PF_ERR_USER ? COLOR_YELLOW : COLOR_CYAN);
 	TTY_Print(error_code & PF_ERR_WRITE ? "[WRITE]" : "[READ]", COLOR_YELLOW);
 	TTY_Print(error_code & PF_ERR_EXEC ? "[EXEC]" : "", COLOR_YELLOW);

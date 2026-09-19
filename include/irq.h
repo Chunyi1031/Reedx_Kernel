@@ -37,7 +37,7 @@
 #define IRQ_ATA_SECONDARY  0x0F   //ATA从通道（硬盘/CD-ROM）
 
 void send_eoi(uint8_t irq);//发送EOI
-extern void irq_dispatch(uint32_t vector);//通用硬件中断分发
+extern void irq_dispatch(uint32_t vector, uint64_t *frame);//通用硬件中断分发
 extern char irq_entries_start[];//IRQ入口桩数组 (kernel/asm/irq_handlers.S)
 
 extern volatile uint64_t SYSTEM_TimerTicks;//系统启动以来的定时器中断计数

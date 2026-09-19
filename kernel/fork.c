@@ -4,7 +4,9 @@
 #include <mm/vmm.h>
 #include <idt.h>
 #include <klib.h>
+#include <print.h>
 #include <pipe.h>
+#include <signals.h>
 
 __attribute__((naked))
 void fork_trampoline(void){
@@ -85,6 +87,7 @@ pid_t do_fork(void){
 		if (child->files[i].used && child->files[i].node) child->files[i].node->refs++;
 		if (child->files[i].used && child->files[i].pipe) pipeForkRef((struct pipe*)child->files[i].pipe, (child->files[i].flags & O_ACCMODE) == O_WRONLY);
 	}
+	SignalForkCopy(child, parent);//复制信号动作表
 	TaskListAdd(child);
 	sti();
 	return child->pid;
@@ -95,4 +98,20 @@ long sys_fork(long a, long b, long c, long a4, long a5, long a6){
 	if (!current_task || !current_task->mm) return -ENOSYS;//检查当前任务是否存在或为内核任务
 	pid_t pid = do_fork();//执行fork
 	return pid < 0 ? -EAGAIN : (long)pid;
+}
+
+long sys_vfork(long a, long b, long c, long a4, long a5, long a6){
+	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
+	if(!current_task || !current_task->mm)return -ENOSYS;
+	task_struct *parent = current_task;
+	parent->vfork_waiting = 1;
+	pid_t pid = do_fork();
+	if(pid < 0){
+		parent->vfork_waiting = 0;
+		return -EAGAIN;
+	}
+	task_struct *child = TaskFind(pid);
+	if(child)child->vfork_parent = parent->pid;
+	while(parent->vfork_waiting)sleep_on(&parent->child_wq);
+	return (long)pid;
 }

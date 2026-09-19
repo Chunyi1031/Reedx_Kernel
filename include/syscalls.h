@@ -18,6 +18,7 @@
 #define SYS_BRK             12
 #define SYS_RT_SIGACTION    13
 #define SYS_RT_SIGPROCMASK  14
+#define SYS_RT_SIGRETURN    15
 #define SYS_IOCTL           16
 #define SYS_PREAD64         17
 #define SYS_WRITEV          20
@@ -29,9 +30,11 @@
 #define SYS_GETPID          39
 #define SYS_CLONE           56
 #define SYS_FORK            57
+#define SYS_VFORK           58
 #define SYS_EXECVE          59
 #define SYS_EXIT            60
 #define SYS_WAIT4           61
+#define SYS_KILL            62
 #define SYS_UNAME           63
 #define SYS_FCNTL           72
 #define SYS_GETCWD          79
@@ -42,11 +45,17 @@
 #define SYS_UNLINK          87
 #define SYS_READLINK        89
 #define SYS_GETTIMEOFDAY    96
+#define SYS_GETUID          102
+#define SYS_GETGID          104
+#define SYS_GETEUID         107
+#define SYS_GETEGID         108
+#define SYS_GETPPID         110
 #define SYS_SIGALTSTACK     131
 #define SYS_PRCTL           157
 #define SYS_ARCH_PRCTL      158
 #define SYS_REBOOT          169
 #define SYS_GETTID          186
+#define SYS_TKILL           200
 #define SYS_TIME            201
 #define SYS_FUTEX           202
 #define SYS_SCHED_GETAFFINITY 204
@@ -56,12 +65,14 @@
 #define SYS_CLOCK_GETRES    229
 #define SYS_CLOCK_NANOSLEEP 230
 #define SYS_EXIT_GROUP      231
+#define SYS_TGKILL          234
 #define SYS_OPENAT          257
 #define SYS_MKDIRAT         258
 #define SYS_UNLINKAT        263
 #define SYS_NEWFSTATAT      262
 #define SYS_RENAMEAT        264
 #define SYS_READLINKAT      267
+#define SYS_FACCESSAT       269
 #define SYS_SET_ROBUST_LIST 273
 #define SYS_DUP3            292
 #define SYS_PIPE2           293
@@ -125,6 +136,7 @@
 //errno值（POSIX）
 #define EPERM               1
 #define ENOENT              2
+#define ESRCH               3
 #define EINTR               4
 #define EIO                 5
 #define E2BIG               7
@@ -238,6 +250,7 @@ void InitSyscall(void);//初始化SYSCALL机制
  * @param n    字节数
  */
 uint64_t copy_from_user(void *to, const void *from, uint64_t n);
+long strncpy_from_user(char *dst, const void *src, long max);
 /**
  * @brief 用户从内核拷贝（返回未拷贝字节数，0 = 成功）
  * @param to   内核目标地址

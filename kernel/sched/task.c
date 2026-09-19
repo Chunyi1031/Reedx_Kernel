@@ -1,4 +1,5 @@
 #include <task.h>
+#include <signals.h>
 #include <mm/pmm.h>
 #include <idt.h>
 #include <irq.h>
@@ -217,10 +218,20 @@ void TaskExit(){
     //先回收自己的僵尸子进程
     task_struct *zombie;
     while((zombie = find_zombie_child(current_task->pid, 0)) != NULL)TaskKill(zombie);
-    //唤醒父进程(若存在且活着,僵尸父进程不算)
+    if(current_task->vfork_parent > 0){
+        task_struct *vp = TaskFind(current_task->vfork_parent);
+        if(vp){
+            vp->vfork_waiting = 0;
+            TaskWake(vp);
+        }
+        current_task->vfork_parent = 0;
+    }//唤醒父进程(若存在且活着,僵尸父进程不算)
     if(current_task->parent > 0){
         task_struct *parent = TaskFind(current_task->parent);
-        if(parent && parent->state != TASK_TERMINATED)wake_up(&parent->child_wq);
+        if(parent && parent->state != TASK_TERMINATED){
+            SignalSend(parent, SIGCHLD, 1, current_task->pid, current_task->exit_code);
+            wake_up(&parent->child_wq);
+        }
     }
     schedule();
     SYSTEM_STOP();
@@ -236,6 +247,7 @@ void TaskKill(task_struct* t){
     if(list_has_node(&t->wait_node))list_del(&t->wait_node);
     if(t->kernel_stack)Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)t->kernel_stack),t->stack_size / 4096);
     if(t->mm){ mmput(t->mm); t->mm = NULL; }//释放用户地址空间
+    SignalFree(t);//释放信号动作表
     memset(t,0,4096);
     Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)t),1);
     sti();
@@ -270,6 +282,14 @@ void wake_up(wait_queue_head_t *wq){
 //唤醒等待队列上的全部任务
 void wake_up_all(wait_queue_head_t *wq){
     while(!list_empty(wq))wake_up_one(wq);
+}
+
+//将阻塞中的任务从等待队列摘下并置就绪
+void TaskWake(task_struct *t){
+    if(!t)return;
+    if(list_has_node(&t->wait_node))list_del(&t->wait_node);
+    t->wake_up_ticks = 0;
+    if(t->state == TASK_BLOCKED)TaskListAdd(t);
 }
 
 //睡眠指定毫秒(精度受限于OS_TICK_HZ=100,即10ms粒度)

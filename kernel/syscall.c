@@ -13,6 +13,7 @@
 #include <fs.h>
 #include <futex.h>
 #include <pipe.h>
+#include <signals.h>
 #include <rtc.h>
 #include <delay.h>
 #include <irq.h>
@@ -58,7 +59,7 @@ uint64_t copy_to_user(void *to, const void *from, uint64_t n){
 }
 
 //从用户空间拷贝字符串
-static long strncpy_from_user(char *dst, const void *src, long max){
+long strncpy_from_user(char *dst, const void *src, long max){
     uintptr_t uaddr = (uintptr_t)src;
     long i = 0;
     if(!dst || !src) return -1;
@@ -196,6 +197,7 @@ static long sys_write(long fd, long buf, long count, long a4, long a5, long a6){
 		//管道写入
 		if(current_task->files[fd].pipe){
 			long pw = pipeWrite((struct pipe*)current_task->files[fd].pipe, kbuf, (uint64_t)chunk);
+			if(pw == -EPIPE)SignalSend(current_task, SIGPIPE, SI_KERNEL, 0, 0);//写入已断管道，投递SIGPIPE
 			if(pw <= 0)return pw < 0 ? pw : -ENOSPC;
 			n = (uint64_t)pw;
 		//文件写入
@@ -529,7 +531,7 @@ static void fill_stat(stat_t *st, fs_node_t *node){
 	st->st_dev = 1;
 	st->st_ino = node->ino;
 	st->st_nlink = 1;
-	st->st_mode = (node->type == FT_DIR) ? (S_IFDIR | 0755) : (S_IFREG | 0644);
+	st->st_mode = (node->type == FT_DIR) ? (S_IFDIR | 0755) : (S_IFREG | 0755);
 	st->st_size = (int64_t)node->size;
 	st->st_blksize = 512;
 	st->st_blocks = ((uint64_t)node->size + 511) / 512;
@@ -629,6 +631,15 @@ static long sys_access(long path, long mode, long a3, long a4, long a5, long a6)
 }
 
 /*
+ * int faccessat(int dirfd, const char *path, int mode, int flags)
+ */
+static long sys_faccessat(long dirfd, long path, long mode, long flags, long a5, long a6){
+	(void)flags; (void)a5; (void)a6;
+	if((int)dirfd != AT_FDCWD)return -ENOSYS;
+	return sys_access(path, mode, 0, 0, 0, 0);
+}
+
+/*
  * ssize_t readlink(const char *path, char *buf, size_t bufsiz)
  * 无符号链接支持, 一律-EINVAL
  */
@@ -718,6 +729,7 @@ static long sys_writev(long fd, long iov, long iovcnt, long a4, long a5, long a6
 					if((current_task->files[fd].flags & O_ACCMODE) == O_RDONLY)return -EBADF;
 					if(current_task->files[fd].pipe){
 						long pw = pipeWrite((struct pipe*)current_task->files[fd].pipe, kbuf, chunk);
+						if(pw == -EPIPE)SignalSend(current_task, SIGPIPE, SI_KERNEL, 0, 0);//写入已断管道
 						if(pw <= 0)return total ? total : (pw < 0 ? pw : -ENOSPC);
 					}else{
 						FsWrite(&current_task->files[fd], kbuf, chunk);
@@ -951,16 +963,56 @@ static long sys_poll(long fds, long nfds, long timeout, long a4, long a5, long a
 
 /*
  * int rt_sigaction(int signum, const struct sigaction *act, struct sigaction *oldact, size_t sigsetsize)
- * 无信号处理: 接受设置, 清零旧值(内核sigaction=32字节)
+ * 存储信号动作表
  */
 static long sys_rt_sigaction(long signum, long act, long oldact, long sigsetsize, long a5, long a6){
-	(void)signum; (void)act; (void)sigsetsize; (void)a5; (void)a6;
-	if(oldact){
-		char zero[32];
-		memset(zero, 0, sizeof(zero));
-		if(copy_to_user((void*)oldact, zero, sizeof(zero)))return -EFAULT;
-	}
+	(void)a5; (void)a6;
+	return SignalDoSigaction(signum, act, oldact, sigsetsize);
+}
+
+/*
+ * long rt_sigreturn(void)
+ * 用户restorer执行, 从信号帧恢复上下文
+ */
+static long sys_rt_sigreturn(long a, long b, long c, long a4, long a5, long a6){
+	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
+	return SignalReturn();
+}
+
+/*
+ * int kill(pid_t pid, int sig)
+ */
+static long sys_kill(long pid, long sig, long c, long a4, long a5, long a6){
+	(void)c; (void)a4; (void)a5; (void)a6;
+	if(sig < 0 || sig > 64)return -EINVAL;
+	task_struct *t = NULL;
+	if(pid > 0)t = TaskFind((pid_t)pid);
+	else if(pid == 0)t = current_task;//等同调用者
+	else return -ESRCH;//进程组(负pid)暂不支持
+	if(!t)return -ESRCH;
+	if(sig == 0)return 0;//探测存在性
+	SignalSend(t, (int)sig, SI_USER, current_task ? current_task->pid : 0, 0);
 	return 0;
+}
+
+/*
+ * int tgkill(pid_t tgid, pid_t tid, int sig) / int tkill(pid_t tid, int sig)
+ */
+static long sys_tgkill(long tgid, long tid, long sig, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(tgid <= 0 || tid <= 0)return -EINVAL;
+	if(tgid != tid)return -EINVAL;//无线程组: tgid必须等于tid
+	if(sig < 0 || sig > 64)return -EINVAL;
+	task_struct *t = TaskFind((pid_t)tid);
+	if(!t)return -ESRCH;
+	if(sig == 0)return 0;
+	SignalSend(t, (int)sig, SI_TKILL, current_task ? current_task->pid : 0, 0);
+	return 0;
+}
+
+static long sys_tkill(long tid, long sig, long c, long a4, long a5, long a6){
+	(void)c;
+	return sys_tgkill(tid, tid, sig, a4, a5, a6);
 }
 
 /*
@@ -1025,8 +1077,8 @@ static long sys_nanosleep(long req, long rem, long unused, long a4, long a5, lon
 	return 0;
 }
 
-//进程退出
-static long __attribute__((noreturn)) do_exit(long status){
+//用户任务退出
+void UserTaskExit(long status){
 	if(current_task && current_task->mm){
 		if(current_task == init_task && (int)status == -1)panic("Init failed: cannot execute init");
 		//通知clear_child_tid(写入0, 供futex/线程库检测退出)
@@ -1039,6 +1091,11 @@ static long __attribute__((noreturn)) do_exit(long status){
 		TaskExit();//退出任务
 	}
 	SYSTEM_STOP();
+}
+
+//进程退出
+static long __attribute__((noreturn)) do_exit(long status){
+	UserTaskExit(status);
 }
 
 /*
@@ -1067,6 +1124,36 @@ static long sys_getpid(long a, long b, long c, long a4, long a5, long a6){
 	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
 	if (!current_task) return -1;
 	return (long)current_task->pid;
+}
+
+/*
+ * pid_t getppid(void) / uid_t getuid/geteuid / gid_t getgid/getegid
+ * 身份一律为root(0)
+ */
+static long sys_getppid(long a, long b, long c, long a4, long a5, long a6){
+	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return 0;
+	return (long)current_task->parent;
+}
+
+static long sys_getuid(long a, long b, long c, long a4, long a5, long a6){
+	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
+	return 0;
+}
+
+static long sys_geteuid(long a, long b, long c, long a4, long a5, long a6){
+	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
+	return 0;
+}
+
+static long sys_getgid(long a, long b, long c, long a4, long a5, long a6){
+	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
+	return 0;
+}
+
+static long sys_getegid(long a, long b, long c, long a4, long a5, long a6){
+	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
+	return 0;
 }
 
 /*
@@ -1107,8 +1194,10 @@ long sys_waitpid(long pid, long wstatus, long options, long a4, long a5, long a6
 		}
 		schedule();//让出CPU,被子进程退出唤醒后重新扫描
 	}
-	//回收僵尸:先复制退出码再释放资源
-	int code = zombie->exit_code;
+	//回收僵尸
+	int code;
+	if(zombie->sig_exit > 0)code = zombie->sig_exit & 0x7F;
+	else code = (zombie->exit_code & 0xFF) << 8;
 	pid_t ret = zombie->pid;
 	if(wstatus){
 		if(copy_to_user((void*)wstatus, &code, sizeof(code)))return -EFAULT;
@@ -1128,7 +1217,9 @@ long syscall_dispatch(long num, long a1, long a2, long a3, long a5, long a6){
 	syscall_fn fn = syscall_table[num];
 	if(!fn)return -ENOSYS;
 	long a4 = *(long*)(user_kernel_stack_top - 128 + 40);
-	return fn(a1, a2, a3, a4, a5, a6);//调用处理函数
+	long ret = fn(a1, a2, a3, a4, a5, a6);//调用处理函数
+	SignalDeliverUser(ret);//返回用户前投递待处理信号
+	return ret;
 }
 
 /*
@@ -1354,6 +1445,7 @@ void InitSyscall(void){
 	syscall_table[SYS_NEWFSTATAT] = sys_newfstatat;
 	syscall_table[SYS_LSEEK]      = sys_lseek;
 	syscall_table[SYS_ACCESS]     = sys_access;
+	syscall_table[SYS_FACCESSAT]  = sys_faccessat;
 	syscall_table[SYS_READLINK]   = sys_readlink;
 	syscall_table[SYS_GETCWD]     = sys_getcwd;
 	syscall_table[SYS_CHDIR]      = sys_chdir;
@@ -1377,14 +1469,24 @@ void InitSyscall(void){
 	syscall_table[SYS_POLL]       = sys_poll;
 	syscall_table[SYS_RT_SIGACTION]     = sys_rt_sigaction;
 	syscall_table[SYS_RT_SIGPROCMASK]   = sys_rt_sigprocmask;
+	syscall_table[SYS_RT_SIGRETURN]     = sys_rt_sigreturn;
+	syscall_table[SYS_KILL]             = sys_kill;
+	syscall_table[SYS_TKILL]            = sys_tkill;
+	syscall_table[SYS_TGKILL]           = sys_tgkill;
 	syscall_table[SYS_SIGALTSTACK]      = sys_sigaltstack;
 	syscall_table[SYS_FCNTL]            = sys_fcntl;
 	syscall_table[SYS_PRCTL]            = sys_prctl;
 	syscall_table[SYS_GETTID]           = sys_gettid;
 	syscall_table[SYS_SCHED_GETAFFINITY] = sys_sched_getaffinity;
 	syscall_table[SYS_GETPID]     = sys_getpid;
+	syscall_table[SYS_GETPPID]    = sys_getppid;
+	syscall_table[SYS_GETUID]     = sys_getuid;
+	syscall_table[SYS_GETEUID]    = sys_geteuid;
+	syscall_table[SYS_GETGID]     = sys_getgid;
+	syscall_table[SYS_GETEGID]    = sys_getegid;
 	syscall_table[SYS_CLONE]      = sys_fork;
 	syscall_table[SYS_FORK]       = sys_fork;
+	syscall_table[SYS_VFORK]      = sys_vfork;
 	syscall_table[SYS_EXECVE]     = sys_execve;
 	syscall_table[SYS_EXIT]       = sys_exit;
 	syscall_table[SYS_WAIT4]      = sys_waitpid;

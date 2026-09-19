@@ -51,6 +51,14 @@ typedef struct task_struct {
     void*               kernel_stack;//内核栈指针
     uint64_t            stack_size; //内核栈大小
     uint64_t            sigmask;    //信号掩码
+    void*               sigacts;    //信号动作表
+    uint64_t            sigpending; //待投递信号位图
+    int                 sig_last_code;//最近信号的si_code
+    pid_t               sig_last_pid;//最近信号发送者pid
+    int                 sig_last_status;//最近信号附加状态
+    pid_t               vfork_parent;//等待本进程exec/退出的父进程pid
+    int                 vfork_waiting;//父进程是否正在等待
+    int                 sig_exit;   //被信号终止时的信号号
     struct list_node    list;       //就绪链表节点
     struct list_node    wait_node;  //等待队列节点
     uint64_t            wake_up_ticks;//msleep超时tick
@@ -87,6 +95,7 @@ extern task_struct* init_task;//首个用户程序任务
 extern uint64_t user_kernel_stack_top;//当前用户任务的内核栈顶
 
 void TaskExit(void) __attribute__((noreturn));//退出当前任务（标记终止并调度）
+void UserTaskExit(long status) __attribute__((noreturn));//用户任务退出
 
 void timeout_wake_check(void);//检查并唤醒超时任务
 #define DEFINE_WAIT_QUEUE(name)  wait_queue_head_t name = {&(name), &(name)}
@@ -128,6 +137,7 @@ void msleep(uint64_t ms);
 void sleep_on(wait_queue_head_t *wq);//将当前任务挂到等待队列并切走
 void wake_up(wait_queue_head_t *wq);//唤醒等待队列上的一个任务
 void wake_up_all(wait_queue_head_t *wq);//唤醒等待队列上的全部任务
+void TaskWake(task_struct* t);//将阻塞任务从等待队列摘下并唤醒
 /**
  * @brief 初始化信号量
  * @param sem 信号量结构体指针

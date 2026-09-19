@@ -1,5 +1,6 @@
 #include <pipe.h>
 #include <task.h>
+#include <signals.h>
 #include <klib.h>
 #include <spinlock.h>
 #include <syscalls.h>
@@ -82,6 +83,11 @@ long pipeRead(struct pipe *p, void *buf, uint64_t len){
             spin_unlock_irqrestore(&p->lock, flags);
             return -EAGAIN;
         }
+        //有待投递信号，中断读取
+        if(SignalPending()){
+            spin_unlock_irqrestore(&p->lock, flags);
+            return -EINTR;
+        }
         //阻塞等待数据
         plist_add_tail(&current_task->wait_node, &p->read_wq);
         current_task->state = TASK_BLOCKED;
@@ -119,6 +125,11 @@ long pipeWrite(struct pipe *p, const void *buf, uint64_t len){
             if(p->nonblock){
                 spin_unlock_irqrestore(&p->lock, flags);
                 return written ? (long)written : -EAGAIN;
+            }
+            //有待投递信号，中断写入
+            if(SignalPending()){
+                spin_unlock_irqrestore(&p->lock, flags);
+                return written ? (long)written : -EINTR;
             }
             //阻塞等待缓冲区有足够空间
             plist_add_tail(&current_task->wait_node, &p->write_wq);

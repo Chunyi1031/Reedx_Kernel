@@ -151,6 +151,7 @@ int_14_handler:
 	mov %cr2, %rdi
 	movq 128(%rsp), %rsi
 	movq 136(%rsp), %rdx
+	movq 160(%rsp), %rcx
 	call interrupt_PF
 	addq $8, %rsp
 	popq %r15
