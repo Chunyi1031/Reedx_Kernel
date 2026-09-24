@@ -122,8 +122,9 @@ static int resolve_parent(const char *path, fs_node_t **parent, char name[MAX_NA
 int FsOpen(const char *path, int flags, fs_file_t *out){
     uint64_t iflags;
     spin_lock_irqsave(&g_fs_lock, iflags);
-    int r = -1;
+    int r = -EINVAL;
     if(!out)goto done;
+    if((flags & O_TMPFILE) == O_TMPFILE){ r = -EOPNOTSUPP; goto done; }
     fs_node_t *node = resolve(path);//解析文件节点
     //解析父目录与末段名
     if(!node && (flags & O_CREAT)){
@@ -132,8 +133,9 @@ int FsOpen(const char *path, int flags, fs_file_t *out){
         if(resolve_parent(path, &parent, name) == 0 && parent->ops->create)node = parent->ops->create(parent, name, FT_FILE);//如果文件不存在则创建
     }
     //检查节点是否存在或非文件
-    if(!node)goto done;
-    if(node->type != FT_FILE && node->type != FT_DIR)goto done;
+    if(!node){ r = -ENOENT; goto done; }
+    if(node->type != FT_FILE && node->type != FT_DIR){ r = -EINVAL; goto done; }
+    if(node->type == FT_DIR && (flags & O_ACCMODE) != O_RDONLY){ r = -EISDIR; goto done; }
     if(flags & O_TRUNC){
         if(node->ops->truncate)node->ops->truncate(node);
     }

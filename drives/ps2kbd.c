@@ -1,4 +1,5 @@
 #include <drives/ps2kbd.h>
+#include <drives/tty.h>
 #include <irq.h>
 
 static char KeyboardRingBuffer[KEYBOARD_BUFFER_SIZE];//键盘缓冲区
@@ -252,6 +253,7 @@ void Keyboard_IRQ(){
 	char buf[5];
 	int n = scan_to_buf(sc, buf);
 	for (int i = 0; i < n; i++) {
+		if(TTY_KeyInput(buf[i]))continue;//终端消费
 		if (key_count >= KEYBOARD_BUFFER_SIZE)return;//满则丢弃所有未写入字节
 		KeyboardRingBuffer[buffer_head] = buf[i];
 		buffer_head = (buffer_head + 1) % KEYBOARD_BUFFER_SIZE;

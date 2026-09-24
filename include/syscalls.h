@@ -49,7 +49,10 @@
 #define SYS_GETGID          104
 #define SYS_GETEUID         107
 #define SYS_GETEGID         108
+#define SYS_SETPGID         109
 #define SYS_GETPPID         110
+#define SYS_GETPGRP         111
+#define SYS_GETPGID         121
 #define SYS_SIGALTSTACK     131
 #define SYS_PRCTL           157
 #define SYS_ARCH_PRCTL      158
@@ -80,6 +83,7 @@
 #define SYS_RENAMEAT2       316
 #define SYS_GETRANDOM       318
 #define AT_FDCWD            (-100)
+#define AT_EMPTY_PATH       0x1000  //path 为空字符串时对 dirfd 自身操作(glibc fstat 用它)
 
 #define AT_REMOVEDIR        0x200
 #define RENAME_NOREPLACE    1
@@ -94,9 +98,12 @@
 #define O_RDWR      2       //读写打开
 #define O_ACCMODE   3       //访问模式掩码
 #define O_CREAT     0x40    //文件不存在则创建
+#define O_EXCL      0x80    //与O_CREAT同用: 已存在则失败
 #define O_TRUNC     0x200   //打开时截断文件长度为0
 #define O_APPEND    0x400   //每次写入追加到文件末尾
 #define O_NONBLOCK  0x800   //非阻塞
+#define O_DIRECTORY 0x10000 //要求路径必须是一个目录
+#define O_TMPFILE   (0x400000 | O_DIRECTORY)//匿名临时文件
 #define O_CLOEXEC   0x80000 //exec时关闭
 
 //fcntl命令
@@ -151,6 +158,7 @@
 #define EEXIST              17
 #define ENODEV              19
 #define ENOTDIR             20
+#define EISDIR              21
 #define EINVAL              22
 #define ENOTTY              25
 #define ENFILE              23
@@ -158,6 +166,7 @@
 #define EPIPE               32
 #define ERANGE              34
 #define ENOSYS              38
+#define EOPNOTSUPP          95
 #define ETIMEDOUT           110
 
 #define WNOHANG             1 //waitpid选项

@@ -74,6 +74,26 @@ void idle_thread(){
     SYSTEM_STOP();
 }
 
+//给root的所有子孙进程投递信号
+void TaskSignalDescendants(task_struct *root, int sig){
+	if(!root || sig <= 0)return;
+	struct list_node *pos;
+	list_for_each(pos, &task_list_head){
+		task_struct *t = container_of(pos, task_struct, list);
+		if(t == root)continue;
+		//沿父链检查t是否root的后代
+		pid_t p = t->parent;
+		int guard = 0;
+		while(p > 0 && guard++ < 64){
+			if(p == root->pid)break;
+			task_struct *pt = TaskFind(p);
+			if(!pt)break;
+			p = pt->parent;
+		}
+		if(p == root->pid)SignalSend(t, sig, SI_KERNEL, 0, 0);
+	}
+}
+
 void TaskInit(){
     //初始化链表
     task_list_head.prev = &task_list_head;

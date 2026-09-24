@@ -71,6 +71,7 @@ typedef struct fs_file{
     uint64_t   off;     //文件指针
     int        flags;   //打开标志
     _Bool      used;    //是否使用
+    _Bool      tty_mark;//控制台fd是否已查询终端
 } fs_file_t;
 
 void FsInit(struct disk_info *disk);//初始化文件系统

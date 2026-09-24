@@ -119,6 +119,16 @@ static long sys_read(long fd, long buf, long count, long a4, long a5, long a6){
 	//键盘读取
 	if((fd == 0 && (!current_task || !current_task->files[0].used)) || (fd_is_console(fd) && (current_task->files[fd].flags & O_ACCMODE) != O_WRONLY)){
 		if(count == 0)return 0;
+		if(current_task && fd >= 0 && fd < MAX_FD){
+			if(count > 1)current_task->files[fd].tty_mark = true;
+			if(current_task->files[fd].tty_mark){
+				char lbuf[TTY_LINE_MAX];
+				long n = TTY_TermRead(lbuf, count);
+				if(n < 0)return n;//-EINTR(Ctrl+C)
+				if(n > 0 && copy_to_user((void*)buf, lbuf, (unsigned long)n))return -EFAULT;
+				return n;
+			}
+		}
 		sti();
 		char kbuf[KEYBOARD_BUFFER_SIZE];
 		long total = 0;
@@ -276,7 +286,8 @@ static long sys_open(long path, long flags, long mode, long a4, long a5, long a6
 	}
 	if (fd >= MAX_FD)return -ENFILE;
 	fs_file_t *f = &current_task->files[fd];
-	if (FsOpen(kpath, (int)flags, f) != 0)return -ENOENT;//打开文件
+	int or = FsOpen(kpath, (int)flags, f);//打开文件
+	if(or != 0)return or;
 	return fd;
 }
 
@@ -569,8 +580,29 @@ static long sys_openat(long dirfd, long path, long flags, long mode, long a5, lo
 /*
  * int newfstatat(int dirfd, const char *path, struct stat *buf, int flags)
  */
+static long sys_newfstat(long fd, long buf, long a3, long a4, long a5, long a6);//前向声明
 static long sys_newfstatat(long dirfd, long path, long buf, long flags, long a5, long a6){
-	(void)dirfd; (void)flags; (void)a5; (void)a6;
+	(void)a5; (void)a6;
+	if(!current_task)return -EBADF;
+	if(!path || !buf)return -EFAULT;
+	char kpath[256];
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
+	if(kpath[0] == '\0'){
+		if(!(flags & AT_EMPTY_PATH))return -ENOENT;
+		return sys_newfstat(dirfd, buf, 0, 0, 0, 0);
+	}
+	if((int)dirfd != AT_FDCWD && kpath[0] != '/'){
+		if(dirfd < 0 || dirfd >= MAX_FD || !current_task->files[dirfd].used)return -EBADF;
+		fs_node_t *dir = current_task->files[dirfd].node;
+		if(!dir || dir->type != FT_DIR)return -ENOTDIR;
+		if(!dir->ops || !dir->ops->lookup)return -ENOSYS;
+		fs_node_t *child = dir->ops->lookup(dir, kpath);
+		if(!child)return -ENOENT;
+		stat_t st;
+		fill_stat(&st, child);
+		if(copy_to_user((void*)buf, &st, sizeof(st)))return -EFAULT;
+		return 0;
+	}
 	return sys_newstat(path, buf, 0, 0, 0, 0);
 }
 
@@ -686,11 +718,88 @@ static long sys_chdir(long path, long a2, long a3, long a4, long a5, long a6){
 /*DeepSeek V4 Pro*/
 /*
  * int ioctl(int fd, unsigned long request, ...)
- * 无终端ioctl支持, 一律-ENOTTY(musl/glibc把ENOTTY当"非终端"处理, 无碍)
+ * 控制台fd支持终端相关请求(termios/窗口/前台组); 其余一律-ENOTTY
  */
 static long sys_ioctl(long fd, long request, long arg, long a4, long a5, long a6){
-	(void)fd; (void)request; (void)arg; (void)a4; (void)a5; (void)a6;
-	return -ENOTTY;
+	(void)a4; (void)a5; (void)a6;
+	if(!current_task)return -ENOTTY;
+	if(fd < 0 || fd >= MAX_FD)return -ENOTTY;
+	//仅控制台fd: 已打开的虚拟控制台 或 未使用的0/1/2
+	if(!fd_is_console(fd) && !(fd < 3 && !current_task->files[fd].used))return -ENOTTY;
+	switch((unsigned long)request){
+	case TTY_TCGETS:{//老式termios
+		tty_termios_legacy_t t;
+		TTY_TermExportLegacy(&t);
+		current_task->files[fd].tty_mark = true;//查询过终端: 之后read走行规程
+		if(copy_to_user((void*)arg, &t, sizeof(t)))return -EFAULT;
+		return 0;
+	}
+	case TTY_TCGETS2:{//struct termios2(glibc isatty走这里)
+		tty_termios2_t t;
+		TTY_TermExport2(&t);
+		current_task->files[fd].tty_mark = true;
+		if(copy_to_user((void*)arg, &t, sizeof(t)))return -EFAULT;
+		return 0;
+	}
+	case TTY_TCSETS: case TTY_TCSETSW: case TTY_TCSETSF:{
+		tty_termios_legacy_t t;
+		if(copy_from_user(&t, (void*)arg, sizeof(t)))return -EFAULT;
+		TTY_TermImportLegacy(&t);
+		current_task->files[fd].tty_mark = true;
+		return 0;
+	}
+	case TTY_TCSETS2: case TTY_TCSETSW2: case TTY_TCSETSF2:{
+		tty_termios2_t t;
+		if(copy_from_user(&t, (void*)arg, sizeof(t)))return -EFAULT;
+		TTY_TermImport2(&t);
+		current_task->files[fd].tty_mark = true;
+		return 0;
+	}
+	case TTY_TIOCGPGRP:{//前台进程组: 无进程组概念, 返回自身pid(与getpgid自洽)
+		int32_t pgrp = (int32_t)current_task->pid;
+		if(copy_to_user((void*)arg, &pgrp, sizeof(pgrp)))return -EFAULT;
+		return 0;
+	}
+	case TTY_TIOCSPGRP:return 0;//作业控制设置: 接受并忽略(假装成功)
+	case TTY_TIOCGWINSZ:{
+		struct tty_winsize ws;
+		ws.ws_row = (uint16_t)(SYSTEM_ScreenInfo.Height / 18);//字符单元: 10x18像素
+		ws.ws_col = (uint16_t)(SYSTEM_ScreenInfo.Width / 10);
+		ws.ws_xpixel = (uint16_t)SYSTEM_ScreenInfo.Width;
+		ws.ws_ypixel = (uint16_t)SYSTEM_ScreenInfo.Height;
+		if(copy_to_user((void*)arg, &ws, sizeof(ws)))return -EFAULT;
+		return 0;
+	}
+	case TTY_FIONREAD:{
+		int32_t zero = 0;
+		if(copy_to_user((void*)arg, &zero, sizeof(zero)))return -EFAULT;
+		return 0;
+	}
+	default:return -ENOTTY;
+	}
+}
+
+/*
+ * pid_t getpgid(pid_t pid) / pid_t getpgrp(void) / int setpgid(pid_t pid, pid_t pgid)
+ * 无进程组概念: 查询一律返回自身pid(与TIOCGPGRP自洽, 避免shell作业控制初始化时死循环);
+ * 设置假装成功
+ */
+static long sys_getpgid(long pid, long a2, long a3, long a4, long a5, long a6){
+	(void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -ESRCH;
+	if(pid != 0 && pid != (long)current_task->pid)return -ESRCH;
+	return (long)current_task->pid;
+}
+
+static long sys_getpgrp(long a1, long a2, long a3, long a4, long a5, long a6){
+	(void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return 0;
+	return (long)current_task->pid;
+}
+
+static long sys_setpgid(long pid, long pgid, long a3, long a4, long a5, long a6){
+	(void)pid; (void)pgid; (void)a3; (void)a4; (void)a5; (void)a6;
+	return 0;//无进程组: 假装成功(让shell的作业控制初始化通过)
 }
 
 /*
@@ -988,7 +1097,7 @@ static long sys_kill(long pid, long sig, long c, long a4, long a5, long a6){
 	task_struct *t = NULL;
 	if(pid > 0)t = TaskFind((pid_t)pid);
 	else if(pid == 0)t = current_task;//等同调用者
-	else return -ESRCH;//进程组(负pid)暂不支持
+	else return 0;
 	if(!t)return -ESRCH;
 	if(sig == 0)return 0;//探测存在性
 	SignalSend(t, (int)sig, SI_USER, current_task ? current_task->pid : 0, 0);
@@ -1470,6 +1579,9 @@ void InitSyscall(void){
 	syscall_table[SYS_RT_SIGACTION]     = sys_rt_sigaction;
 	syscall_table[SYS_RT_SIGPROCMASK]   = sys_rt_sigprocmask;
 	syscall_table[SYS_RT_SIGRETURN]     = sys_rt_sigreturn;
+	syscall_table[SYS_SETPGID]          = sys_setpgid;
+	syscall_table[SYS_GETPGRP]          = sys_getpgrp;
+	syscall_table[SYS_GETPGID]          = sys_getpgid;
 	syscall_table[SYS_KILL]             = sys_kill;
 	syscall_table[SYS_TKILL]            = sys_tkill;
 	syscall_table[SYS_TGKILL]           = sys_tgkill;

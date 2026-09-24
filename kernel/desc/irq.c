@@ -1,6 +1,7 @@
 #include <irq.h>
 #include <drives/timer.h>
 #include <drives/ps2kbd.h>
+#include <drives/tty.h>
 #include <print.h>
 #include <task.h>
 #include <futex.h>
@@ -27,6 +28,7 @@ void irq_dispatch(uint32_t vector, uint64_t *frame){
 		SYSTEM_TimerTicks++;//增加计数
 		timeout_wake_check();//检查并唤醒超时的msleep任务
 		futex_timeout_check();//检查并唤醒超时的futex等待者
+		TTY_IntrCheck();//终端Ctrl+C挂起信号投递
 		send_eoi((uint8_t)vector);//发送EOI
 		schedule();//调度
 		SignalDeliverFromIRQ(frame);//返回用户前投递待处理信号

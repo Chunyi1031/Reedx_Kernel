@@ -106,6 +106,7 @@ void user_trampoline(void);//从内核栈iretq回ring3
 void TaskListAdd(task_struct* t);//将任务加入任务链表
 void TaskListRemove(task_struct* t);//将任务从任务链表中移除
 task_struct* TaskFind(pid_t pid);//根据PID查找任务
+void TaskSignalDescendants(task_struct *root, int sig);//给root的所有子孙进程投递信号
 /**
  * @brief 查找指定父进程的指定子进程
  * @param parent_pid 父进程PID
