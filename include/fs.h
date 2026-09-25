@@ -80,6 +80,12 @@ fs_node_t *FsRoot(void);//文件系统根目录节点
 fs_node_t *FsResolve(const char *path);//解析绝对路径返回节点
 int FsNormalizePath(const char *path, char *out, int outsz);//规范化路径, 输出绝对规范路径
 int FsOpen(const char *path, int flags, fs_file_t *out);//打开文件
+int FsOpenIn(fs_node_t *dir, const char *name, int flags, fs_file_t *out);//在已打开目录下打开
+int FsMkdirIn(fs_node_t *dir, const char *name, int mode);//在已打开目录下建子目录
+int FsUnlinkIn(fs_node_t *dir, const char *name);//删除已打开目录下的目录项
+int FsRenameIn(fs_node_t *olddir, const char *oldname, fs_node_t *newdir, const char *newname);//两侧均为目录+名字的重命名
+int FsExistsIn(fs_node_t *dir, const char *name);//存在性检查
+fs_node_t *FsParentOf(const char *path, char *name, int namesz);//取路径的父目录节点与末段名
 void FsClose(fs_file_t *f);//关闭文件
 uint64_t FsRead(fs_file_t *f, void *buf, uint64_t len);//读取文件
 uint64_t FsWrite(fs_file_t *f, const void *buf, uint64_t len);//写入文件

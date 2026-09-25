@@ -6,6 +6,7 @@ static char KeyboardRingBuffer[KEYBOARD_BUFFER_SIZE];//键盘缓冲区
 static int key_count = 0;//可读键总数
 static int buffer_head = 0;//写指针
 static int buffer_tail = 0;//读指针
+static spinlock_t g_kbd_lock = {0};//保护环形缓冲
 
 //修饰键状态
 static _Bool shift_state = false;
@@ -252,33 +253,46 @@ void Keyboard_IRQ(){
 	uint8_t sc = inb(PS2_KBD_KEY_PORT);
 	char buf[5];
 	int n = scan_to_buf(sc, buf);
+	uint64_t flags;
+	spin_lock_irqsave(&g_kbd_lock, flags);
 	for (int i = 0; i < n; i++) {
 		if(TTY_KeyInput(buf[i]))continue;//终端消费
-		if (key_count >= KEYBOARD_BUFFER_SIZE)return;//满则丢弃所有未写入字节
+		if (key_count >= KEYBOARD_BUFFER_SIZE)break;//满则丢弃所有未写入字节
 		KeyboardRingBuffer[buffer_head] = buf[i];
 		buffer_head = (buffer_head + 1) % KEYBOARD_BUFFER_SIZE;
 		key_count++;
 	}
+	spin_unlock_irqrestore(&g_kbd_lock, flags);
 }
 
 char GetKey(){
 	char ch;
-	while (key_count == 0)__asm__ volatile("hlt");
-	cli();
-	ch = KeyboardRingBuffer[buffer_tail];
-	buffer_tail = (buffer_tail + 1) % KEYBOARD_BUFFER_SIZE;
-	key_count--;
-	sti();
-	return ch;
+	for(;;){
+		uint64_t flags;
+		spin_lock_irqsave(&g_kbd_lock, flags);
+		if(key_count > 0){
+			ch = KeyboardRingBuffer[buffer_tail];
+			buffer_tail = (buffer_tail + 1) % KEYBOARD_BUFFER_SIZE;
+			key_count--;
+			spin_unlock_irqrestore(&g_kbd_lock, flags);
+			return ch;
+		}
+		spin_unlock_irqrestore(&g_kbd_lock, flags);
+		__asm__ volatile("sti\nhlt" ::: "memory");
+	}
 }
 
 char GetKey_NoBlock(){
 	char ch;
-	if (key_count == 0)return 0;
-	cli();
+	uint64_t flags;
+	spin_lock_irqsave(&g_kbd_lock, flags);
+	if(key_count == 0){
+		spin_unlock_irqrestore(&g_kbd_lock, flags);
+		return 0;
+	}
 	ch = KeyboardRingBuffer[buffer_tail];
 	buffer_tail = (buffer_tail + 1) % KEYBOARD_BUFFER_SIZE;
 	key_count--;
-	sti();
+	spin_unlock_irqrestore(&g_kbd_lock, flags);
 	return ch;
 }

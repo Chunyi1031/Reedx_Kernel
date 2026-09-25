@@ -118,6 +118,23 @@ static int resolve_parent(const char *path, fs_node_t **parent, char name[MAX_NA
     return 0;
 }
 /*DeepSeek V4 Pro-END*/
+/*DeepSeek V4.1 Flash*/
+//用已解析好的节点完成"打开"的公共收尾(与路径无关)
+static int fs_open_node(fs_node_t *node, int flags, fs_file_t *out){
+    if(!out || !node)return -EINVAL;
+    if(node->type != FT_FILE && node->type != FT_DIR)return -EINVAL;
+    //目录只能以只读方式打开(POSIX: EISDIR)
+    if(node->type == FT_DIR && (flags & O_ACCMODE) != O_RDONLY)return -EISDIR;
+    if(flags & O_TRUNC){
+        if(node->ops->truncate)node->ops->truncate(node);
+    }
+    node->refs++;
+    out->node = node;
+    out->flags = flags;
+    out->off = (flags & O_APPEND) ? node->size : 0;
+    out->used = true;
+    return 0;
+}
 
 int FsOpen(const char *path, int flags, fs_file_t *out){
     uint64_t iflags;
@@ -132,24 +149,98 @@ int FsOpen(const char *path, int flags, fs_file_t *out){
         char name[MAX_NAME];
         if(resolve_parent(path, &parent, name) == 0 && parent->ops->create)node = parent->ops->create(parent, name, FT_FILE);//如果文件不存在则创建
     }
-    //检查节点是否存在或非文件
     if(!node){ r = -ENOENT; goto done; }
-    if(node->type != FT_FILE && node->type != FT_DIR){ r = -EINVAL; goto done; }
-    if(node->type == FT_DIR && (flags & O_ACCMODE) != O_RDONLY){ r = -EISDIR; goto done; }
-    if(flags & O_TRUNC){
-        if(node->ops->truncate)node->ops->truncate(node);
-    }
-    //填充信息
-    node->refs++;
-    out->node = node;
-    out->flags = flags;
-    out->off = (flags & O_APPEND) ? node->size : 0;
-    out->used = true;
-    r = 0;
+    r = fs_open_node(node, flags, out);
 done:
     spin_unlock_irqrestore(&g_fs_lock, iflags);
     return r;
 }
+
+/*
+ * 从"已打开的目录节点 + 末段名"打开(供 openat(dirfd, 相对名))
+ * 不经过路径字符串, 因此结果不受当前工作目录影响
+ */
+int FsOpenIn(fs_node_t *dir, const char *name, int flags, fs_file_t *out){
+    uint64_t iflags;
+    spin_lock_irqsave(&g_fs_lock, iflags);
+    int r = -EINVAL;
+    if(!out)goto done;
+    if((flags & O_TMPFILE) == O_TMPFILE){ r = -EOPNOTSUPP; goto done; }
+    if(!name || !*name){ r = -ENOENT; goto done; }
+    if(!dir || dir->type != FT_DIR || !dir->ops || !dir->ops->lookup){ r = -ENOTDIR; goto done; }
+    fs_node_t *node = dir->ops->lookup(dir, name);
+    if(!node && (flags & O_CREAT) && dir->ops->create)node = dir->ops->create(dir, name, FT_FILE);
+    if(!node){ r = -ENOENT; goto done; }
+    r = fs_open_node(node, flags, out);
+done:
+    spin_unlock_irqrestore(&g_fs_lock, iflags);
+    return r;
+}
+
+//在已打开的目录节点下创建子目录
+int FsMkdirIn(fs_node_t *dir, const char *name, int mode){
+    uint64_t iflags;
+    spin_lock_irqsave(&g_fs_lock, iflags);
+    int r = -ENOTDIR;
+    if(dir && dir->type == FT_DIR && dir->ops && dir->ops->mkdir && name && *name)
+        r = dir->ops->mkdir(dir, name, mode);
+    spin_unlock_irqrestore(&g_fs_lock, iflags);
+    return r;
+}
+
+//删除已打开目录下的目录项(文件或目录)
+int FsUnlinkIn(fs_node_t *dir, const char *name){
+    uint64_t iflags;
+    spin_lock_irqsave(&g_fs_lock, iflags);
+    int r = -ENOTDIR;
+    if(dir && dir->type == FT_DIR && dir->ops && dir->ops->unlink && name && *name)
+        r = dir->ops->unlink(dir, name);
+    spin_unlock_irqrestore(&g_fs_lock, iflags);
+    return r;
+}
+
+//重命名: 两侧都是"目录节点 + 名字"(目标已存在则先删除, 与 FsRename 行为一致)
+int FsRenameIn(fs_node_t *olddir, const char *oldname, fs_node_t *newdir, const char *newname){
+    uint64_t iflags;
+    spin_lock_irqsave(&g_fs_lock, iflags);
+    int r = -ENOTDIR;
+    do{
+        if(!olddir || !newdir || !oldname || !newname || !*oldname || !*newname)break;
+        if(olddir->type != FT_DIR || newdir->type != FT_DIR)break;
+        if(!olddir->ops || !olddir->ops->rename)break;
+        if(olddir == newdir && strcmp(oldname, newname) == 0){ r = 0; break; }//同一目标无需操作
+        if(newdir->ops && newdir->ops->lookup && newdir->ops->unlink && newdir->ops->lookup(newdir, newname)){
+            if(newdir->ops->unlink(newdir, newname) != 0)break;
+        }
+        r = olddir->ops->rename(olddir, oldname, newdir, newname);
+    }while(0);
+    spin_unlock_irqrestore(&g_fs_lock, iflags);
+    return r;
+}
+
+//存在性检查(存在返回0, 不存在返回-ENOENT); 供 faccessat 使用
+int FsExistsIn(fs_node_t *dir, const char *name){
+    uint64_t iflags;
+    spin_lock_irqsave(&g_fs_lock, iflags);
+    int r = -ENOTDIR;
+    if(dir && dir->type == FT_DIR && dir->ops && dir->ops->lookup && name && *name)
+        r = dir->ops->lookup(dir, name) ? 0 : -ENOENT;
+    spin_unlock_irqrestore(&g_fs_lock, iflags);
+    return r;
+}
+
+//解析路径的父目录节点与末段名(供 renameat 等需要"目录+名字"的调用方使用; 失败返回NULL)
+fs_node_t *FsParentOf(const char *path, char *name, int namesz){
+    fs_node_t *parent = NULL;
+    char tmp[MAX_NAME];
+    if(!path || !name || namesz <= 0)return NULL;
+    if(resolve_parent(path, &parent, tmp) != 0)return NULL;
+    int i = 0;
+    for(; tmp[i] && i < namesz - 1; i++)name[i] = tmp[i];
+    name[i] = '\0';
+    return parent;
+}
+/*DeepSeek V4.1 Flash-END*/
 
 void FsClose(fs_file_t *f){
     uint64_t flags;

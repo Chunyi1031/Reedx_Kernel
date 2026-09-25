@@ -450,7 +450,8 @@ static long sys_rmdir(long path, long b, long c, long a4, long a5, long a6){
 	if(!current_task)return -ENOENT;
 	char kpath[256];
 	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
-	return FsUnlink(kpath) ? -ENOENT : 0;
+	int r = FsUnlink(kpath);
+	return (r < 0) ? ((r == -1) ? -ENOENT : r) : 0;
 }
 
 /*
@@ -461,7 +462,8 @@ static long sys_unlink(long path, long b, long c, long a4, long a5, long a6){
 	if(!current_task)return -ENOENT;
 	char kpath[256];
 	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
-	return FsUnlink(kpath) ? -ENOENT : 0;
+	int r = FsUnlink(kpath);
+	return (r < 0) ? ((r == -1) ? -ENOENT : r) : 0;
 }
 
 /*
@@ -477,14 +479,60 @@ static long sys_rename(long oldpath, long newpath, long c, long a4, long a5, lon
 	return FsRename(kold, knew) ? -ENOENT : 0;
 }
 
+//从用户态拷路径到内核缓冲
+static long at_read_path(long path, char *kbuf, int bufsz){
+	if(!path)return -EFAULT;
+	if(strncpy_from_user(kbuf, (void*)path, bufsz) < 0)return -EFAULT;
+	if(kbuf[0] == '\0')return -ENOENT;
+	return 0;
+}
+static long at_split(long dirfd, const char *kpath, fs_node_t **dir, char *name, int namesz){
+	if((int)dirfd == AT_FDCWD || kpath[0] == '/')return -ENOSYS;
+	for(const char *p = kpath; *p; p++)if(*p == '/')return -ENOSYS;//多级相对名无法从fd精确拼接
+	if(!current_task || dirfd < 0 || dirfd >= MAX_FD || !current_task->files[dirfd].used)return -EBADF;
+	fs_node_t *d = current_task->files[dirfd].node;
+	if(!d || d->type != FT_DIR)return -ENOTDIR;
+	int i = 0;
+	for(; kpath[i] && i < namesz - 1; i++)name[i] = kpath[i];
+	name[i] = '\0';
+	*dir = d;
+	return 0;
+}
+
+/*
+ * renameat/renameat2共用实现
+ */
+static long do_renameat(long olddirfd, long oldpath, long newdirfd, long newpath, long flags){
+	if(!current_task)return -ENOENT;
+	char kold[256], knew[256];
+	long pr = at_read_path(oldpath, kold, 256);
+	if(pr)return pr;
+	pr = at_read_path(newpath, knew, 256);
+	if(pr)return pr;
+	fs_node_t *odir = NULL, *ndir = NULL;
+	char oname[MAX_NAME], nname[MAX_NAME];
+	long r = at_split(olddirfd, kold, &odir, oname, MAX_NAME);
+	if(r < 0 && r != -ENOSYS)return r;
+	if(r == -ENOSYS){
+		odir = FsParentOf(kold, oname, MAX_NAME);
+		if(!odir)return -ENOENT;
+	}
+	r = at_split(newdirfd, knew, &ndir, nname, MAX_NAME);
+	if(r < 0 && r != -ENOSYS)return r;
+	if(r == -ENOSYS){
+		ndir = FsParentOf(knew, nname, MAX_NAME);
+		if(!ndir)return -ENOENT;
+	}
+	if((flags & RENAME_NOREPLACE) && FsExistsIn(ndir, nname) == 0)return -EEXIST;
+	return FsRenameIn(odir, oname, ndir, nname);
+}
+
 /*
  * int renameat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath)
- * 仅支持 AT_FDCWD
  */
 static long sys_renameat(long olddirfd, long oldpath, long newdirfd, long newpath, long a5, long a6){
 	(void)a5; (void)a6;
-	if((int)olddirfd != AT_FDCWD || (int)newdirfd != AT_FDCWD)return -ENOSYS;
-	return sys_rename(oldpath, newpath, 0, 0, 0, 0);
+	return do_renameat(olddirfd, oldpath, newdirfd, newpath, 0);
 }
 
 /*
@@ -492,8 +540,16 @@ static long sys_renameat(long olddirfd, long oldpath, long newdirfd, long newpat
  */
 static long sys_mkdirat(long dirfd, long path, long mode, long a4, long a5, long a6){
 	(void)a4; (void)a5; (void)a6;
-	if((int)dirfd != AT_FDCWD)return -ENOSYS;
-	return sys_mkdir(path, mode, 0, 0, 0, 0);
+	if(!current_task)return -EINVAL;
+	char kpath[256];
+	long pr = at_read_path(path, kpath, 256);
+	if(pr)return pr;
+	fs_node_t *dir = NULL;
+	char name[MAX_NAME];
+	long r = at_split(dirfd, kpath, &dir, name, MAX_NAME);
+	if(r < 0 && r != -ENOSYS)return r;
+	if(r == -ENOSYS)return sys_mkdir(path, mode, 0, 0, 0, 0);
+	return FsMkdirIn(dir, name, (int)mode);
 }
 
 /*
@@ -501,9 +557,20 @@ static long sys_mkdirat(long dirfd, long path, long mode, long a4, long a5, long
  */
 static long sys_unlinkat(long dirfd, long path, long flags, long a4, long a5, long a6){
 	(void)a4; (void)a5; (void)a6;
-	if((int)dirfd != AT_FDCWD)return -ENOSYS;
-	if(flags & AT_REMOVEDIR)return sys_rmdir(path, 0, 0, 0, 0, 0);
-	return sys_unlink(path, 0, 0, 0, 0, 0);
+	if(!current_task)return -EINVAL;
+	char kpath[256];
+	long pr = at_read_path(path, kpath, 256);
+	if(pr)return pr;
+	fs_node_t *dir = NULL;
+	char name[MAX_NAME];
+	long r = at_split(dirfd, kpath, &dir, name, MAX_NAME);
+	if(r < 0 && r != -ENOSYS)return r;
+	if(r == -ENOSYS){
+		if(flags & AT_REMOVEDIR)return sys_rmdir(path, 0, 0, 0, 0, 0);
+		return sys_unlink(path, 0, 0, 0, 0, 0);
+	}
+	int rr = FsUnlinkIn(dir, name);
+	return (rr < 0) ? ((rr == -1) ? -ENOENT : rr) : 0;
 }
 
 /*
@@ -511,15 +578,8 @@ static long sys_unlinkat(long dirfd, long path, long flags, long a4, long a5, lo
  */
 static long sys_renameat2(long olddirfd, long oldpath, long newdirfd, long newpath, long flags, long a6){
 	(void)a6;
-	if((int)olddirfd != AT_FDCWD || (int)newdirfd != AT_FDCWD)return -ENOSYS;
-	//RENAME_NOREPLACE，目标存在则返回EEXIST
-	if(flags & RENAME_NOREPLACE){
-		char knew[256];
-		if(strncpy_from_user(knew, (void*)newpath, 256) < 0)return -EFAULT;
-		if(FsResolve(knew))return -EEXIST;
-	}
-	if(flags & ~RENAME_NOREPLACE)return -ENOSYS;
-	return sys_rename(oldpath, newpath, 0, 0, 0, 0);
+	if(flags & ~RENAME_NOREPLACE)return -ENOSYS;//不支持EXCHANGE/WHITEOUT
+	return do_renameat(olddirfd, oldpath, newdirfd, newpath, flags);
 }
 
 /*
@@ -573,8 +633,26 @@ static long sys_newstat(long path, long buf, long a3, long a4, long a5, long a6)
  * int openat(int dirfd, const char *path, int flags, mode_t mode)
  */
 static long sys_openat(long dirfd, long path, long flags, long mode, long a5, long a6){
-	(void)dirfd; (void)a5; (void)a6;
-	return sys_open(path, flags, mode, 0, 0, 0);
+	(void)mode; (void)a5; (void)a6;
+	if(!current_task)return -ENOENT;
+	char kpath[256];
+	long pr = at_read_path(path, kpath, 256);
+	if(pr)return pr;
+	fs_node_t *dir = NULL;
+	char name[MAX_NAME];
+	long r = at_split(dirfd, kpath, &dir, name, MAX_NAME);
+	if(r < 0 && r != -ENOSYS)return r;
+	if(r == -ENOSYS)return sys_open(path, flags, mode, 0, 0, 0);//绝对路径 / 相对CWD
+	//dirfd + 单级相对名: 直接在该目录下打开
+	int fd;
+	for(fd = 3; fd < MAX_FD; fd++){
+		if(!current_task->files[fd].used)break;
+	}
+	if(fd >= MAX_FD)return -ENFILE;
+	fs_file_t *f = &current_task->files[fd];
+	int or = FsOpenIn(dir, name, (int)flags, f);
+	if(or != 0)return or;
+	return fd;
 }
 
 /*
@@ -791,8 +869,16 @@ static long sys_access(long path, long mode, long a3, long a4, long a5, long a6)
  */
 static long sys_faccessat(long dirfd, long path, long mode, long flags, long a5, long a6){
 	(void)flags; (void)a5; (void)a6;
-	if((int)dirfd != AT_FDCWD)return -ENOSYS;
-	return sys_access(path, mode, 0, 0, 0, 0);
+	if(!current_task)return -EINVAL;
+	char kpath[256];
+	long pr = at_read_path(path, kpath, 256);
+	if(pr)return pr;
+	fs_node_t *dir = NULL;
+	char name[MAX_NAME];
+	long r = at_split(dirfd, kpath, &dir, name, MAX_NAME);
+	if(r < 0 && r != -ENOSYS)return r;
+	if(r == -ENOSYS)return sys_access(path, mode, 0, 0, 0, 0);
+	return FsExistsIn(dir, name);
 }
 
 /*
@@ -1239,6 +1325,8 @@ static long sys_fcntl(long fd, long cmd, long arg, long a4, long a5, long a6){
 	}
 	case F_GETFD://1
 		return 0;
+	case F_SETFD://2
+		return 0;
 	case F_GETFL://3
 		if(!real)return O_RDWR;
 		return current_task->files[fd].flags;
@@ -1246,6 +1334,24 @@ static long sys_fcntl(long fd, long cmd, long arg, long a4, long a5, long a6){
 		if(!real)return 0;
 		current_task->files[fd].flags = (current_task->files[fd].flags & ~O_ACCMODE) | ((int)arg & O_ACCMODE);
 		return 0;
+	case F_GETLK://5
+	{
+		if(!arg)return -EINVAL;
+		uint16_t unlck = F_UNLCK;
+		if(copy_to_user((void*)arg, &unlck, 2))return -EFAULT;
+		return 0;
+	}
+	case F_SETLK://6
+	case F_SETLKW://7
+		return 0;
+	case F_SETOWN://8
+		return 0;
+	case F_GETOWN://9
+		return 0;
+	case F_SETPIPE_SZ://1031
+		return (long)arg;
+	case F_GETPIPE_SZ://1032
+		return 65536;
 	default:
 		return -EINVAL;
 	}

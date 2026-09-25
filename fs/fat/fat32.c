@@ -4,6 +4,7 @@
 #include <mm/vmm.h>
 #include <print.h>
 #include <rtc.h>
+#include <syscalls.h>
 
 //FAT32盘上数据结构
 #define FAT_ATTR_READ_ONLY 0x01 //只读
@@ -220,7 +221,7 @@ static int fat_update_dirent(fat_node_priv_t *p){
     fat_dir_entry_t *de = (fat_dir_entry_t*)(g_fat.cluster_buf + p->dir_off);
     de->fst_clus_hi = (uint16_t)(p->first_clu >> 16);
     de->fst_clus_lo = (uint16_t)(p->first_clu & 0xFFFF);
-    de->file_size = p->size;
+    de->file_size = (de->attr & FAT_ATTR_DIRECTORY) ? 0 : p->size;
     //更新最后写入时间
     rtc_time_t tm;
     rtc_get_local(&tm);
@@ -732,6 +733,7 @@ static int fat_mkdir(fs_node_t *dir, const char *name, int mode){
     for(int i = 0; i < 3; i++) dotdot->ext[i] = ' ';
     dotdot->attr = FAT_ATTR_DIRECTORY;
     uint32_t pclu = ((fat_node_priv_t*)dir->priv)->first_clu;
+    if(pclu == g_fat.root_clu) pclu = 0;
     dotdot->fst_clus_lo = (uint16_t)(pclu & 0xFFFF);
     dotdot->fst_clus_hi = (uint16_t)(pclu >> 16);
     if(fat_write_cluster(newclu)) return -1;
@@ -740,6 +742,27 @@ static int fat_mkdir(fs_node_t *dir, const char *name, int mode){
     return fat_alloc_dirent(dir, name, FT_DIR, newclu, &clu, &off);
 }
 
+/*DeepSeek V4.1 Flash*/
+//判断目录是否为空
+static int fat_dir_is_empty(uint32_t first_clu){
+    uint32_t c = first_clu;
+    //上界必须有限: 目录簇链损坏成环时否则会读盘读到天荒地老(表现为内核卡死)
+    for(int guard = 0; c >= 2 && c < FAT_CLUSTER_EOF && guard < 4096; guard++){
+        if(fat_read_cluster(c))return 0;//读失败当作非空, 保守处理
+        for(uint32_t i = 0; i < g_fat.bpc; i += sizeof(fat_dir_entry_t)){
+            fat_dir_entry_t *e = (fat_dir_entry_t*)(g_fat.cluster_buf + i);
+            if(e->name[0] == FAT_DIRENT_END)return 1;//结束标记
+            if(e->name[0] == FAT_DIRENT_FREE)continue;//已删除
+            if(e->name[0] == '.')continue;//. 和 ..
+            if(e->attr == FAT_ATTR_LFN)continue;//LFN 残留
+            return 0;//还有其它条目
+        }
+        c = fat_get_entry(c);
+    }
+    return 1;
+}
+/*DeepSeek V4.1 Flash-END*/
+
 //删除目录项
 static int fat_unlink(fs_node_t *dir, const char *name){
     if(!g_fat.disk || !dir || !dir->priv) return -1;
@@ -747,8 +770,12 @@ static int fat_unlink(fs_node_t *dir, const char *name){
     if(fat_find_dirent(dir, name, &clu, &off) != 0) return -1;
     if(fat_read_cluster(clu)) return -1;
     fat_dir_entry_t *de = (fat_dir_entry_t*)(g_fat.cluster_buf + off);
-    //释放文件/目录的簇链
     uint32_t first = ((uint32_t)de->fst_clus_hi << 16) | de->fst_clus_lo;
+    //目录必须为空
+    if((de->attr & FAT_ATTR_DIRECTORY) && first >= 2 && !fat_dir_is_empty(first))return -ENOTEMPTY;
+    if(fat_read_cluster(clu)) return -1;//上面可能覆盖了簇缓冲, 重新读入目录项
+    de = (fat_dir_entry_t*)(g_fat.cluster_buf + off);
+    //释放文件/目录的簇链
     if(first >= 2) fat_free_chain(first);
     //标记短条目及其前面的LFN条目为已删除
     de->name[0] = FAT_DIRENT_FREE;
