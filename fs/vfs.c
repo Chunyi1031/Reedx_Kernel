@@ -126,7 +126,7 @@ static int fs_open_node(fs_node_t *node, int flags, fs_file_t *out){
     //目录只能以只读方式打开(POSIX: EISDIR)
     if(node->type == FT_DIR && (flags & O_ACCMODE) != O_RDONLY)return -EISDIR;
     if(flags & O_TRUNC){
-        if(node->ops->truncate)node->ops->truncate(node);
+        if(node->ops->truncate)node->ops->truncate(node, 0);
     }
     node->refs++;
     out->node = node;
@@ -303,6 +303,34 @@ uint64_t FsSize(fs_file_t *f){
     uint64_t flags;
     spin_lock_irqsave(&g_fs_lock, flags);
     uint64_t r = (f && f->used && f->node) ? f->node->size : 0;
+    spin_unlock_irqrestore(&g_fs_lock, flags);
+    return r;
+}
+
+//按fd截断/扩展文件
+int FsTruncate(fs_file_t *f, uint64_t len){
+    uint64_t flags;
+    spin_lock_irqsave(&g_fs_lock, flags);
+    int r = -EINVAL;
+    if(f && f->used && f->node && !f->pipe){
+        if(f->node->type == FT_DIR)r = -EISDIR;//目录不能截断
+        else if((f->flags & O_ACCMODE) == O_RDONLY)r = -EINVAL;//只读打开
+        else if(f->node->ops && f->node->ops->truncate)r = f->node->ops->truncate(f->node, len);
+    }
+    spin_unlock_irqrestore(&g_fs_lock, flags);
+    return r;
+}
+
+//按路径截断/扩展文件
+int FsTruncatePath(const char *path, uint64_t len){
+    uint64_t flags;
+    spin_lock_irqsave(&g_fs_lock, flags);
+    int r = -ENOENT;
+    fs_node_t *node = path ? resolve(path) : NULL;
+    if(node){
+        if(node->type == FT_DIR)r = -EISDIR;
+        else if(node->ops && node->ops->truncate)r = node->ops->truncate(node, len);
+    }
     spin_unlock_irqrestore(&g_fs_lock, flags);
     return r;
 }

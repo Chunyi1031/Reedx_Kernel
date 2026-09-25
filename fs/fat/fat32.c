@@ -658,32 +658,47 @@ static fs_node_t *fat_create(fs_node_t *dir, const char *name, int type){
     return fat_new_node(name, type, 0, 0, clu, off);
 }
 
-//截断文件(释放多余簇)
-static void fat_truncate(fs_node_t *node){
-    if(!node || !node->priv) return;
+//截断/扩展文件
+static int fat_truncate(fs_node_t *node, uint64_t newsize){
+    if(!node || !node->priv) return -1;
     fat_node_priv_t *p = (fat_node_priv_t*)node->priv;
     //如果文件大小为0,释放所有簇
-    if(p->size == 0){
+    if(newsize == 0){
         fat_free_chain(p->first_clu);
         p->first_clu = 0;
     }else{
-        uint32_t keep = (p->size + g_fat.bpc - 1) / g_fat.bpc;//需保留簇数
-        uint32_t clu = p->first_clu;
-        uint32_t prev = 0;
-        //获取要释放的簇链
-        for(uint32_t i = 0; i < keep && clu >= 2 && clu < FAT_CLUSTER_EOF; i++){
-            prev = clu;
+        uint32_t need = (uint32_t)((newsize + g_fat.bpc - 1) / g_fat.bpc);//需保留簇数
+        uint32_t clu = p->first_clu, last = 0, have = 0;
+        //走到第need个簇
+        while(have < need && clu >= 2 && clu < FAT_CLUSTER_EOF){
+            last = clu;
+            have++;
             clu = fat_get_entry(clu);
         }
-        //释放
-        if(prev >= 2 && prev < FAT_CLUSTER_EOF){
-            fat_set_entry(prev, FAT_CLUSTER_EOF);
+        if(have < need){
+            //链太短，追加新簇
+            uint32_t prev = (have > 0) ? last : FAT_CLUSTER_EOF;
+            while(have < need){
+                uint32_t n = fat_alloc_cluster(prev);
+                if(n < 2) return -1;
+                if(p->first_clu < 2) p->first_clu = n;
+                last = n;
+                prev = n;
+                have++;
+            }
+        }else if(clu >= 2 && clu < FAT_CLUSTER_EOF){
+            //有多余簇，断开链尾并释放
+            fat_set_entry(last, FAT_CLUSTER_EOF);
             fat_free_chain(clu);
         }
     }
-    //更新信息
-    node->size = p->size;
+    p->size = (uint32_t)newsize;
+    node->size = newsize;
+    p->pos_clu = 0;
+    p->pos_off = 0;
+    p->pos_within = 0;
     fat_update_dirent(p);
+    return 0;
 }
 
 //把节点上的回写到目录项

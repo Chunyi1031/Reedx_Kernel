@@ -38,6 +38,8 @@
 #define SYS_KILL            62
 #define SYS_UNAME           63
 #define SYS_FCNTL           72
+#define SYS_TRUNCATE        76
+#define SYS_FTRUNCATE       77
 #define SYS_GETCWD          79
 #define SYS_CHDIR           80
 #define SYS_RENAME          82

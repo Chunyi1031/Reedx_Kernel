@@ -49,8 +49,28 @@ static fs_node_t *ramfs_lookup(fs_node_t *dir, const char *name){
     return NULL;
 }
 
-static void ramfs_truncate(fs_node_t *node){
-    node->size = 0;
+static int ramfs_truncate(fs_node_t *node, uint64_t newsize){
+    if(!node)return -1;
+    ramfs_priv_t *p = (ramfs_priv_t*)node->priv;
+    if(newsize > p->cap){
+        //扩容(新区域填零)
+        uint64_t newcap = p->cap ? p->cap : PAGE_SIZE;
+        while(newcap < newsize) newcap <<= 1;
+        void *nd = (void*)PHYS_TO_VIRT((uintptr_t)Pmm_Malloc((int)(newcap / PAGE_SIZE)));
+        if(!nd) return -1;
+        memset(nd, 0, newcap);
+        if(p->data && node->size) memcpy(nd, p->data, node->size);
+        if(p->data) Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)p->data), (int)(p->cap / PAGE_SIZE));
+        p->data = (uint8_t*)nd;
+        p->cap = newcap;
+    }else if(p->data && newsize != node->size){
+        //收缩清尾部 / 扩展段填零
+        uint64_t from = (newsize < node->size) ? newsize : node->size;
+        uint64_t cnt = (newsize < node->size) ? (node->size - newsize) : (newsize - node->size);
+        memset(p->data + from, 0, cnt);
+    }
+    node->size = newsize;
+    return 0;
 }
 
 //分配并初始化一个节点(节点结构+priv内嵌在同一物理页)

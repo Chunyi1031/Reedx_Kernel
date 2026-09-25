@@ -443,6 +443,31 @@ static long sys_mkdir(long path, long mode, long unused, long a4, long a5, long 
 }
 
 /*
+ * int truncate(const char *path, off_t length)
+ */
+static long sys_truncate(long path, long length, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -ENOENT;
+	if(length < 0)return -EINVAL;
+	if(!path)return -EFAULT;
+	char kpath[256];
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
+	return FsTruncatePath(kpath, (uint64_t)length);
+}
+
+/*
+ * int ftruncate(int fd, off_t length)
+ */
+static long sys_ftruncate(long fd, long length, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(length < 0)return -EINVAL;
+	if(!current_task || fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+	//控制台/管道等无存储节点的 fd 不支持截断
+	if(!current_task->files[fd].node || current_task->files[fd].pipe)return -EINVAL;
+	return FsTruncate(&current_task->files[fd], (uint64_t)length);
+}
+
+/*
  * int rmdir(const char *pathname)
  */
 static long sys_rmdir(long path, long b, long c, long a4, long a5, long a6){
@@ -1912,6 +1937,8 @@ void InitSyscall(void){
 	syscall_table[SYS_MKDIR]      = sys_mkdir;
 	syscall_table[SYS_MKDIRAT]    = sys_mkdirat;
 	syscall_table[SYS_RMDIR]      = sys_rmdir;
+	syscall_table[SYS_TRUNCATE]   = sys_truncate;
+	syscall_table[SYS_FTRUNCATE]  = sys_ftruncate;
 	syscall_table[SYS_UNLINK]     = sys_unlink;
 	syscall_table[SYS_UNLINKAT]   = sys_unlinkat;
 	syscall_table[SYS_RENAME]     = sys_rename;

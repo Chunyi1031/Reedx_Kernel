@@ -41,7 +41,7 @@ typedef struct fs_node_ops{
     uint64_t    (*write)(fs_node_t *node, uint64_t off, const void *buf, uint64_t len);
     fs_node_t * (*lookup)(fs_node_t *dir, const char *name);
     fs_node_t * (*create)(fs_node_t *dir, const char *name, int type);
-    void        (*truncate)(fs_node_t *node);
+    int         (*truncate)(fs_node_t *node, uint64_t newsize);//截断/扩展到指定长度(0成功/-errno失败)
     int         (*mkdir)(fs_node_t *dir, const char *name, int mode);//创建目录
     int         (*unlink)(fs_node_t *dir, const char *name);//删除目录项(文件或目录)
     int         (*rename)(fs_node_t *olddir, const char *oldname, fs_node_t *newdir, const char *newname);//重命名(移动)目录项
@@ -91,6 +91,8 @@ uint64_t FsRead(fs_file_t *f, void *buf, uint64_t len);//读取文件
 uint64_t FsWrite(fs_file_t *f, const void *buf, uint64_t len);//写入文件
 int FsSeek(fs_file_t *f, int64_t off, int whence);//移动文件指针
 uint64_t FsSize(fs_file_t *f);//获取文件大小
+int FsTruncate(fs_file_t *f, uint64_t len);//按fd截断/扩展文件(ftruncate)
+int FsTruncatePath(const char *path, uint64_t len);//按路径截断/扩展文件(truncate)
 int FsMkdir(const char *path, int mode);//创建目录
 int FsUnlink(const char *path);//删除目录项(文件或目录)
 int FsRename(const char *oldpath, const char *newpath);//重命名(移动)目录项
