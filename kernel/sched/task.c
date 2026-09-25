@@ -99,9 +99,9 @@ void TaskInit(){
     task_list_head.prev = &task_list_head;
     task_list_head.next = &task_list_head;
     //填充内核进程结构体
-    kernel_task = (task_struct*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(1));
+    kernel_task = (task_struct*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(TASK_STRUCT_PAGES));
     if (!kernel_task) SYSTEM_STOP();
-    memset(kernel_task, 0, 4096);
+    memset(kernel_task, 0, TASK_STRUCT_PAGES * 4096);
     kernel_task->pid = 0;
     kernel_task->tgid = 0;
     kernel_task->state = TASK_READY;
@@ -268,8 +268,8 @@ void TaskKill(task_struct* t){
     if(t->kernel_stack)Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)t->kernel_stack),t->stack_size / 4096);
     if(t->mm){ mmput(t->mm); t->mm = NULL; }//释放用户地址空间
     SignalFree(t);//释放信号动作表
-    memset(t,0,4096);
-    Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)t),1);
+    memset(t,0,TASK_STRUCT_PAGES * 4096);
+    Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)t),TASK_STRUCT_PAGES);
     sti();
 }
 

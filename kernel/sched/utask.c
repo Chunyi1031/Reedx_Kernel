@@ -9,13 +9,13 @@
 task_struct* CreateProcess(uintptr_t entry, mm_struct* mm, const char* name) {
     if(!entry || !mm) return NULL;
     //分配任务结构体
-    task_struct* task = (task_struct*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(1));
+    task_struct* task = (task_struct*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(TASK_STRUCT_PAGES));
     if(!task)return NULL;
-    memset(task,0,4096);
+    memset(task,0,TASK_STRUCT_PAGES * 4096);
     //分配内核栈
     void* stack = (void*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(1));
     if(!stack){
-        Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)task),1);
+        Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)task),TASK_STRUCT_PAGES);
         return NULL;
     }
     memset(stack,0,4096);
@@ -46,4 +46,5 @@ task_struct* CreateProcess(uintptr_t entry, mm_struct* mm, const char* name) {
     sti();
     return task;
 }
+
 

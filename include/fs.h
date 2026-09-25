@@ -7,7 +7,7 @@
 #define FT_FILE 0
 #define FT_DIR  1
 
-#define MAX_FD   16
+#define MAX_FD   256
 #define MAX_NAME 32
 
 //目录项类型
@@ -46,6 +46,7 @@ typedef struct fs_node_ops{
     int         (*unlink)(fs_node_t *dir, const char *name);//删除目录项(文件或目录)
     int         (*rename)(fs_node_t *olddir, const char *oldname, fs_node_t *newdir, const char *newname);//重命名(移动)目录项
     int         (*readdir)(fs_node_t *dir, uint64_t *cookie, fs_dirent_t *de);//目录迭代
+    int         (*set_times)(fs_node_t *node);//把节点时间回写到存储介质
 } fs_node_ops_t;
 
 //文件系统节点(文件或目录)

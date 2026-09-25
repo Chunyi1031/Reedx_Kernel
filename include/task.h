@@ -66,6 +66,9 @@ typedef struct task_struct {
     fs_file_t           files[MAX_FD];//文件描述符表(0/1/2保留stdin/out/err)
 } task_struct;
 
+#define TASK_STRUCT_PAGES 4 //task_struct占用的页数
+typedef char task_struct_fits_in_pages[(sizeof(task_struct) <= TASK_STRUCT_PAGES * 4096) ? 1 : -1];//结构体不得超出分配的页数
+
 typedef struct mutex {
     int locked;//0=未锁定,1=已锁定
     task_struct *owner;//持有者(NULL=无持有者,只有持有者能解锁)

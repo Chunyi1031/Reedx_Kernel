@@ -606,6 +606,102 @@ static long sys_newfstatat(long dirfd, long path, long buf, long flags, long a5,
 	return sys_newstat(path, buf, 0, 0, 0, 0);
 }
 
+//取fd对应的存储节点
+static fs_node_t *fd_node_of(long fd, long *err){
+	if(!current_task || fd < 0 || fd >= MAX_FD || !current_task->files[fd].used){
+		*err = -EBADF;
+		return NULL;
+	}
+	if(!current_task->files[fd].node){
+		*err = -EBADF;
+		return NULL;
+	}
+	return current_task->files[fd].node;
+}
+//解析dirfd+path
+static fs_node_t *resolve_at_node(long dirfd, long path, long flags, long *err){
+	*err = -ENOENT;
+	if(!path)return fd_node_of(dirfd, err);//如果path为NULL，目标就是dirfd自身
+	//复制path
+	char kpath[256];
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0){
+		*err = -EFAULT;
+		return NULL;
+	}
+	//如果path为空字符串，目标就是dirfd自身
+	if(kpath[0] == '\0'){
+		if(!(flags & AT_EMPTY_PATH)){
+			*err = -ENOENT;
+			return NULL;
+		}
+		return fd_node_of(dirfd, err);
+	}
+	//如果dirfd不是AT_FDCWD且path不是绝对路径，则在dirfd目录下查找
+	if((int)dirfd != AT_FDCWD && kpath[0] != '/'){
+		if(!current_task || dirfd < 0 || dirfd >= MAX_FD || !current_task->files[dirfd].used){
+			*err = -EBADF;
+			return NULL;
+		}
+		fs_node_t *dir = current_task->files[dirfd].node;
+		if(!dir || dir->type != FT_DIR){
+			*err = -ENOTDIR;
+			return NULL;
+		}
+		if(!dir->ops || !dir->ops->lookup){
+			*err = -ENOSYS;
+			return NULL;
+		}
+		fs_node_t *child = dir->ops->lookup(dir, kpath);
+		if(!child){
+			*err = -ENOENT;
+			return NULL;
+		}
+		return child;
+	}
+	//否则直接解析绝对路径
+	fs_node_t *node = FsResolve(kpath);
+	if(!node){
+		*err = -ENOENT;
+		return NULL;
+	}
+	return node;
+}
+//把fd的stat信息填进内核stat_t
+static long stat_of_fd(long fd, stat_t *st){
+	if(!current_task)return -EBADF;
+	if(fd < 0 || fd >= MAX_FD)return -EBADF;
+	if((fd < 3 && !current_task->files[fd].used) || fd_is_console(fd)){
+		memset(st, 0, sizeof(*st));
+		st->st_dev = 1;
+		st->st_ino = (uint64_t)(uintptr_t)&current_task->files[fd];
+		st->st_nlink = 1;
+		st->st_mode = S_IFCHR | 0666;
+		st->st_rdev = 1;
+		st->st_blksize = 512;
+		uint64_t now = rtc_get_epoch();
+		st->st_atime = (int64_t)now;
+		st->st_mtime = (int64_t)now;
+		st->st_ctime = (int64_t)now;
+		return 0;
+	}
+	if(!current_task->files[fd].used)return -EBADF;
+	if(current_task->files[fd].pipe){
+		memset(st, 0, sizeof(*st));
+		st->st_dev = 1;
+		st->st_ino = (uint64_t)(uintptr_t)current_task->files[fd].pipe;
+		st->st_nlink = 1;
+		st->st_mode = S_IFIFO | 0600;
+		st->st_blksize = 4096;
+		uint64_t now = rtc_get_epoch();
+		st->st_atime = (int64_t)now;
+		st->st_mtime = (int64_t)now;
+		st->st_ctime = (int64_t)now;
+		return 0;
+	}
+	fill_stat(st, current_task->files[fd].node);
+	return 0;
+}
+
 /*
  * int fstat(int fd, struct stat *buf)
  */
@@ -614,37 +710,65 @@ static long sys_newfstat(long fd, long buf, long a3, long a4, long a5, long a6){
 	if(!current_task)return -EBADF;
 	if(!buf)return -EFAULT;
 	stat_t st;
-	if(fd < 0 || fd >= MAX_FD)return -EBADF;
-	if((fd < 3 && !current_task->files[fd].used) || fd_is_console(fd)){
-		memset(&st, 0, sizeof(st));
-		st.st_dev = 1;
-		st.st_ino = (uint64_t)(uintptr_t)&current_task->files[fd];
-		st.st_nlink = 1;
-		st.st_mode = S_IFCHR | 0666;
-		st.st_rdev = 1;
-		st.st_blksize = 512;
-		uint64_t now = rtc_get_epoch();
-		st.st_atime = (int64_t)now;
-		st.st_mtime = (int64_t)now;
-		st.st_ctime = (int64_t)now;
+	long r = stat_of_fd(fd, &st);
+	if(r)return r;
+	if(copy_to_user((void*)buf, &st, sizeof(st)))return -EFAULT;
+	return 0;
+}
+
+/*
+ * int statx(int dirfd, const char *path, int flags, unsigned mask, struct statx *buf)
+ */
+static long sys_statx(long dirfd, long path, long flags, long mask, long buf, long a6){
+	(void)mask; (void)a6;
+	if(!current_task || !current_task->mm)return -ENOSYS;
+	if(!buf)return -EFAULT;
+	stat_t st;
+	//检查目标是否为fd自身
+	_Bool self = false;
+	if(!path){
+		self = true;
 	}else{
-		if(!current_task->files[fd].used)return -EBADF;
-		if(current_task->files[fd].pipe){
-			memset(&st, 0, sizeof(st));
-			st.st_dev = 1;
-			st.st_ino = (uint64_t)(uintptr_t)current_task->files[fd].pipe;
-			st.st_nlink = 1;
-			st.st_mode = S_IFIFO | 0600;
-			st.st_blksize = 4096;
-			uint64_t now = rtc_get_epoch();
-			st.st_atime = (int64_t)now;
-			st.st_mtime = (int64_t)now;
-			st.st_ctime = (int64_t)now;
-		}else{
-			fill_stat(&st, current_task->files[fd].node);
+		char kpath[256];
+		if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
+		if(kpath[0] == '\0'){
+			if(!(flags & AT_EMPTY_PATH))return -ENOENT;
+			self = true;
 		}
 	}
-	if(copy_to_user((void*)buf, &st, sizeof(st)))return -EFAULT;
+	//如果为fd自身，直接获取fd的stat信息，否则解析dirfd+path
+	if(self){
+		long r = stat_of_fd(dirfd, &st);
+		if(r)return r;
+	}else{
+		long e = 0;
+		fs_node_t *node = resolve_at_node(dirfd, path, flags, &e);
+		if(!node)return e;
+		fill_stat(&st, node);
+	}
+	//填充statx
+	statx_t sx;
+	memset(&sx, 0, sizeof(sx));
+	sx.stx_mask = STATX_BASIC_STATS;
+	sx.stx_blksize = (uint32_t)st.st_blksize;
+	sx.stx_nlink = (uint32_t)st.st_nlink;
+	sx.stx_uid = (uint32_t)st.st_uid;
+	sx.stx_gid = (uint32_t)st.st_gid;
+	sx.stx_mode = (uint16_t)st.st_mode;
+	sx.stx_ino = st.st_ino;
+	sx.stx_size = (uint64_t)st.st_size;
+	sx.stx_blocks = (uint64_t)st.st_blocks;
+	sx.stx_atime.tv_sec  = st.st_atime;
+	sx.stx_atime.tv_nsec = (uint32_t)st.st_atime_nsec;
+	sx.stx_mtime.tv_sec  = st.st_mtime;
+	sx.stx_mtime.tv_nsec = (uint32_t)st.st_mtime_nsec;
+	sx.stx_ctime.tv_sec  = st.st_ctime;
+	sx.stx_ctime.tv_nsec = (uint32_t)st.st_ctime_nsec;
+	sx.stx_dev_major = 0;
+	sx.stx_dev_minor = 1;
+	sx.stx_rdev_major = 0;
+	sx.stx_rdev_minor = (uint32_t)st.st_rdev;
+	if(copy_to_user((void*)buf, &sx, sizeof(sx)))return -EFAULT;
 	return 0;
 }
 
@@ -851,6 +975,80 @@ static long sys_writev(long fd, long iov, long iovcnt, long a4, long a5, long a6
 		base_idx += n;
 	}
 	return total;
+}
+
+/*
+ * ssize_t readv(int fd, const struct iovec *iov, int iovcnt)
+ */
+static long sys_readv(long fd, long iov, long iovcnt, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!iov || iovcnt <= 0)return -EINVAL;
+	if(iovcnt > 1024)return -EINVAL;//IOV_MAX
+	long total = 0;
+	long base_idx = 0;
+	while(base_idx < iovcnt){
+		long n = iovcnt - base_idx;
+		if(n > 32)n = 32;
+		struct iovec vec[32];
+		if(copy_from_user(vec, (void*)((uintptr_t)iov + (uint64_t)base_idx * sizeof(struct iovec)), (uint64_t)n * sizeof(struct iovec)))return total ? total : -EFAULT;
+		for(int i = 0; i < n; i++){
+			uint64_t len = vec[i].iov_len;
+			if(!len)continue;
+			uintptr_t base = (uintptr_t)vec[i].iov_base;
+			if(base >= USER_VADDR_MAX)return total ? total : -EFAULT;
+			while(len > 0){
+				uint64_t chunk = len;
+				if(chunk > (uint64_t)(USER_VADDR_MAX - base))chunk = (uint64_t)(USER_VADDR_MAX - base);
+				if(!chunk)return total ? total : -EFAULT;
+				long r = sys_read(fd, (long)base, (long)chunk, 0, 0, 0);
+				if(r < 0)return total ? total : r;
+				if(r == 0)return total;
+				total += r;
+				base += (uintptr_t)r;
+				len -= (uint64_t)r;
+				if((uint64_t)r < chunk)return total;
+			}
+		}
+		base_idx += n;
+	}
+	return total;
+}
+
+/*
+ * int utimensat(int dirfd, const char *path, const struct timespec times[2], int flags)
+ * times==NULL: atime/mtime 都设为当前; tv_nsec==UTIME_NOW 设为当前, UTIME_OMIT 保持原值
+ * 无符号链接, AT_SYMLINK_NOFOLLOW 忽略; path 为 NULL/空且带 AT_EMPTY_PATH 时作用于 dirfd 自身
+ * (glibc 的 futimens(fd,times) 就是 utimensat(fd, NULL, times, 0))
+ */
+static long sys_utimensat(long dirfd, long path, long times, long flags, long a5, long a6){
+	(void)a5; (void)a6;
+	if(!current_task || !current_task->mm)return -ENOSYS;
+	long e = 0;
+	fs_node_t *node = resolve_at_node(dirfd, path, flags, &e);
+	if(!node)return e;
+	//解析 times[2](tv_nsec 可能是 UTIME_NOW/UTIME_OMIT 特殊值)
+	uint64_t now = rtc_get_epoch();
+	uint64_t atime = node->atime, mtime = node->mtime;
+	if(!times){
+		atime = now;
+		mtime = now;
+	}else{
+		timespec_t ts[2];
+		if(copy_from_user(ts, (void*)times, sizeof(ts)))return -EFAULT;
+		for(int i = 0; i < 2; i++){
+			uint64_t *dst = (i == 0) ? &atime : &mtime;
+			if(ts[i].tv_nsec == UTIME_OMIT)continue;
+			if(ts[i].tv_nsec == UTIME_NOW){ *dst = now; continue; }
+			if(ts[i].tv_nsec < 0 || ts[i].tv_nsec >= 1000000000L || ts[i].tv_sec < 0)return -EINVAL;
+			*dst = (uint64_t)ts[i].tv_sec;
+		}
+	}
+	node->atime = atime;
+	node->mtime = mtime;
+	node->ctime = now;
+	//回写到存储介质(FAT32 会更新目录项; ramfs 没有该操作, 仅更新内存节点)
+	if(node->ops && node->ops->set_times)node->ops->set_times(node);
+	return 0;
 }
 
 /*
@@ -1365,8 +1563,6 @@ static long sys_brk(long addr, long a2, long a3, long a4, long a5, long a6){
  * void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
  * 支持匿名私有映射与文件私有映射
  */
-static uintptr_t g_mmap_hint = 0x10000000;
-
 //把内核数据写入mm的已映射页(文件映射填充用)
 static int mmap_write_mem(mm_struct *mm, uintptr_t vaddr, const void *src, uint64_t len){
     while(len){
@@ -1403,15 +1599,18 @@ static long sys_mmap(long addr, long length, long prot, long flags, long fd, lon
 	if(prot & PROT_EXEC) vm_flags |= VM_EXEC;
 	//确定映射地址
 	uintptr_t vaddr;
-	if(addr != 0){
-		vaddr = (uintptr_t)addr & PAGE_MASK;
-	}else{
-		vaddr = g_mmap_hint;
-		g_mmap_hint += ((uint64_t)length + PAGE_SIZE) & PAGE_MASK;
-	}
-	//MAP_FIXED，先解除目标范围的旧映射
+	uint64_t bytes = ((uint64_t)length + PAGE_SIZE - 1) & PAGE_MASK;
 	if(flags & MAP_FIXED){
+		if(addr == 0 || ((uintptr_t)addr & (PAGE_SIZE - 1)))return -EINVAL;
+		vaddr = (uintptr_t)addr;
+		if(vaddr + bytes > USER_VADDR_MAX)return -EINVAL;
 		vmm_munmap(current_task->mm, vaddr, (uint64_t)length);
+	}else{
+		uintptr_t hint = (addr != 0) ? (uintptr_t)addr : current_task->mm->mmap_hint;
+		vaddr = vmm_find_gap(current_task->mm, hint, bytes);
+		if(!vaddr && addr != 0)vaddr = vmm_find_gap(current_task->mm, current_task->mm->mmap_hint, bytes);
+		if(!vaddr)return -ENOMEM;
+		current_task->mm->mmap_hint = vaddr + bytes;
 	}
 	if(vmm_mmap(current_task->mm, vaddr, (uint64_t)length, vm_flags)) return -ENOMEM;
 	//文件映射
@@ -1564,6 +1763,7 @@ void InitSyscall(void){
 	syscall_table[SYS_DUP]        = sys_dup;
 	syscall_table[SYS_DUP2]       = sys_dup2;
 	syscall_table[SYS_DUP3]       = sys_dup3;
+	syscall_table[SYS_READV]      = sys_readv;
 	syscall_table[SYS_WRITEV]     = sys_writev;
 	syscall_table[SYS_READLINKAT]      = sys_readlinkat;
 	syscall_table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
@@ -1611,6 +1811,8 @@ void InitSyscall(void){
 	syscall_table[SYS_RENAME]     = sys_rename;
 	syscall_table[SYS_RENAMEAT]   = sys_renameat;
 	syscall_table[SYS_RENAMEAT2]  = sys_renameat2;
+	syscall_table[SYS_UTIMENSAT]  = sys_utimensat;
+	syscall_table[SYS_STATX]      = sys_statx;
 	syscall_table[SYS_BRK]        = sys_brk;
 	syscall_table[SYS_ARCH_PRCTL] = sys_arch_prctl;
 	syscall_table[SYS_FUTEX]            = sys_futex;

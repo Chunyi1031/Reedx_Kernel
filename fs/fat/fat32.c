@@ -685,6 +685,30 @@ static void fat_truncate(fs_node_t *node){
     fat_update_dirent(p);
 }
 
+//把节点上的回写到目录项
+static int fat_set_times(fs_node_t *node){
+    if(!node || !node->priv)return -1;
+    fat_node_priv_t *p = (fat_node_priv_t*)node->priv;
+    if(!p->dir_clus)return 0;//根节点没有目录项
+    if(fat_read_cluster(p->dir_clus))return -1;
+    fat_dir_entry_t *de = (fat_dir_entry_t*)(g_fat.cluster_buf + p->dir_off);
+    if(node->mtime){
+        rtc_time_t tm;
+        rtc_epoch_to_utc(node->mtime + (uint64_t)TIMEZONE_OFFSET_HOURS * 3600, &tm);
+        if(tm.year >= 1980){
+            de->wrt_time = (uint16_t)((tm.hour << 11) | (tm.minute << 5) | (tm.second / 2));
+            de->wrt_date = (uint16_t)(((tm.year - 1980) << 9) | (tm.month << 5) | tm.day);
+        }
+    }
+    if(node->atime){
+        rtc_time_t tm;
+        rtc_epoch_to_utc(node->atime + (uint64_t)TIMEZONE_OFFSET_HOURS * 3600, &tm);
+        if(tm.year >= 1980)
+            de->lst_acc_date = (uint16_t)(((tm.year - 1980) << 9) | (tm.month << 5) | tm.day);
+    }
+    return fat_write_cluster(p->dir_clus);
+}
+
 //创建目录
 static int fat_mkdir(fs_node_t *dir, const char *name, int mode){
     (void)mode;
@@ -878,6 +902,7 @@ static fs_node_ops_t fat_ops = {
     .unlink   = fat_unlink,
     .rename   = fat_rename,
     .readdir  = fat_readdir,
+    .set_times= fat_set_times,
 };
 
 //挂载FAT32分区

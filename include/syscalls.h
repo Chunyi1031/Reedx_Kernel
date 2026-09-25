@@ -21,6 +21,7 @@
 #define SYS_RT_SIGRETURN    15
 #define SYS_IOCTL           16
 #define SYS_PREAD64         17
+#define SYS_READV           19
 #define SYS_WRITEV          20
 #define SYS_ACCESS          21
 #define SYS_PIPE            22
@@ -77,13 +78,19 @@
 #define SYS_READLINKAT      267
 #define SYS_FACCESSAT       269
 #define SYS_SET_ROBUST_LIST 273
+#define SYS_UTIMENSAT       280
 #define SYS_DUP3            292
 #define SYS_PIPE2           293
 #define SYS_PRLIMIT64       302
 #define SYS_RENAMEAT2       316
 #define SYS_GETRANDOM       318
+#define SYS_STATX           332
 #define AT_FDCWD            (-100)
 #define AT_EMPTY_PATH       0x1000  //path 为空字符串时对 dirfd 自身操作(glibc fstat 用它)
+#define AT_SYMLINK_NOFOLLOW 0x100   //不跟随符号链接
+
+#define UTIME_NOW           (-1L)   //设为当前时间
+#define UTIME_OMIT          (-2L)   //保持原值不变
 
 #define AT_REMOVEDIR        0x200
 #define RENAME_NOREPLACE    1
@@ -247,6 +254,56 @@ typedef struct stat {
     int64_t  st_ctime_nsec;
     int64_t  __unused[3];
 } stat_t;
+
+//statx时间戳
+typedef struct statx_timestamp {
+    int64_t  tv_sec;
+    uint32_t tv_nsec;
+    int32_t  __reserved;
+} statx_timestamp_t;
+
+//statx结构体(256字节)
+typedef struct statx {
+    uint32_t stx_mask;
+    uint32_t stx_blksize;
+    uint64_t stx_attributes;
+    uint32_t stx_nlink;
+    uint32_t stx_uid;
+    uint32_t stx_gid;
+    uint16_t stx_mode;
+    uint16_t __spare0;
+    uint64_t stx_ino;
+    uint64_t stx_size;
+    uint64_t stx_blocks;
+    uint64_t stx_attributes_mask;
+    statx_timestamp_t stx_atime;
+    statx_timestamp_t stx_btime;
+    statx_timestamp_t stx_ctime;
+    statx_timestamp_t stx_mtime;
+    uint32_t stx_rdev_major;
+    uint32_t stx_rdev_minor;
+    uint32_t stx_dev_major;
+    uint32_t stx_dev_minor;
+    uint64_t stx_mnt_id;
+    uint32_t stx_dio_mem_align;
+    uint32_t stx_dio_offset_align;
+    uint64_t __spare3[12];
+} statx_t;
+
+//statx的stx_mask位
+#define STATX_TYPE        0x0001
+#define STATX_MODE        0x0002
+#define STATX_NLINK       0x0004
+#define STATX_UID         0x0008
+#define STATX_GID         0x0010
+#define STATX_ATIME       0x0020
+#define STATX_MTIME       0x0040
+#define STATX_CTIME       0x0080
+#define STATX_INO         0x0100
+#define STATX_SIZE        0x0200
+#define STATX_BLOCKS      0x0400
+#define STATX_BASIC_STATS 0x07FF
+#define STATX_BTIME       0x0800
 
 extern void syscall_entry(void);//汇编入口（kernel/asm/syscall.S）
 

@@ -43,6 +43,7 @@ typedef struct mm_struct {
     uintptr_t start_data, end_data;
     uintptr_t start_brk, brk;       //堆
     uintptr_t start_stack;          //栈起始地址
+    uintptr_t mmap_hint;            //mmap分配提示
     uint64_t total_vm;              //已映射的虚拟页总数
     uint64_t rss;                   //已占用的物理页数（Resident Set Size）
 } mm_struct;
@@ -74,6 +75,15 @@ vm_area_t* find_vma(mm_struct *mm, uintptr_t addr);
  * @author DeepSeek V4 Pro
  */
 int vmm_mmap(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t flags);
+/**
+ * 在mm的地址空间里找一段bytes长的空闲区间
+ * @param mm: 地址空间
+ * @param hint: 起始提示地址（页对齐）
+ * @param bytes: 需要的字节数
+ * @return 返回区间起始地址，0表示找不到
+ * @author DeepSeek V4.1 Flash
+ */
+uintptr_t vmm_find_gap(mm_struct *mm, uintptr_t hint, uint64_t bytes);//找一段空闲区间
 /**
  * @brief 为用户地址空间映射一页
  * @param mm: 地址空间

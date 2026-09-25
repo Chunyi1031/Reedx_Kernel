@@ -173,6 +173,7 @@ mm_struct* vmm_create_address_space(void){
     mm->start_brk  = 0x700000;
     mm->brk        = 0x700000;
     mm->start_stack = 0x7FFFFFFFF000ULL;
+    mm->mmap_hint = 0x10000000ULL;
     mm->total_vm = 0;
     mm->rss = 0;
     return mm;
@@ -415,11 +416,39 @@ vm_area_t* find_vma(mm_struct *mm, uintptr_t addr) {
     return NULL;
 }
 
+uintptr_t vmm_find_gap(mm_struct *mm, uintptr_t hint, uint64_t bytes){
+    if(!mm || !bytes)return 0;
+    bytes = (bytes + PAGE_SIZE - 1) & PAGE_MASK;
+    uintptr_t start = hint & PAGE_MASK;
+    if(start < 0x10000000ULL)start = 0x10000000ULL;//下限: 避开 ELF/堆所在的低地址区
+    uintptr_t limit = (mm->start_stack > 0x20000000ULL) ? (mm->start_stack - 0x10000000ULL) : USER_VADDR_MAX;
+    for(int iter = 0; iter < 8192; iter++){
+        if(start + bytes > limit)return 0;
+        //VMA 链表按 vm_start 升序: 找第一个与 [start, start+bytes) 重叠的 VMA
+        vm_area_t *hit = NULL;
+        vm_area_t *vma;
+        list_for_each_entry(vma, &mm->mmap, vm_list){
+            if(vma->vm_end <= start)continue;
+            if(vma->vm_start >= start + bytes)break;
+            hit = vma;
+            break;
+        }
+        if(!hit)return start;//这里是空洞
+        start = (hit->vm_end + PAGE_MASK) & PAGE_MASK;//跳过该映射继续找
+    }
+    return 0;
+}
+
 //映射一段匿名内存(0成功/-1失败)
 int vmm_mmap(mm_struct *mm, uintptr_t vaddr, uint64_t length, uint64_t flags) {
     if (!mm || !length) return -1;
     vaddr &= PAGE_MASK;
     uint64_t pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+    //拒绝覆盖已有映射
+    for (uint64_t i = 0; i < pages; i++) {
+        uintptr_t *pte = (uintptr_t*)get_pte((uintptr_t)mm->pgd, vaddr + i * PAGE_SIZE, 0, 0);
+        if (pte && pte_is_present(*pte)) return -1;
+    }
     vm_area_t *vma = vma_create(mm, vaddr, vaddr + pages * PAGE_SIZE, flags);
     if (!vma) return -1;
     for (uint64_t i = 0; i < pages; i++) {

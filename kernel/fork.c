@@ -27,15 +27,15 @@ pid_t do_fork(void){
 	mm_struct *child_mm = vmm_clone_address_space(parent->mm);
 	if (!child_mm) return -1;
 	//分配子task_struct与内核栈
-	task_struct *child = (task_struct*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(1));
+	task_struct *child = (task_struct*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(TASK_STRUCT_PAGES));
 	void *stack = (void*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(1));
 	if (!child || !stack) {
-		if (child) Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)child), 1);
+		if (child) Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)child), TASK_STRUCT_PAGES);
 		if (stack) Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)stack), 1);
 		vmm_destroy_address_space(child_mm);
 		return -1;
 	}
-	memset(child, 0, 4096);
+	memset(child, 0, TASK_STRUCT_PAGES * 4096);
 	memset(stack, 0, 4096);
 	cli();
 	//拷贝父进程当前内核栈帧到子栈对应位置
