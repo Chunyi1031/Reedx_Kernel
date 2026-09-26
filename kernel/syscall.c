@@ -132,11 +132,14 @@ static long sys_read(long fd, long buf, long count, long a4, long a5, long a6){
 		sti();
 		char kbuf[KEYBOARD_BUFFER_SIZE];
 		long total = 0;
-		kbuf[total++] = GetKey();//阻塞等待至少一个按键
+		char k0 = GetKey();//阻塞等待至少一个按键
+		if(k0 == '\r' && (g_tty_term.iflag & 0x0100))k0 = '\n';
+		kbuf[total++] = k0;
 		//一次读完缓冲区中已就绪的多个按键
 		while(total < count && total < KEYBOARD_BUFFER_SIZE){
 			char c = GetKey_NoBlock();
 			if(c == 0)break;
+			if(c == '\r' && (g_tty_term.iflag & 0x0100))c = '\n';
 			kbuf[total++] = c;
 		}
 		if(copy_to_user((void*)buf, kbuf, (unsigned long)total))return -EFAULT;//复制到用户空间
@@ -465,6 +468,67 @@ static long sys_ftruncate(long fd, long length, long a3, long a4, long a5, long 
 	//控制台/管道等无存储节点的 fd 不支持截断
 	if(!current_task->files[fd].node || current_task->files[fd].pipe)return -EINVAL;
 	return FsTruncate(&current_task->files[fd], (uint64_t)length);
+}
+
+/*
+ * int fsync(int fd) / int fdatasync(int fd)
+ * write() 已经把数据直接写到设备(AHCI/ATA 驱动同步等完成), 没有写回缓存,
+ * 所以这里校验一下fd就可以直接成功。
+ * (nano 存盘时会调它, 不实现就会报 "Function not implemented")
+ */
+static long sys_fsync(long fd, long b, long c, long a4, long a5, long a6){
+	(void)b; (void)c; (void)a4; (void)a5; (void)a6;
+	if(fd < 0)return -EBADF;
+	if(fd >= 3){
+		if(!current_task || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+	}
+	return 0;
+}
+
+/*
+ * void sync(void)
+ */
+static long sys_sync(long a, long b, long c, long a4, long a5, long a6){
+	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
+	return 0;
+}
+
+/*
+ * int chmod(const char *path, mode_t mode)
+ * int fchmod(int fd, mode_t mode)
+ * int fchmodat(int dirfd, const char *pathname, mode_t mode, int flags)
+ * FAT32 没有权限位, 当成功处理(否则程序会因 ENOSYS 报错)
+ */
+static long sys_chmod(long path, long mode, long a3, long a4, long a5, long a6){
+	(void)mode; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!path)return -EFAULT;
+	return 0;
+}
+
+static long sys_fchmod(long fd, long mode, long a3, long a4, long a5, long a6){
+	(void)mode; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(fd < 0)return -EBADF;
+	if(fd >= 3){
+		if(!current_task || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+	}
+	return 0;
+}
+
+static long sys_fchmodat(long dirfd, long path, long mode, long flags, long a5, long a6){
+	(void)dirfd; (void)path; (void)mode; (void)flags; (void)a5; (void)a6;
+	return 0;
+}
+
+/*
+ * mode_t umask(mode_t mask)
+ * 返回旧掩码(glibc 靠返回值实现 umask())
+ */
+static long sys_umask(long mask, long b, long c, long a4, long a5, long a6){
+	(void)b; (void)c; (void)a4; (void)a5; (void)a6;
+	static long old = 022;
+	long prev = old;
+	old = mask & 0777;
+	return prev;
 }
 
 /*
@@ -1998,6 +2062,13 @@ void InitSyscall(void){
 	syscall_table[SYS_RMDIR]      = sys_rmdir;
 	syscall_table[SYS_TRUNCATE]   = sys_truncate;
 	syscall_table[SYS_FTRUNCATE]  = sys_ftruncate;
+	syscall_table[SYS_FSYNC]      = sys_fsync;
+	syscall_table[SYS_FDATASYNC]  = sys_fsync;
+	syscall_table[SYS_SYNC]       = sys_sync;
+	syscall_table[SYS_CHMOD]      = sys_chmod;
+	syscall_table[SYS_FCHMOD]     = sys_fchmod;
+	syscall_table[SYS_FCHMODAT]   = sys_fchmodat;
+	syscall_table[SYS_UMASK]      = sys_umask;
 	syscall_table[SYS_UNLINK]     = sys_unlink;
 	syscall_table[SYS_UNLINKAT]   = sys_unlinkat;
 	syscall_table[SYS_RENAME]     = sys_rename;

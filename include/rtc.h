@@ -1,5 +1,5 @@
 /*
- * 由Hermes Agent + DeepSeek-V4-Pro参考Linux 7.1.3生成
+ * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
  * include/rtc.h — CMOS RTC 实时时钟接口与时区定义
  *
@@ -14,7 +14,7 @@
 
 #include <types.h>
 
-#define TIMEZONE_OFFSET_HOURS 8 //时区，UTC+8 = CST 中国标准时间
+#define TIMEZONE_OFFSET_HOURS 0 //时区，UTC
 #define TIMEZONE_DST_RULE 0//夏时令规则：0=无, 1=美国/加拿大, 2=欧盟
 
 #define RTC_IS_UTC 1//1=UTC，0=本地

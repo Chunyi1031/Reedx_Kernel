@@ -38,8 +38,13 @@
 #define SYS_KILL            62
 #define SYS_UNAME           63
 #define SYS_FCNTL           72
+#define SYS_FSYNC           74
+#define SYS_FDATASYNC       75
 #define SYS_TRUNCATE        76
 #define SYS_FTRUNCATE       77
+#define SYS_CHMOD           90
+#define SYS_FCHMOD          91
+#define SYS_UMASK           95
 #define SYS_GETCWD          79
 #define SYS_CHDIR           80
 #define SYS_RENAME          82
@@ -59,6 +64,7 @@
 #define SYS_SIGALTSTACK     131
 #define SYS_PRCTL           157
 #define SYS_ARCH_PRCTL      158
+#define SYS_SYNC            162
 #define SYS_REBOOT          169
 #define SYS_GETTID          186
 #define SYS_TKILL           200
@@ -78,6 +84,7 @@
 #define SYS_NEWFSTATAT      262
 #define SYS_RENAMEAT        264
 #define SYS_READLINKAT      267
+#define SYS_FCHMODAT        268
 #define SYS_FACCESSAT       269
 #define SYS_SET_ROBUST_LIST 273
 #define SYS_UTIMENSAT       280

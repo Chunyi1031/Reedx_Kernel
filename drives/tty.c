@@ -27,8 +27,13 @@ static _Bool    g_ansi_priv = false;//CSI带'?'前缀
 static uint32_t g_ansi_fg = 0;//0=未设置, 用调用者给的颜色
 static uint32_t g_ansi_bg = 0;//0=未设置, 用当前控制台背景
 static _Bool    g_ansi_bold = false;
+static _Bool    g_ansi_rev = false;//SGR 7反显
 static uint16_t g_ansi_save_col = 0, g_ansi_save_row = 0;
 static _Bool    g_ansi_saved = false;
+static _Bool    g_cur_visible = true;//光标是否显示
+
+static void tty_cursor_erase(void);
+static void tty_cursor_draw(uint32_t color,uint32_t bg);
 
 //ANSI0-15号色转帧缓冲颜色
 static const uint32_t g_ansi_pal[16] = {
@@ -62,15 +67,30 @@ static uint32_t ansi_256(int n){
     return COLOR_WHITE;
 }
 
+//SGR 7(反显)就是交换前景与背景
+static void tty_make_colors(uint32_t fallback,uint32_t *out_fg,uint32_t *out_bg){
+    uint32_t f = g_ansi_fg ? g_ansi_fg : fallback;
+    uint32_t b = g_ansi_bg ? g_ansi_bg : CurrentConsoleStyle.BgColor;
+    if(g_ansi_bold && (f == COLOR_GREY || f == COLOR_BLACK))f = COLOR_LGREY;
+    if(g_ansi_rev){
+        uint32_t t = f;
+        f = b;
+        b = t;
+    }
+    *out_fg = f;
+    *out_bg = b;
+}
 //当前生效的前景色
 static uint32_t TTY_EffectiveFg(uint32_t fallback){
-    if(g_ansi_fg)return g_ansi_fg;
-    if(g_ansi_bold && (fallback == COLOR_GREY || fallback == COLOR_BLACK))return COLOR_LGREY;
-    return fallback;
+    uint32_t f, b;
+    tty_make_colors(fallback,&f,&b);
+    return f;
 }
 //当前生效的背景色
 static uint32_t TTY_EffectiveBg(void){
-    return g_ansi_bg ? g_ansi_bg : CurrentConsoleStyle.BgColor;
+    uint32_t f, b;
+    tty_make_colors(CurrentConsoleStyle.TextColor,&f,&b);
+    return b;
 }
 
 //屏幕可用行列数
@@ -93,6 +113,67 @@ static void tty_fill_cells(uint16_t c0,uint16_t r0,uint16_t c1,uint16_t r1,uint3
     fillRect((uint16_t)(c0 * 10),(uint16_t)(r0 * 18),(uint16_t)((c1 - c0 + 1) * 10),(uint16_t)((r1 - r0 + 1) * 18),bg);
 }
 
+//读一个像素
+static uint32_t tty_read_px(uint16_t x,uint16_t y){
+    if(!ScreenFbMapped())return 0;
+    if(x >= SYSTEM_ScreenInfo.Width || y >= SYSTEM_ScreenInfo.Height)return 0;
+    uint32_t pixels = SYSTEM_ScreenInfo.FrameBufferSize / 4;
+    int idx = (int)y * SYSTEM_ScreenInfo.Width + x;
+    if(idx < 0 || idx >= (int)pixels)return 0;
+    return SYSTEM_FrameBuffer[idx];
+}
+
+#define TTY_CELL_W 10
+#define TTY_CELL_H 18
+static void tty_move_cells(int row,int dst_col,int src_col,int count){
+    if(count <= 0)return;
+    if(row < 0 || row >= (int)tty_rows())return;
+    if(dst_col < 0 || src_col < 0)return;
+    int step = (dst_col < src_col) ? 1 : -1;
+    for(int y = 0; y < TTY_CELL_H; y++){
+        int py = row * TTY_CELL_H + y;
+        if(py >= (int)SYSTEM_ScreenInfo.Height)break;
+        int dx = dst_col * TTY_CELL_W, sx = src_col * TTY_CELL_W;
+        for(int i = 0; i < count * TTY_CELL_W; i++){
+            int k = (step > 0) ? i : (count * TTY_CELL_W - 1 - i);
+            uint32_t px = tty_read_px((uint16_t)(sx + k),(uint16_t)py);
+            DrawPiexl((uint16_t)(dx + k),(uint16_t)py,px);
+        }
+    }
+}
+
+static int g_scroll_top = 0;
+static int g_scroll_bot = -1;
+
+//滚动区域的下边界(行号)
+static int tty_bot_row(void){
+    int last = (int)tty_rows() - 1;
+    if(g_scroll_bot >= 0 && g_scroll_bot < last)return g_scroll_bot;
+    return last;
+}
+
+//把第top~bot行整体上滚一行
+static void tty_scroll_region(int top,int bot,uint32_t bg){
+    if(!TTY_ScreenEnabled)return;
+    if(!ScreenFbMapped())return;
+    if(top < 0)top = 0;
+    if(bot > (int)tty_rows() - 1)bot = (int)tty_rows() - 1;
+    if(top >= bot)return;
+    int w = SYSTEM_ScreenInfo.Width;
+    uint8_t *fb = (uint8_t*)SYSTEM_FrameBuffer;
+    int y0 = top * TTY_CELL_H;
+    int y1 = bot * TTY_CELL_H;
+    for(int y = y0; y < y1; y++){
+        memcpy(fb + (size_t)y * w * 4,fb + (size_t)(y + TTY_CELL_H) * w * 4,(size_t)w * 4);
+    }
+    fillRect(0,(uint16_t)y1,(uint16_t)w,TTY_CELL_H,bg);
+}
+
+//按当前滚动区域滚一行
+static void tty_scroll_page(uint32_t bg){
+    tty_scroll_region(g_scroll_top,tty_bot_row(),bg);
+}
+
 //光标定位
 static void ansi_cursor_set(int col,int row){
     if(col < 0)col = 0;
@@ -108,14 +189,16 @@ static void ansi_cursor_set(int col,int row){
 static void ansi_sgr(void){
     int n = g_ansi_np;
     if(n == 0){//ESC[m 等价于 ESC[0m
-        g_ansi_fg = 0; g_ansi_bg = 0; g_ansi_bold = false;
+        g_ansi_fg = 0; g_ansi_bg = 0; g_ansi_bold = false; g_ansi_rev = false;
         return;
     }
     for(int i = 0; i < n; i++){
         int p = g_ansi_p[i];
-        if(p == 0){ g_ansi_fg = 0; g_ansi_bg = 0; g_ansi_bold = false; }
+        if(p == 0){ g_ansi_fg = 0; g_ansi_bg = 0; g_ansi_bold = false; g_ansi_rev = false; }
         else if(p == 1){ g_ansi_bold = true; }
+        else if(p == 7){ g_ansi_rev = true; }//反显
         else if(p == 22){ g_ansi_bold = false; }
+        else if(p == 27){ g_ansi_rev = false; }
         else if(p == 39){ g_ansi_fg = 0; }
         else if(p == 49){ g_ansi_bg = 0; }
         else if(p >= 30 && p <= 37){ g_ansi_fg = g_ansi_pal[p - 30]; }
@@ -151,6 +234,13 @@ static void ansi_param_begin(void){
     g_ansi_acc = -1;
     g_ansi_priv = false;
 }
+static void ansi_param_push(void){
+    int v = (g_ansi_acc < 0) ? 0 : g_ansi_acc;
+    if(g_ansi_np < ANSI_PARAM_MAX)g_ansi_p[g_ansi_np] = v;
+    g_ansi_np++;
+    g_ansi_acc = -1;
+}
+//遇到终止字节: 没写数字就不补参数(ESC[m 要保持 0 个参数)
 static void ansi_param_flush(void){
     if(g_ansi_acc >= 0){
         if(g_ansi_np < ANSI_PARAM_MAX)g_ansi_p[g_ansi_np] = g_ansi_acc;
@@ -161,7 +251,22 @@ static void ansi_param_flush(void){
 
 //CSI 序列收尾: 按最终字节执行动作
 static void ansi_csi_dispatch(char final){
-    if(g_ansi_priv)return;//私有模式，没有光标硬件可控制, 静默忽略
+    if(g_ansi_priv){
+        if(final == 'h' || final == 'l'){
+            for(int i = 0; i < g_ansi_np; i++){
+                if(g_ansi_p[i] == 25){
+                    if(final == 'h'){
+                        g_cur_visible = true;
+                        tty_cursor_draw(TTY_EffectiveFg(CurrentConsoleStyle.TextColor),TTY_EffectiveBg());
+                    }else{
+                        tty_cursor_erase();
+                        g_cur_visible = false;
+                    }
+                }
+            }
+        }
+        return;
+    }
     int a0 = (g_ansi_np > 0) ? g_ansi_p[0] : 0;
     if(a0 <= 0)a0 = 1;//光标类序列默认参数为1
     int col = TTY_PrintCol, row = TTY_PrintRow;
@@ -205,6 +310,42 @@ static void ansi_csi_dispatch(char final){
     }
     case 's': g_ansi_save_col = TTY_PrintCol; g_ansi_save_row = TTY_PrintRow; g_ansi_saved = true; break;
     case 'u': if(g_ansi_saved)ansi_cursor_set(g_ansi_save_col,g_ansi_save_row); break;
+    case 'P':{
+        int n2 = a0, c = TTY_PrintCol;
+        if(c + n2 > (int)tty_cols())n2 = (int)tty_cols() - c;
+        if(n2 > 0){
+            tty_move_cells(TTY_PrintRow,c,c + n2,(int)tty_cols() - c - n2);
+            tty_fill_cells((uint16_t)(tty_cols() - n2),TTY_PrintRow,(uint16_t)(tty_cols() - 1),TTY_PrintRow,TTY_EffectiveBg());
+        }
+        break;
+    }
+    case '@':{
+        int n2 = a0, c = TTY_PrintCol;
+        if(c + n2 > (int)tty_cols())n2 = (int)tty_cols() - c;
+        if(n2 > 0){
+            tty_move_cells(TTY_PrintRow,c + n2,c,(int)tty_cols() - c - n2);
+            tty_fill_cells((uint16_t)c,TTY_PrintRow,(uint16_t)(c + n2 - 1),TTY_PrintRow,TTY_EffectiveBg());
+        }
+        break;
+    }
+    case 'X':{
+        int n2 = a0, c = TTY_PrintCol;
+        if(c + n2 > (int)tty_cols())n2 = (int)tty_cols() - c;
+        if(n2 > 0)tty_fill_cells((uint16_t)c,TTY_PrintRow,(uint16_t)(c + n2 - 1),TTY_PrintRow,TTY_EffectiveBg());
+        break;
+    }
+    case 'r':{
+        int top = (g_ansi_np > 0 && g_ansi_p[0] > 0) ? g_ansi_p[0] : 1;
+        int bot = (g_ansi_np > 1 && g_ansi_p[1] > 0) ? g_ansi_p[1] : (int)tty_rows();
+        if(top < 1)top = 1;
+        if(bot > (int)tty_rows())bot = (int)tty_rows();
+        if(top < bot){
+            g_scroll_top = top - 1;
+            g_scroll_bot = bot - 1;
+        }
+        ansi_cursor_set(0,0);
+        break;
+    }
     default: break;//其余序列静默忽略
     }
 }
@@ -230,7 +371,7 @@ static _Bool ansi_feed(char c){
             if(g_ansi_acc > 9999)g_ansi_acc = 9999;
             return true;
         }
-        if(c == ';'){ ansi_param_flush(); return true; }
+        if(c == ';'){ ansi_param_push(); return true; }
         if(c == '?'){ g_ansi_priv = true; return true; }
         if(c == ' ' || c == '>' || c == '<' || c == '=')return true;//中间字节, 忽略
         if(c >= 0x40 && c <= 0x7E){ ansi_param_flush(); ansi_csi_dispatch(c); g_ansi_state = ANSI_IDLE; return true; }
@@ -249,8 +390,35 @@ static _Bool ansi_feed(char c){
 }
 /*DeepSeek-V4.1-Flash-END*/
 
-void TTY_PrintChar(const char c,uint32_t color){
-    SerialWriteChar(SERIAL_COM1,c);
+/*DeepSeek-V4.1-Flash*/
+#define TTY_CURSOR_W 1
+#define TTY_CURSOR_H 16//与字形同高
+static uint16_t g_cur_x = 0;
+static uint16_t g_cur_y = 0;
+static _Bool    g_cur_on = false;
+static uint32_t g_cur_bg = 0;
+
+//擦掉光标: 用画它时那一格的背景色回填, 不留下脏点
+static void tty_cursor_erase(void){
+    if(!g_cur_on)return;
+    if(!TTY_ScreenEnabled)return;
+    fillRect(g_cur_x,g_cur_y,TTY_CURSOR_W,TTY_CURSOR_H,g_cur_bg);
+    g_cur_on = false;
+}
+
+//在当前位置(TTY_PrintCol/TTY_PrintRow)画光标
+static void tty_cursor_draw(uint32_t color,uint32_t bg){
+    if(!TTY_ScreenEnabled)return;
+    if(!g_cur_visible)return;
+    g_cur_x = (uint16_t)(TTY_PrintCol * 10);
+    g_cur_y = (uint16_t)(TTY_PrintRow * 18);
+    g_cur_bg = bg;
+    g_cur_on = true;
+    fillRect(g_cur_x,g_cur_y,TTY_CURSOR_W,TTY_CURSOR_H,color);
+}
+/*DeepSeek-V4.1-Flash-END*/
+
+static void tty_put_char(const char c,uint32_t color){
     if(!TTY_ScreenEnabled)return;
     if(ansi_feed(c))return;//属于转义序列, 交给解析器, 不上屏
     //设置颜色
@@ -272,33 +440,25 @@ void TTY_PrintChar(const char c,uint32_t color){
         }
         return;
     }
-    //屏幕已满,立即清屏回到顶部
-    if((uint64_t)TTY_PrintRow * 18 + 16 > SYSTEM_ScreenInfo.Height){
-        TTY_Clear();
-        TTY_PrintRow = 0;
-        TTY_PrintCol = 0;
-    }
-    //如果字符为换行符
+    if(TTY_PrintRow > (uint16_t)tty_bot_row())TTY_PrintRow = (uint16_t)tty_bot_row();
     if(c == '\n'){
-        TTY_PrintRow += 1;
         TTY_PrintCol = 0;
-        //如果换行后超出屏幕,清屏回到顶部
-        if((uint64_t)TTY_PrintRow * 18 + 16 > SYSTEM_ScreenInfo.Height){
-            TTY_Clear();
-            TTY_PrintRow = 0;
-            TTY_PrintCol = 0;
+        if(TTY_PrintRow >= (uint16_t)tty_bot_row()){
+            TTY_PrintRow = (uint16_t)tty_bot_row();
+            tty_scroll_page(bg);
+        }else{
+            TTY_PrintRow += 1;
         }
         return;
     }
     //如果列超出屏幕宽度，自动换行
     if((uint64_t)TTY_PrintCol * 10 + 10 > SYSTEM_ScreenInfo.Width){
-        TTY_PrintRow += 1;
         TTY_PrintCol = 0;
-        //如果换行后超出屏幕，清屏回到顶部
-        if((uint64_t)TTY_PrintRow * 18 + 16 > SYSTEM_ScreenInfo.Height){
-            TTY_Clear();
-            TTY_PrintRow = 0;
-            TTY_PrintCol = 0;
+        if(TTY_PrintRow >= (uint16_t)tty_bot_row()){
+            TTY_PrintRow = (uint16_t)tty_bot_row();
+            tty_scroll_page(bg);
+        }else{
+            TTY_PrintRow += 1;
         }
     }
     //如果字符为制表符
@@ -313,6 +473,14 @@ void TTY_PrintChar(const char c,uint32_t color){
     TTY_PrintCol ++;//记录打印位置
 }
 
+void TTY_PrintChar(const char c,uint32_t color){
+    SerialWriteChar(SERIAL_COM1,c);
+    if(!TTY_ScreenEnabled)return;
+    tty_cursor_erase();//光标马上要挪了, 先擦掉
+    tty_put_char(c,color);
+    tty_cursor_draw(TTY_EffectiveFg(color),TTY_EffectiveBg());
+}
+
 void TTY_Print(const char *str,uint32_t color){
     uint16_t i = 0;
     while(str[i]){
@@ -324,11 +492,16 @@ void TTY_Print(const char *str,uint32_t color){
 void TTY_SetCursor(uint16_t col,uint16_t row){
     TTY_PrintCol = col;
     TTY_PrintRow = row;
+    if(!TTY_ScreenEnabled)return;
+    tty_cursor_erase();
+    tty_cursor_draw(TTY_EffectiveFg(CurrentConsoleStyle.TextColor),TTY_EffectiveBg());
 }
 
 void TTY_Clear(){
     if(!TTY_ScreenEnabled)return;
     fillRect(0,0,SYSTEM_ScreenInfo.Width,SYSTEM_ScreenInfo.Height,TTY_EffectiveBg());
+    g_cur_on = false;
+    tty_cursor_draw(TTY_EffectiveFg(CurrentConsoleStyle.TextColor),TTY_EffectiveBg());
 }
 
 /*DeepSeek-V4.1-Flash*/
@@ -418,6 +591,7 @@ long TTY_TermRead(char *kbuf, long count){
     if(ready > 0)return ready;
     for(;;){
         char c = GetKey();
+        if(c == '\r' && (g_tty_term.iflag & 0x0100))c = '\n';
         if(c == 0x1B){
             char e1 = 0;
             for(int i = 0; i < 20 && e1 == 0; i++){
