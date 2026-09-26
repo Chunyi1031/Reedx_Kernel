@@ -11,7 +11,7 @@
 #include <mm/vmm.h>
 #include <mm/pgtables.h>
 
-#define EXEC_STACK_PAGES  16       //用户栈大小(64KB)
+#define EXEC_STACK_PAGES  2048     //用户栈大小(8MB)
 #define EXEC_MAX_ARGV     32       //最多参数个数
 #define EXEC_MAX_ENVP     32       //最多环境变量个数
 #define EXEC_ARG_MAX      128      //单个参数/环境变量最大长度

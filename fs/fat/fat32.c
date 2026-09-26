@@ -868,41 +868,70 @@ static int fat_dir_entry_at(fat_node_priv_t *dp, uint32_t idx, uint32_t *clu, ui
 static void fat_short_name(fat_dir_entry_t *de, char *name){
     int b = 7; while(b >= 0 && de->name[b] == ' ')b--;
     int e = 2; while(e >= 0 && de->ext[e] == ' ')e--;
+    int lo_base = (de->nt_res & 0x08) ? 1 : 0;
+    int lo_ext  = (de->nt_res & 0x10) ? 1 : 0;
     int j = 0;
-    for(int i = 0; i <= b; i++) name[j++] = (char)de->name[i];
+    for(int i = 0; i <= b; i++){
+        char c = (char)de->name[i];
+        if(lo_base && c >= 'A' && c <= 'Z') c += 32;
+        name[j++] = c;
+    }
     if(e >= 0){
         name[j++] = '.';
-        for(int i = 0; i <= e; i++) name[j++] = (char)de->ext[i];
+        for(int i = 0; i <= e; i++){
+            char c = (char)de->ext[i];
+            if(lo_ext && c >= 'A' && c <= 'Z') c += 32;
+            name[j++] = c;
+        }
     }
     name[j] = 0;
 }
 
 //回看短条目前面的LFN条目,重建长文件名,有LFN返回1，否则0
+#define LFN_MAX_BLOCKS 20
 static int fat_reconstruct_lfn(fat_node_priv_t *dp, uint32_t idx, char *name){
-    int total = 0;
-    int found = 0;
+    uint16_t buf[LFN_MAX_BLOCKS * 13];
+    uint8_t  seen[LFN_MAX_BLOCKS + 1];
+    int maxo = 0, cnt = 0;
+    uint8_t chain_chk = 0;
+    memset(seen, 0, sizeof(seen));
+    for(int i = 0; i < LFN_MAX_BLOCKS * 13; i++)buf[i] = 0xFFFF;
     for(uint32_t j = 1; j <= idx; j++){
         uint32_t clu, eoff;
         if(fat_dir_entry_at(dp, idx - j, &clu, &eoff))break;
         if(fat_read_cluster(clu))return 0;
         fat_lfn_entry_t *le = (fat_lfn_entry_t*)(g_fat.cluster_buf + eoff);
         if(le->attr != FAT_ATTR_LFN)break;
-        uint8_t order = le->order & 0x3F;
-        if(order < 1 || order > 20)break;
-        int pos = (order - 1) * 13;
-        uint16_t chars[13];
-        for(int k = 0; k < 5; k++)chars[k] = le->name1[k];
-        for(int k = 0; k < 6; k++)chars[5 + k] = le->name2[k];
-        for(int k = 0; k < 2; k++)chars[11 + k] = le->name3[k];
-        for(int k = 0; k < 13 && pos + k < MAX_NAME - 1; k++){
-            uint16_t ch = chars[k];
-            if(ch == 0 || ch == 0xFFFF)continue;
-            name[pos + k] = (ch < 0x80) ? (char)ch : '?';
-            if(pos + k + 1 > total)total = pos + k + 1;
+        if(le->order == FAT_DIRENT_FREE)break;//已删除的LFN槽(0xE5)不参与拼接
+        if(j == 1){
+            chain_chk = le->checksum;
+        }else if(le->checksum != chain_chk){
+            break;//校验和变了说明不是同一条链
         }
-        found = 1;
+        uint8_t order = le->order & 0x3F;
+        if(order < 1 || order > LFN_MAX_BLOCKS)break;
+        if(seen[order])break;//序号重复,链条到此为止
+        seen[order] = 1;
+        cnt++;
+        if(order > maxo)maxo = order;
+        int pos = (order - 1) * 13;
+        for(int k = 0; k < 5; k++)buf[pos + k] = le->name1[k];
+        for(int k = 0; k < 6; k++)buf[pos + 5 + k] = le->name2[k];
+        for(int k = 0; k < 2; k++)buf[pos + 11 + k] = le->name3[k];
     }
-    if(!found)return 0;
+    if(cnt == 0)return 0;
+    for(int i = 1; i <= maxo; i++){
+        if(!seen[i])return 0;//缺块
+    }
+    int total = 0;
+    for(int k = 0; k < LFN_MAX_BLOCKS * 13 && k < MAX_NAME - 1; k++){
+        uint16_t ch = buf[k];
+        if(ch == 0)break;//字符串终止
+        if(ch == 0xFFFF)continue;//块尾填充
+        name[k] = (ch < 0x80) ? (char)ch : '?';
+        total = k + 1;
+    }
+    if(total <= 0)return 0;
     name[total] = 0;
     return 1;
 }
@@ -923,11 +952,12 @@ static int fat_readdir(fs_node_t *dir, uint64_t *cookie, fs_dirent_t *out){
             idx++;
             continue;
         }
+        fat_dir_entry_t saved = *de;
         if(!fat_reconstruct_lfn(dp, idx, out->name)){
-            fat_short_name(de, out->name);
+            fat_short_name(&saved, out->name);
         }
         out->ino = ((uint64_t)clu << 32) | eoff;
-        out->type = (de->attr & FAT_ATTR_DIRECTORY) ? FT_DIR : FT_FILE;
+        out->type = (saved.attr & FAT_ATTR_DIRECTORY) ? FT_DIR : FT_FILE;
         *cookie = (uint64_t)(idx + 1) * sizeof(fat_dir_entry_t);
         return 0;
     }

@@ -8,7 +8,7 @@
 #define FT_DIR  1
 
 #define MAX_FD   256
-#define MAX_NAME 32
+#define MAX_NAME 256
 
 //目录项类型
 #define DT_UNKNOWN 0
