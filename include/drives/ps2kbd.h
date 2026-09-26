@@ -28,6 +28,8 @@ char io_getkey();//从io口直接获取按键（阻塞）
 char io_getkey_noblock();//从io口直接获取按键（非阻塞）
 char GetKey();//获取按键(阻塞)
 char GetKey_NoBlock();//获取按键(非阻塞)
+int  Kbd_Available(void);//就绪队列中待读字节数
+_Bool Kbd_HasLine(void);//队列中是否已有一整行
 void Keyboard_IRQ();//键盘中断处理函数
 
 #endif

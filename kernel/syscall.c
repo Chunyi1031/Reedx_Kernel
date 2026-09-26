@@ -1384,19 +1384,78 @@ static long sys_fcntl(long fd, long cmd, long arg, long a4, long a5, long a6){
 
 /*
  * int poll(struct pollfd *fds, nfds_t nfds, int timeout)
- * 无轮询设备, 所有fd视为无事件(清空revents), 返回0
  */
+#define KPOLL_IN   0x001
+#define KPOLL_OUT  0x004
+#define KPOLL_NVAL 0x020
+#define KPOLL_MAX  64
+
+typedef struct { int fd; short events; short revents; } kpollfd_t;
+
 static long sys_poll(long fds, long nfds, long timeout, long a4, long a5, long a6){
-	(void)timeout; (void)a4; (void)a5; (void)a6;
+	(void)a4; (void)a5; (void)a6;
 	if(nfds < 0)return -EINVAL;
-	if(fds && nfds > 0){
-		//pollfd结构: {int fd; short events; short revents} = 8字节, revents在偏移6
-		for(long i = 0; i < nfds && i < 256; i++){
-			uint16_t revents = 0;
-			if(copy_to_user((void*)((uintptr_t)fds + (uint64_t)i * 8 + 6), &revents, 2))return -EFAULT;
-		}
+	if(nfds == 0){//没有要查的fd: 纯粹当延时用
+		if(timeout > 0)msleep((uint64_t)timeout);
+		return 0;
 	}
-	return 0;
+	if(!fds)return -EFAULT;
+	if(nfds > KPOLL_MAX)nfds = KPOLL_MAX;
+	kpollfd_t pfd[KPOLL_MAX];
+	unsigned long bytes = (unsigned long)nfds * sizeof(kpollfd_t);
+	if(copy_from_user(pfd, (void*)fds, bytes))return -EFAULT;
+	uint64_t waited = 0;
+	for(;;){
+		int ready = 0;
+		for(long i = 0; i < nfds; i++){
+			short ev = pfd[i].events;
+			short rv = 0;
+			long fd = pfd[i].fd;
+			if(fd >= 0){
+				_Bool con_in = false, con_out = false;
+				if(fd < 3 && (!current_task || !current_task->files[fd].used)){
+					con_in = con_out = true;//标准输入输出默认就是控制台
+				}else if(fd_is_console(fd)){
+					int acc = current_task->files[fd].flags & O_ACCMODE;
+					con_in  = (acc != O_WRONLY);
+					con_out = (acc != O_RDONLY);
+				}
+				if(con_in || con_out){
+					if(con_in && TTY_ReadReady())rv |= KPOLL_IN;
+					if(con_out)rv |= KPOLL_OUT;
+				}else if(current_task && fd < MAX_FD && current_task->files[fd].used){
+					int acc = current_task->files[fd].flags & O_ACCMODE;
+					if(current_task->files[fd].pipe){
+						int pr = pipeReady((struct pipe*)current_task->files[fd].pipe);
+						if((pr & 1) && acc != O_WRONLY)rv |= KPOLL_IN;
+						if((pr & 2) && acc != O_RDONLY)rv |= KPOLL_OUT;
+					}else{//普通文件/设备: 恒就绪
+						if(acc != O_WRONLY)rv |= KPOLL_IN;
+						if(acc != O_RDONLY)rv |= KPOLL_OUT;
+					}
+				}else{
+					rv |= KPOLL_NVAL;//无效fd
+				}
+			}
+			rv &= (short)(ev | KPOLL_NVAL);//只上报调用者关心的事件(外加NVAL)
+			pfd[i].revents = rv;
+			if(rv)ready++;
+		}
+		if(ready > 0){
+			if(copy_to_user((void*)fds, pfd, bytes))return -EFAULT;
+			return ready;
+		}
+		if(timeout == 0)return 0;
+		if(SignalPending())return -EINTR;//有待投递信号: 交给用户态重试
+		if(timeout > 0 && waited >= (uint64_t)timeout)return 0;
+		uint64_t step = 2;
+		if(timeout > 0){
+			uint64_t left = (uint64_t)timeout - waited;
+			if(left < step)step = left;
+		}
+		msleep(step);
+		waited += step;
+	}
 }
 
 /*

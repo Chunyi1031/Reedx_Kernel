@@ -16,6 +16,11 @@ extern uint32_t*  SYSTEM_FrameBuffer;
 #define COLOR_GREY 0xFF222222
 #define COLOR_CYAN 0xFF00FFEE
 #define COLOR_SKYBLUE 0xFF17B7FF
+#define COLOR_MAGENTA 0xFFFF00FF //洋红
+#define COLOR_PURPLE  0xFFA020F0 //紫
+#define COLOR_ORANGE  0xFFFFA500 //橙
+#define COLOR_LGREY   0xFFC0C0C0 //亮灰
+#define COLOR_DGREY   0xFF808080 //暗灰
 
 uint32_t rgb(uint8_t red, uint8_t green, uint8_t blue);//rgb转16进制
 void DrawPiexl(uint16_t x,uint16_t y,uint32_t color);//画点

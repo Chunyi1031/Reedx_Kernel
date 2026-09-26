@@ -296,3 +296,30 @@ char GetKey_NoBlock(){
 	spin_unlock_irqrestore(&g_kbd_lock, flags);
 	return ch;
 }
+
+//就绪队列中待读字节数
+int Kbd_Available(void){
+	int n;
+	uint64_t flags;
+	spin_lock_irqsave(&g_kbd_lock, flags);
+	n = key_count;
+	spin_unlock_irqrestore(&g_kbd_lock, flags);
+	return n;
+}
+
+//队列中是否已经攒够一整行
+_Bool Kbd_HasLine(void){
+	_Bool found = false;
+	uint64_t flags;
+	spin_lock_irqsave(&g_kbd_lock, flags);
+	int idx = buffer_tail;
+	for(int i = 0; i < key_count; i++){
+		if(KeyboardRingBuffer[idx] == '\n' || KeyboardRingBuffer[idx] == '\r'){
+			found = true;
+			break;
+		}
+		idx = (idx + 1) % KEYBOARD_BUFFER_SIZE;
+	}
+	spin_unlock_irqrestore(&g_kbd_lock, flags);
+	return found;
+}

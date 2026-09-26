@@ -107,6 +107,18 @@ long pipeRead(struct pipe *p, void *buf, uint64_t len){
     return (long)n;
 }
 
+//查询管道就绪状态
+int pipeReady(struct pipe *p){
+    if(!p)return 0;
+    uint64_t flags;
+    spin_lock_irqsave(&p->lock, flags);
+    int r = 0;
+    if(p->count > 0 || p->writers == 0)r |= 1;
+    if(p->count < PIPE_BUF_SIZE && p->readers > 0)r |= 2;
+    spin_unlock_irqrestore(&p->lock, flags);
+    return r;
+}
+
 long pipeWrite(struct pipe *p, const void *buf, uint64_t len){
     if(!p || !buf || !len)return 0;
     uint64_t flags;
