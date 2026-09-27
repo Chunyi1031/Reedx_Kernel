@@ -1,3 +1,10 @@
+/**
+ * include/fs.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ * Reedx文件系统接口
+ */
 #ifndef _FS_H_
 #define _FS_H_
 

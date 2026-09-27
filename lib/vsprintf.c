@@ -1,8 +1,6 @@
 /*
  * lib/vsprintf.c — 格式化字符串输出
  *
- * 参考：Linux 7.1.3 lib/vsprintf.c
- *
  * 支持的格式化说明符：
  *   %s    字符串
  *   %c    字符

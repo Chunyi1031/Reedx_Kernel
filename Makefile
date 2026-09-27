@@ -1,9 +1,11 @@
 # 由Hermes Agent + DeepSeek-V4-Pro生成
 #
-# Kernel Makefile
+# Reedx 内核构建脚本
+#
+# Copyright (C) 2026 Liu Chunyi
 #
 # 原理：
-#   内核构建系统遵循 Linux 7.1.3 kbuild 的设计模式：
+#   内核构建系统遵循 kbuild 的设计模式：
 #
 #   1. 顶层 Makefile 定义工具链、编译/链接标志
 #   2. 每个源码目录的 Makefile 列出 obj-y（要编译的目标文件）
@@ -19,14 +21,13 @@
 #                                     kernel.elf      kernel.elf
 #                                   （ld -T 链接脚本）  （最终 ELF）
 #
-#   命名约定（与 Linux 7.1.3 一致）：
+#   命名约定：
 #     KBUILD_CFLAGS   — 内核 C 编译标志
 #     KBUILD_LDFLAGS  — 内核链接标志
 #     obj-y           — 子目录中列出要编译的目标文件
 #     built-in.o      — 每目录的局部链接产物
 #     srctree         — 源码树根目录
 #
-# 参考：Linux 7.1.3 顶层 Makefile + scripts/Makefile.build
 
 # ========== 版本信息 ==========
 VERSION = 0
@@ -52,12 +53,12 @@ script-dir := scripts
 # ========== 包含路径与编译标志 ==========
 # -I 标志确保 #include <klib.h> 能从 $(srctree) 根目录和 $(srctree)/include 找到
 KBUILD_CFLAGS := -I$(srctree) -I$(srctree)/include
-# 内核基础标志（参考 Linux 7.1.3 arch/x86/Makefile）
+# 内核基础标志
 KBUILD_CFLAGS += -ffreestanding -fno-stack-protector -mno-red-zone
 KBUILD_CFLAGS += -fno-builtin -nostdlib -m64 -g
 KBUILD_CFLAGS += -Wall -Wno-unused-function -Wno-unused-variable -O0
 
-# 链接标志（参考 Linux 7.1.3 arch/x86/kernel/vmlinux.lds）
+# 链接标志
 KBUILD_LDFLAGS := -nostdlib -static -T $(srctree)/kernel64.ld
 KBUILD_LDFLAGS += -e KernelStart --gc-sections --build-id=none
 
@@ -108,12 +109,8 @@ builtin-all := $(addprefix $(build-dir)/, \
                 $(addsuffix /built-in.o, $(core-dirs)))
 
 # ========== 默认目标 ==========
-.PHONY: all app
-all: kernel.elf app
-
-# 用户测试程序(execve加载的裸ELF)
-app:
-	@$(MAKE) -C app
+.PHONY: all
+all: kernel.elf
 
 # ========== 构建输出宏 ==========
 # 每个构建步骤定义一对变量：

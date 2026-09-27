@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0
 #
-# Kbuild.include — Linux 风格构建辅助宏
+# Kbuild.include — 构建辅助宏
 #
 # 原理：
-#   Linux 内核构建系统使用 quiet_cmd_* / cmd_* 对和 $(call cmd,<name>)
+#   构建系统使用 quiet_cmd_* / cmd_* 对和 $(call cmd,<name>)
 #   宏来实现"短输出 + 完整命令"的双模输出。
 #
 #   每个构建步骤定义两个变量：
@@ -13,8 +13,6 @@
 #   调用 $(call cmd,<name>) 时：
 #     V=0（默认）：只打印 quiet_cmd_<name> 定义的内容
 #     V=1       ：回显完整命令
-#
-# 参考：Linux 7.1.3 scripts/Kbuild.include
 
 # 转义单引号（用于 echo 语句）
 squote  := '

@@ -1,9 +1,9 @@
 /*
- * 由Hermes Agent + DeepSeek-V4-Pro参考Linux 7.1.3生成
+ * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
- * 参考：Linux 7.1.3 arch/x86/lib/delay.c (delay_loop / delay_tsc)
- *              arch/x86/include/asm/delay.h
- *              Intel SDM Vol.2B RDTSC
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ * 参考：Intel SDM Vol.2B RDTSC
  */
 
 #ifndef _DELAY_H_

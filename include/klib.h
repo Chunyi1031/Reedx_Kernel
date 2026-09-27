@@ -1,3 +1,10 @@
+/**
+ * include/klib.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
+
 #ifndef _KERNEL_LIB_H_
 #define _KERNEL_LIB_H_
 

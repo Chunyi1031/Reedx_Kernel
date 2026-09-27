@@ -1,4 +1,10 @@
-//PMM-物理内存管理器
+/**
+ * include/mm/pmm.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ * PMM-物理内存管理器
+ */
 #ifndef _MEMORY_PHYICAL_MM_H_
 #define _MEMORY_PHYICAL_MM_H_
 

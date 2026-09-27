@@ -1,3 +1,8 @@
+/**
+ * include/drives/disk.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ */
 #ifndef _DISK_H_
 #define _DISK_H_
 

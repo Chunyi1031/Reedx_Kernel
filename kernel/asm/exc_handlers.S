@@ -1,9 +1,7 @@
 /*
- * 由Hermes Agent + DeepSeek-V4-Pro参考Linux7.1.3生成
+ * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
  * kernel/asm/exc_handlers.s-异常处理程序入口（宏批量生成）
- *
- * 参考：Linux 7.1.3 arch/x86/kernel/head_64.S (early_idt_handler_array)
  */
 
 #define NUM_EXCEPTION_VECTORS   32

@@ -1,5 +1,5 @@
 /*
- * 由Hermes Agent + DeepSeek-V4-Pro参考Linux 7.1.3生成
+ * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
  * drives/timer.c — TSC 校准 (CPUID 0x16 → 0x15+晶振候选 → PIT)
  *
@@ -7,8 +7,7 @@
  *       CPUID 0x15 需要晶振频率，多数CPU ECX=0，此时用常见值试探。
  *       PIT 仅最后兜底，因I/O延迟使其在实体机上偏差可达6x。
  *
- * 参考：Linux 7.1.3 arch/x86/kernel/tsc.c (native_calibrate_tsc)
- *              Intel SDM Vol.3 §17.17
+ * 参考：Intel SDM Vol.3 §17.17
  */
 
 #include <drives/timer.h>

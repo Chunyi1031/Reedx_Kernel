@@ -1,3 +1,10 @@
+/**
+ * include/mm/pgtables.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ * 页表管理
+ */
 #ifndef _MM_PAGE_TABLES_H_
 #define _MM_PAGE_TABLES_H_
 

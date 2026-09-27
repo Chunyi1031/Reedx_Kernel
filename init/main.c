@@ -1,3 +1,10 @@
+/**
+ * init/main.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ * Reedx内核入口点
+ */
 #include <klib.h>
 #include <desc.h>
 #include <idt.h>

@@ -1,10 +1,5 @@
 /*
- * 由Hermes Agent + DeepSeek-V4-Pro参考Linux 7.1.3生成
- *
- *
- * 参考：Linux 7.1.3 arch/x86/include/asm/apicdef.h (寄存器定义)
- *              arch/x86/include/asm/msr-index.h (MSR_IA32_APICBASE)
- *              arch/x86/include/asm/apic.h (apic_mem_read/write/eoi)
+ * 由Hermes Agent + DeepSeek-V4-Pro生成
  */
 
 #ifndef _INT_APIC_H_

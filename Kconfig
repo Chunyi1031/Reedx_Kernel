@@ -3,13 +3,11 @@
 # T001 Kernel Configuration
 #
 # 原理：
-#   Kconfig 是 Linux 内核的配置描述语言。每个 config 条目定义一个编译期
+#   Kconfig 是内核的配置描述语言。每个 config 条目定义一个编译期
 #   开关（生成 CONFIG_<NAME> 宏），通过 make menuconfig / make config
 #   等工具生成 include/config/auto.conf，再由 Makefile include 进来。
 #
 #   运行 `make config` 生成 auto.conf。
-#
-# 参考：Linux 7.1.3 Kconfig 语法
 
 mainmenu "T001 Kernel Configuration"
 

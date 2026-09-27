@@ -1,3 +1,10 @@
+/**
+ * include/mm/pmm.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ * VMM-虚拟内存管理器
+ */
 #ifndef _MM_VIRTUAL_MM_H_
 #define _MM_VIRTUAL_MM_H_
 

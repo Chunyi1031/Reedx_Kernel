@@ -2,11 +2,10 @@
  * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
  * include/rtc.h — CMOS RTC 实时时钟接口与时区定义
+ * 
+ * Copyright (C) 2026 Liu Chunyi
  *
- * 参考：Linux 7.1.3 include/linux/mc146818rtc.h (寄存器定义)
- *              drivers/rtc/rtc-mc146818-lib.c (mc146818_avoid_UIP)
- *              drivers/rtc/lib.c (rtc_tm_to_time64 / rtc_time64_to_tm)
- *              UEFI Specification v2.10 §8.3 (GetTime returns UTC)
+ * 参考：UEFI Specification v2.10 §8.3 (GetTime returns UTC)
  */
 
 #ifndef _INT_RTC_H_

@@ -1,10 +1,10 @@
 /*
  * include/acpi/acpi.h — x86_64 ACPI 表结构精简定义
  *
+ * Copyright (C) 2026 Liu Chunyi
+ * 
  * 仅保留内核必需的：RSDP/RSDT/XSDT/FADT/MADT/HPET/MCFG
  * 删除：ARM GIC, RAS, DMAR, SRAT, SLIT, HEST, BERT, IVRS, IORT 等
- *
- * 参考：Linux 7.1.3 include/acpi/actbl.h / actbl2.h / actypes.h
  */
 
 #ifndef _ACPI_H_

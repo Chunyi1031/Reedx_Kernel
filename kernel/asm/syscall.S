@@ -17,7 +17,7 @@
 syscall_entry:
     cli
     /* 保存参数4(r10)到全局变量,再用 r10 中转用户 RSP
-       r10 是 caller-saved,但内核必须原样保留它(Linux ABI:syscall只破坏rax/rcx/r11) */
+       r10 是 caller-saved,但内核必须原样保留它 */
     movq %r10, syscall_arg6(%rip)
     movq %r10, syscall_saved_r10(%rip)  /* 保存用户r10, 恢复时弹回 */
     movq %rsp, %r10

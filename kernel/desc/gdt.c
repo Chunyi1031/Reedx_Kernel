@@ -1,5 +1,5 @@
 /*
- * 由DeepSeek-V4-Pro参考Linux7.1.3生成
+ * 由DeepSeek-V4-Pro生成
  *
  * kernel/desc/gdt.c — GDT 初始化与加载
  *
@@ -16,8 +16,6 @@
  *   注意：
  *     在 64 位长模式下 CS/DS/ES/SS 的基址和限长被硬件忽略，
  *     但 FS/GS 的基址仍然有效（通过 MSR 或描述符），这里全部设为平坦模式。
- *
- * 参考：Linux 7.1.3 arch/x86/kernel/cpu/common.c 中的 GDT 初始化
  */
 #include <desc.h>
 #include <kstring.h>
@@ -30,7 +28,7 @@
  */
 #if defined(ARCH_X86_64) || defined(ARCH_AMD64)
 /*
- * x86_64 布局（与 Linux x86_64 一致）：
+ * x86_64 布局：
  *   [0]  NULL         — 硬件要求第一项必须为零
  *   [1]  KERNEL32_CS  — 内核 32 位代码段（兼容模式切换到 32 位）
  *   [2]  KERNEL_CS    — 内核 64 位代码段（当前运行环境）

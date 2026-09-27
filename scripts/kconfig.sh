@@ -9,8 +9,6 @@
 #
 #   当前实现：写入硬编码默认值（与 Kconfig 中 default 一致）。
 #   后续可扩展为完整 Kconfig 解析器。
-#
-# 参考：Linux 7.1.3 scripts/kconfig/
 
 SRCTREE="${1:-.}"
 KCONFIG="${SRCTREE}/Kconfig"

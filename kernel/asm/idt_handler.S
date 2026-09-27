@@ -1,10 +1,7 @@
 /*
- * 由Hermes Agent + DeepSeek-V4-Pro参考Linux7.1.3生成
+ * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
  * kernel/asm/idt_handler.s — 默认中断/异常处理程序汇编入口
- *
- * 参考：Linux 7.1.3 arch/x86/kernel/head_64.S (early_idt_handler_common)
- *              arch/x86/entry/entry_64.S (中断入口保存/恢复寄存器模式)
  */
 
 .section .text, "ax"

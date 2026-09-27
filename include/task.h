@@ -1,3 +1,10 @@
+/**
+ * include/task.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ * Reedx多任务管理
+ */
 #ifndef _TASK_H_
 #define _TASK_H_
 

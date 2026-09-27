@@ -1,7 +1,9 @@
 /*
- * 由Hermes Agent + DeepSeek-V4-Pro参考Linux7.1.3生成
+ * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
  * include/idt.h — x86_64 中断描述符表 (IDT) 定义与操作
+ * 
+ * Copyright (C) 2026 Liu Chunyi
  *
  *   初始化流程：
  *     1. 将 256 个门描述符全部填充为指向 default_int_handler_entry 的
@@ -10,9 +12,6 @@
  *     3. 此后 CPU 收到任何中断/异常都会进入 default_int_handler_entry
  *        汇编入口，该入口保存寄存器 → 调用 C 函数打印信息 →
  *        恢复寄存器 → iretq 返回
- *
- * 参考：Linux 7.1.3 arch/x86/include/asm/desc_defs.h (gate_struct)
- *              arch/x86/kernel/idt.c (idt_setup_from_table)
  */
 
 #ifndef _INT_IDT_H_
@@ -72,7 +71,7 @@ enum {
  *
  * 硬件定义（字节 4 bits[2:0]=IST, bits[7:3]=0；
  *          字节 5 bits[3:0]=type, bit4=0, bits[6:5]=DPL, bit7=P）
- * 此结构将两个字节合并为一个 u16 位域，与 Linux 7.1.3 desc_defs.h 一致。
+ * 此结构将两个字节合并为一个 u16 位域。
  */
 struct idt_bits {
 	u16 ist   : 3,   //中断栈表索引 (0=不使用 IST)

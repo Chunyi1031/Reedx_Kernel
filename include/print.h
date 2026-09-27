@@ -1,10 +1,9 @@
 /*
- * 由Hermes Agent + DeepSeek-V4-Pro参考Linux 7.1.3生成
+ * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
  * include/print.h — 内核日志接口
- *
- * 参考：Linux 7.1.3 include/linux/printk.h
- *              include/linux/kern_levels.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
  */
 
 #ifndef _PRINT_H_

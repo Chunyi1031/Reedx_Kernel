@@ -39,7 +39,7 @@ static int info_head = 0;//日志信息数组写入索引
 static int info_count = 0;//已记录日志条数
 static int console_read = 0;//print_to_console已读取条数（从最旧条目起算的偏移）
 
-//日志级别字符串（Linux kern_levels.h 风格）
+//日志级别字符串
 static const char *level_strings[] = {
 	[PRINTK_LVL_EMERG]     = "EMERG",
 	[1]                    = "ALERT",

@@ -685,7 +685,7 @@ static long sys_lseek(long fd, long off, long whence, long a4, long a5, long a6)
 	return r;
 }
 /*DeepSeek V4 Flash*/
-//填充Linux x86_64 struct stat
+//填充 stat 结构
 static void fill_stat(stat_t *st, fs_node_t *node){
 	memset(st, 0, sizeof(*st));
 	st->st_dev = 1;
@@ -981,7 +981,7 @@ static long sys_readlink(long path, long buf, long bufsiz, long a4, long a5, lon
 
 /*
  * char *getcwd(char *buf, size_t size)
- * 成功返回字符串长度(含结尾NUL, Linux内核ABI语义)
+ * 成功返回字符串长度(含结尾NUL)
  */
 static long sys_getcwd(long buf, long size, long a3, long a4, long a5, long a6){
 	(void)a3; (void)a4; (void)a5; (void)a6;
@@ -990,7 +990,7 @@ static long sys_getcwd(long buf, long size, long a3, long a4, long a5, long a6){
 	int len = strlen(current_task->cwd);
 	if((uint64_t)len + 1 > (uint64_t)size)return -ERANGE;
 	if(copy_to_user((void*)buf, current_task->cwd, (uint64_t)len + 1))return -EFAULT;
-	return (long)len + 1;//Linux: 返回写入长度(含NUL)
+	return (long)len + 1;//返回写入长度(含NUL)
 }
 
 /*
@@ -1931,7 +1931,7 @@ static long sys_arch_prctl(long code, long addr, long a3, long a4, long a5, long
 		return 0;
 	}
 	if(code == ARCH_GET_FS){
-		//Linux语义: 把FS基址写到用户指针*addr, 成功返回0
+		//把FS基址写到用户指针*addr, 成功返回0
 		if(!addr)return -EFAULT;
 		uint64_t fs = current_task->fs_base;
 		if(copy_to_user((void*)addr, &fs, sizeof(fs)))return -EFAULT;

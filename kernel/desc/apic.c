@@ -1,11 +1,9 @@
 /*
- * 由Hermes Agent + DeepSeek-V4-Pro参考Linux 7.1.3生成
+ * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
  * kernel/desc/apic.c — Local APIC 初始化、定时器校准、MADT解析、I/O APIC配置
  *
- * 参考：Linux 7.1.3 arch/x86/kernel/apic/apic.c
- *              arch/x86/include/asm/apic.h
- *              ACPI Specification 6.5 §5.2.12 (MADT)
+ * 参考：ACPI Specification 6.5 §5.2.12 (MADT)
  *              Intel SDM Vol.3 §10.12 (x2APIC)
  */
 

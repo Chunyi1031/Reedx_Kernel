@@ -1,7 +1,9 @@
 /*
- * 由DeepSeek-V4-Pro参考Linux7.1.3生成
+ * 由DeepSeek-V4-Pro生成
  *
  * include/desc.h — x86 段描述符与 GDT 操作
+ * 
+ * Copyright (C) 2026 Liu Chunyi
  *
  * 原理：
  *   GDT（Global Descriptor Table，全局描述符表）是 x86 保护模式的基石。
@@ -27,8 +29,6 @@
  *     本文件通过 types.h 中的 ARCH_X86_64 / ARCH_X86_32 宏，
  *     使用预处理条件编译选择对应的 GDT 布局和汇编指令序列。
  *     desc_ptr.address 使用 uintptr_t 自动适配指针宽度。
- *
- * 参考：Linux 7.1.3 arch/x86/include/asm/desc_defs.h / desc.h / segment.h
  */
 
 #ifndef _ASM_DESC_H_
@@ -105,7 +105,7 @@ extern struct tss_struct cpu_tss;//调度器在切换用户任务时更新 rsp0
 /* ========== GDT 入口索引 ========== */
 #if defined(ARCH_X86_64) || defined(ARCH_AMD64)
 /*
- * x86_64 布局（与 Linux x86_64 一致）：
+ * x86_64 布局：
  * 保留 32 位兼容代码段，支持切换回 32 位兼容模式运行遗留代码。
  */
 #define GDT_ENTRY_NULL          0   /* 必须为空的第 0 项 */

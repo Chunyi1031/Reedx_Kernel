@@ -1,10 +1,7 @@
 /*
- * 由Hermes Agent + DeepSeek-V4-Pro参考Linux7.1.3生成
+ * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
  * kernel/desc/exceptions.c — 异常分发与注册
- *
- * 参考：Linux 7.1.3 arch/x86/kernel/traps.c (do_error_trap / def_err)
- *              arch/x86/kernel/idt.c (idt_setup_early_handler)
  */
 
 #include <idt.h>

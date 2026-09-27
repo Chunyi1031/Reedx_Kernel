@@ -1,3 +1,8 @@
+/**
+ * include/spinlock.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ */
 #ifndef _SPINLOCK_H_
 #define _SPINLOCK_H_
 

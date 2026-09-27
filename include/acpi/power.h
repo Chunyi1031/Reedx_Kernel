@@ -1,3 +1,10 @@
+/**
+ * include/acpi/power.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ * Reedx电源管理
+ */
 #ifndef _POWER_H_
 #define _POWER_H_
 

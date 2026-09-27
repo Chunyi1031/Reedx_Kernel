@@ -1,10 +1,9 @@
 /*
- * 由Hermes Agent + DeepSeek-V4-Pro参考Linux 7.1.3生成
+ * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
+ * Copyright (C) 2026 Liu Chunyi
+ * 
  * include/irq.h — 硬件中断向量定义与 APIC 初始化接口
- *
- * 参考：Linux 7.1.3 arch/x86/include/asm/irq_vectors.h
- *              arch/x86/include/asm/apic.h
  */
 
 #ifndef _INT_IRQ_H_

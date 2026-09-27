@@ -1,3 +1,10 @@
+/**
+ * include/syscalls.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ * Reedx系统调用接口
+ */
 #ifndef _SYSCALLS_H_
 #define _SYSCALLS_H_
 
@@ -255,7 +262,6 @@ typedef struct timeval {
 #define S_IRWXG  00070
 #define S_IRWXO  00007
 
-//Linux x86_64 struct stat
 typedef struct stat {
     uint64_t st_dev;
     uint64_t st_ino;

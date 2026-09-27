@@ -1,11 +1,7 @@
 /*
- * 由Hermes Agent + DeepSeek-V4-Pro参考Linux7.1.3生成
+ * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
  * kernel/desc/idt.c — IDT 初始化与加载
- *
- * 参考：Linux 7.1.3 arch/x86/kernel/idt.c (idt_setup_from_table /
- *       idt_setup_early_handler)
- *              arch/x86/include/asm/desc.h (pack_gate / native_write_idt_entry)
  */
 
 #include <idt.h>

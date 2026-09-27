@@ -1,10 +1,7 @@
 /*
- * 由Hermes Agent + DeepSeek-V4-Pro参考Linux 7.1.3生成
+ * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
- * 参考：Linux 7.1.3 arch/x86/kernel/rtc.c (rtc_cmos_read)
- *              drivers/rtc/rtc-mc146818-lib.c (mc146818_avoid_UIP)
- *              drivers/rtc/lib.c (rtc_tm_to_time64 / rtc_time64_to_tm)
- *              Tomohiko Sakamoto (day-of-week algorithm)
+ * 参考：Tomohiko Sakamoto (day-of-week algorithm)
  *              UEFI Specification v2.10 §8.3 (GetTime), §4.6 (Table Signatures)
  */
 

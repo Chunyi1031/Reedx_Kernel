@@ -1,3 +1,10 @@
+/**
+ * include/drives/tty.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ * Reedx TTY接口
+ */
 #ifndef _TTY_H_
 #define _TTY_H_
 
@@ -41,7 +48,7 @@ typedef struct {
 #define TTY_ECHOKE  0x0800
 #define TTY_IEXTEN  0x8000
 
-//termios相关请求号(与Linux x86_64一致)
+//termios相关请求号
 #define TTY_TCGETS     0x5401UL
 #define TTY_TCSETS     0x5402UL
 #define TTY_TCSETSW    0x5403UL

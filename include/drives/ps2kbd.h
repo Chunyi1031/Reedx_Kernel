@@ -1,3 +1,10 @@
+/**
+ * include/drives/ps2kbd.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ * Reedx PS/2键盘驱动
+ */
 #ifndef _PS2_KEYBOARD_H_
 #define _PS2_KEYBOARD_H_
 

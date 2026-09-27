@@ -174,7 +174,7 @@ void SignalDeliverUser(long ret){
 		uint64_t h = SIG_DFL;
 		if(sig != SIGKILL && sig != SIGSTOP && a)h = a->handler;
 		if(h == SIG_DFL){
-			//默认动作: 终止(记录信号, wait状态按Linux语义编码)
+			//默认动作: 终止(记录信号, wait状态编码)
 			t->sig_exit = sig;
 			UserTaskExit(128 + sig);
 		}
