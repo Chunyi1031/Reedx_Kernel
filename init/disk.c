@@ -2,12 +2,14 @@
 #include <print.h>
 #include <drives/disk.h>
 #include <drives/ahci.h>
+#include <drives/nvme.h>
 #include <fs.h>
 
 _Bool InitDiskAndFs(){
     //初始化磁盘驱动
     AtaRegisterDriver();//注册ATA驱动
     AhciRegisterDriver();//注册AHCI驱动
+    NvmeRegisterDriver();//注册NVMe驱动
     //解析磁盘路径
     disk_info_t disk = {0};
     device_path_info_t Device;
@@ -31,6 +33,11 @@ _Bool InitDiskAndFs(){
                 disk.pci_bus, disk.pci_dev, disk.pci_func,
                 disk.cmd_base, disk.ctrl_base,
                 disk.ata_channel, disk.ata_slave,
+                disk.partition_start_lba, disk.partition_size_lba);
+        }else if(disk.ctrl_type == DISK_CTRL_NVME){
+            printk(PRINTK_INFO"NVMe controller %02x:%02x.%x bar=%llx part_start=%llu part_size=%llu",
+                disk.pci_bus, disk.pci_dev, disk.pci_func,
+                disk.abar,
                 disk.partition_start_lba, disk.partition_size_lba);
         }
         //初始化磁盘设备

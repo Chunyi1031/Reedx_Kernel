@@ -7,8 +7,9 @@
 
 //磁盘控制器类型
 #define DISK_CTRL_NONE   0
-#define DISK_CTRL_ATA    1   //ATA兼容(PIO,通道0/1)
+#define DISK_CTRL_ATA    1   //ATA兼容(IDE)
 #define DISK_CTRL_AHCI   2   //SATA AHCI
+#define DISK_CTRL_NVME   3   //NVMe
 
 //磁盘操作集合
 struct disk_info;
@@ -19,7 +20,7 @@ typedef struct disk_ops {
     int (*write)(struct disk_info *disk, uint64_t lba, uint32_t count, const void *buf);//写扇区
 }disk_ops_t;
 
-#define DISK_CTRL_MAX 3//支持的最大控制器类型数
+#define DISK_CTRL_MAX 4    //支持的最大控制器类型数
 
 //磁盘描述
 typedef struct disk_info {

@@ -75,9 +75,23 @@ static void scan_cb(pci_device_t *d, void *arg){
         ctx->disk->pci_dev = d->dev;
         ctx->disk->pci_func = d->func;
         ctx->disk->present = 1;
+/*DeepSeek V4 Pro-END*/
+    }else if(d->subclass == PCI_SUBCLASS_NVME){
+        //获取BAR寄存器
+        uint32_t bar0 = PciRead32(d->bus, d->dev, d->func, PCI_REG_BAR0);
+        uint32_t bar1 = PciRead32(d->bus, d->dev, d->func, PCI_REG_BAR1);
+        uint64_t bar;
+        if((bar0 & 0x6) == 0x4)bar = ((uint64_t)(bar0 & 0xFFFFFFF0ULL)) | ((uint64_t)bar1 << 32);
+        else bar = (uint64_t)(bar0 & 0xFFFFFFF0ULL);
+        //保存信息
+        ctx->disk->ctrl_type = DISK_CTRL_NVME;
+        ctx->disk->abar = bar;
+        ctx->disk->pci_bus = d->bus;
+        ctx->disk->pci_dev = d->dev;
+        ctx->disk->pci_func = d->func;
+        ctx->disk->present = 1;
     }
 }
-/*DeepSeek V4 Pro-END*/
 
 int DiskDetect(device_path_info_t *dpi, disk_info_t *disk){
     if(!dpi || !disk) return -1;
@@ -92,6 +106,7 @@ int DiskDetect(device_path_info_t *dpi, disk_info_t *disk){
     //按设备路径类型限定控制器子类
     if(dpi->found_sata)ctx.want_subclass = PCI_SUBCLASS_SATA_AHCI;
     else if(dpi->found_ata)ctx.want_subclass = PCI_SUBCLASS_ATA;
+    else if(dpi->found_nvme)ctx.want_subclass = PCI_SUBCLASS_NVME;
     else ctx.want_subclass = 0;
     //扫描PCI总线，寻找设备
     PciScanAll(scan_cb, &ctx);

@@ -31,6 +31,8 @@ void PciWrite8(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg, uint8_t val)
 #define PCI_CLASS_MASS_STORAGE   0x01
 #define PCI_SUBCLASS_ATA         0x01
 #define PCI_SUBCLASS_SATA_AHCI   0x06
+#define PCI_SUBCLASS_NVME        0x08
+#define PCI_PROGIF_NVME          0x02
 
 //设备描述
 typedef struct pci_device {

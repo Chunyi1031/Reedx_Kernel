@@ -247,8 +247,8 @@ update-disk:
 .PHONY: run
 run: system
 # 	qemu-system-x86_64 -m 1G -bios ./OVMF.fd -drive file=$(SYSTEM_DISK),if=ide,format=raw -serial stdio -enable-kvm
-	qemu-system-x86_64 -m 1G -bios ./OVMF.fd -drive id=my_disk,file=$(SYSTEM_DISK),if=none,format=raw -device ahci,id=ahci -device ide-hd,drive=my_disk,bus=ahci.0 -serial stdio -enable-kvm
-# 	qemu-system-x86_64 -m 1G -bios ./OVMF.fd -drive id=my_disk,file=$(SYSTEM_DISK),if=none,format=raw -device nvme,serial=1234,drive=my_disk -serial stdio -enable-kvm
+# 	qemu-system-x86_64 -m 1G -bios ./OVMF.fd -drive id=my_disk,file=$(SYSTEM_DISK),if=none,format=raw -device ahci,id=ahci -device ide-hd,drive=my_disk,bus=ahci.0 -serial stdio -enable-kvm
+	qemu-system-x86_64 -m 1G -bios ./OVMF.fd -drive id=my_disk,file=$(SYSTEM_DISK),if=none,format=raw -device nvme,serial=1234,drive=my_disk -serial stdio -enable-kvm
 # 	qemu-system-x86_64 -m 1G -bios ./OVMF.fd -drive id=my_disk,file=$(SYSTEM_DISK),if=none,format=raw -device virtio-scsi,id=scsi -device scsi-hd,drive=my_disk,bus=scsi.0 -serial stdio -enable-kvm
 
 .PHONY: run-debug
