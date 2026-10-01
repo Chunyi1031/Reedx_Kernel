@@ -27,6 +27,8 @@ void DrawPiexl(uint16_t x,uint16_t y,uint32_t color);//画点
 void fillRect(uint16_t x,uint16_t y,uint16_t w,uint16_t h,uint32_t color);//填充矩形
 void DrawChar(char c,int x,int y,uint32_t color);//显示字符
 void DrawString(char *s,int x,int y,uint32_t color);//显示字符串
+uint32_t FbReadPixel(int x,int y);//读一个像素
+void FbScrollUp(int y0,int y1,int dy,uint32_t bg);//[y0,y1+dy)整体上移dy行, 最后的[y1,y1+dy)填bg
 int ScreenFbMappedAt(uintptr_t fb);//检查地址在当前CR3页表中是否已映射
 int ScreenFbMapped(void);//检查全局帧缓冲SYSTEM_FrameBuffer是否已映射
 

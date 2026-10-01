@@ -116,11 +116,7 @@ static void tty_fill_cells(uint16_t c0,uint16_t r0,uint16_t c1,uint16_t r1,uint3
 //读一个像素
 static uint32_t tty_read_px(uint16_t x,uint16_t y){
     if(!ScreenFbMapped())return 0;
-    if(x >= SYSTEM_ScreenInfo.Width || y >= SYSTEM_ScreenInfo.Height)return 0;
-    uint32_t pixels = SYSTEM_ScreenInfo.FrameBufferSize / 4;
-    int idx = (int)y * SYSTEM_ScreenInfo.Width + x;
-    if(idx < 0 || idx >= (int)pixels)return 0;
-    return SYSTEM_FrameBuffer[idx];
+    return FbReadPixel((int)x,(int)y);
 }
 
 #define TTY_CELL_W 10
@@ -159,14 +155,9 @@ static void tty_scroll_region(int top,int bot,uint32_t bg){
     if(top < 0)top = 0;
     if(bot > (int)tty_rows() - 1)bot = (int)tty_rows() - 1;
     if(top >= bot)return;
-    int w = SYSTEM_ScreenInfo.Width;
-    uint8_t *fb = (uint8_t*)SYSTEM_FrameBuffer;
     int y0 = top * TTY_CELL_H;
     int y1 = bot * TTY_CELL_H;
-    for(int y = y0; y < y1; y++){
-        memcpy(fb + (size_t)y * w * 4,fb + (size_t)(y + TTY_CELL_H) * w * 4,(size_t)w * 4);
-    }
-    fillRect(0,(uint16_t)y1,(uint16_t)w,TTY_CELL_H,bg);
+    FbScrollUp(y0,y1,TTY_CELL_H,bg);
 }
 
 //按当前滚动区域滚一行

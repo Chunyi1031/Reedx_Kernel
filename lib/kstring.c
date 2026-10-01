@@ -1,5 +1,7 @@
 #include <kstring.h>
 
+#pragma GCC optimize("Os")
+
 char *strcpy(char *dest, const char *src)
 {
 	char *tmp = dest;
