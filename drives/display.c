@@ -1,8 +1,13 @@
 #include <drives/display.h>
-#include <font.h>
+#include <font_10x18.h>
 #include <mm/pgtables.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
+
+//字形尺寸
+#define FONT_GLYPH_W     FONT_10X18_W
+#define FONT_GLYPH_H     FONT_10X18_H
+#define FONT_GLYPH_BYTES FONT_10X18_STRIDE
 
 ScreenInfo SYSTEM_ScreenInfo;
 uint32_t*  SYSTEM_FrameBuffer = NULL;
@@ -104,15 +109,6 @@ static void fb_flush_rect(int x0,int y0,int x1,int y1){
     }
 }
 
-//字体列表
-static const char fontlist[94] = {
-    'A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z',
-    'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z',
-    '0','1','2','3','4','5','6','7','8','9',
-    '`','~','.',',','/','\\',';','\'',':','"','<','>','(',')','[',']','{','}','#','$','%','&','*',' ',
-    '!','|','@','-','+','=','_','?'
-};
-
 __attribute__((optimize("-O0")))
 //rgb转16进制
 uint32_t rgb(uint8_t red, uint8_t green, uint8_t blue){
@@ -149,32 +145,25 @@ void fillRect(uint16_t x,uint16_t y,uint16_t w,uint16_t h,uint32_t color){
 }
 
 //字符（串）处理
-//显示字符 —— 使用内置字体（include/font.h），不再依赖引导程序加载
+//显示字符
 void DrawChar(char c,int x,int y,uint32_t color){
-    int char_index = 84;
-    for(int i = 0;i < 94;i ++){
-        if(fontlist[i] == c){
-            char_index = i;
-            break;
-        }
-    }
-    int data_offset = char_index * 32;
+    int data_offset = (int)(uint8_t)c * FONT_GLYPH_BYTES;//按字符码索引
     if(!g_fb_ok || g_fb != SYSTEM_FrameBuffer)fb_refresh();
     if(!g_fb_ok)return;
     uint32_t *t = g_back ? g_back : g_fb;//有影子就画在内存里
-    for(int row = 0; row < 16; row++){
+    for(int row = 0; row < FONT_GLYPH_H; row++){
         int yy = y + row;
         if(yy < 0 || yy >= g_fb_h)continue;
-        uint16_t row_data = (uint16_t)((font[data_offset + row*2] << 8) | font[data_offset + row*2 + 1]);
+        uint16_t row_data = (uint16_t)((fontdata_10x18[data_offset + row*2] << 8) | fontdata_10x18[data_offset + row*2 + 1]);
         if(!row_data)continue;//空行直接跳过
         uint32_t *line = t + (uint64_t)yy * g_fb_w;
-        for(int col = 0; col < 10; col++){
+        for(int col = 0; col < FONT_GLYPH_W; col++){
             int xx = x + col;
             if(xx < 0 || xx >= g_fb_w)continue;
             if(row_data & (0x8000 >> col))line[xx] = color;
         }
     }
-    fb_flush_rect(x,y,x + 10,y + 16);//整格写回显存
+    fb_flush_rect(x,y,x + FONT_GLYPH_W,y + FONT_GLYPH_H);//整格写回显存
 }
 
 //把[y0,y1+dy)整体上移dy行, 其中最后的[y1,y1+dy)(也就是最下面dy行)填bg色
@@ -208,9 +197,9 @@ void DrawString(char *s,int x, int y, uint32_t color) {
     int startX = x;//记录起始X坐标
     int currentX = x;
     int currentY = y;
-    int charWidth = 10;//宽
-    int charHeight = 16;//高
-    int lineSpacing = 2;//行间距
+    int charWidth = FONT_GLYPH_W;//宽
+    int charHeight = FONT_GLYPH_H;//高
+    int lineSpacing = 18 - FONT_GLYPH_H;//行间距
     size_t size = strlen(s);
     for (int i = 0; i < size; i++) {
         char c = s[i];

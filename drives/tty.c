@@ -383,7 +383,7 @@ static _Bool ansi_feed(char c){
 
 /*DeepSeek-V4.1-Flash*/
 #define TTY_CURSOR_W 1
-#define TTY_CURSOR_H 16//与字形同高
+#define TTY_CURSOR_H 18//与字形同高
 static uint16_t g_cur_x = 0;
 static uint16_t g_cur_y = 0;
 static _Bool    g_cur_on = false;
