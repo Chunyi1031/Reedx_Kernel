@@ -8,3 +8,4 @@ kernel.elf
 OVMF.fd
 qemu.log
 app/
+scripts/mkfont.py

@@ -1,13 +1,19 @@
 #include <drives/display.h>
-#include <font_10x18.h>
+#include <font_8x16.h>
 #include <mm/pgtables.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
 
 //字形尺寸
-#define FONT_GLYPH_W     FONT_10X18_W
-#define FONT_GLYPH_H     FONT_10X18_H
-#define FONT_GLYPH_BYTES FONT_10X18_STRIDE
+#define FONT_DATA        fontdata_8x16
+#define FONT_GLYPH_W     FONT_8X16_W
+#define FONT_GLYPH_H     FONT_8X16_H
+#define FONT_GLYPH_BYTES FONT_8X16_STRIDE
+#define FONT_GLYPH_BPR   FONT_8X16_BPR
+
+#if (FONT_GLYPH_W != CHAR_CELL_W) || (FONT_GLYPH_H != CHAR_CELL_H)
+#error "字体尺寸与 CHAR_CELL_W/H 不一致: 请同时修改 include/drives/display.h"
+#endif
 
 ScreenInfo SYSTEM_ScreenInfo;
 uint32_t*  SYSTEM_FrameBuffer = NULL;
@@ -147,20 +153,22 @@ void fillRect(uint16_t x,uint16_t y,uint16_t w,uint16_t h,uint32_t color){
 //字符（串）处理
 //显示字符
 void DrawChar(char c,int x,int y,uint32_t color){
-    int data_offset = (int)(uint8_t)c * FONT_GLYPH_BYTES;//按字符码索引
+    const uint8_t *glyph = &FONT_DATA[(int)(uint8_t)c * FONT_GLYPH_BYTES];//按字符码索引
     if(!g_fb_ok || g_fb != SYSTEM_FrameBuffer)fb_refresh();
     if(!g_fb_ok)return;
     uint32_t *t = g_back ? g_back : g_fb;//有影子就画在内存里
+    uint32_t top_bit = 1u << (FONT_GLYPH_BPR * 8 - 1);
     for(int row = 0; row < FONT_GLYPH_H; row++){
         int yy = y + row;
         if(yy < 0 || yy >= g_fb_h)continue;
-        uint16_t row_data = (uint16_t)((fontdata_10x18[data_offset + row*2] << 8) | fontdata_10x18[data_offset + row*2 + 1]);
+        uint32_t row_data = 0;
+        for(int b = 0; b < FONT_GLYPH_BPR; b++)row_data = (row_data << 8) | glyph[row * FONT_GLYPH_BPR + b];
         if(!row_data)continue;//空行直接跳过
         uint32_t *line = t + (uint64_t)yy * g_fb_w;
         for(int col = 0; col < FONT_GLYPH_W; col++){
             int xx = x + col;
             if(xx < 0 || xx >= g_fb_w)continue;
-            if(row_data & (0x8000 >> col))line[xx] = color;
+            if(row_data & (top_bit >> col))line[xx] = color;
         }
     }
     fb_flush_rect(x,y,x + FONT_GLYPH_W,y + FONT_GLYPH_H);//整格写回显存

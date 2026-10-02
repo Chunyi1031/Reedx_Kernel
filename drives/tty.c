@@ -10,6 +10,9 @@ uint16_t TTY_PrintRow = 0;
 _Bool TTY_ScreenEnabled = false;
 ConsoleStyle CurrentConsoleStyle = {COLOR_WHITE,COLOR_BLACK};
 
+#define TTY_CELL_W  CHAR_CELL_W
+#define TTY_CELL_H  CHAR_CELL_H
+
 //ANSI 转义序列解析
 #define ANSI_IDLE    0      //空闲状态：正常显示字符，未进入任何转义序列
 #define ANSI_ESC     1      //已收到ESC(0x1B)，等待下一个字符判断序列类型
@@ -95,11 +98,11 @@ static uint32_t TTY_EffectiveBg(void){
 
 //屏幕可用行列数
 static uint16_t tty_cols(void){
-    uint16_t c = (uint16_t)(SYSTEM_ScreenInfo.Width / 10);
+    uint16_t c = (uint16_t)(SYSTEM_ScreenInfo.Width / TTY_CELL_W);
     return c ? c : 1;
 }
 static uint16_t tty_rows(void){
-    uint16_t r = (uint16_t)(SYSTEM_ScreenInfo.Height / 18);
+    uint16_t r = (uint16_t)(SYSTEM_ScreenInfo.Height / TTY_CELL_H);
     return r ? r : 1;
 }
 
@@ -110,7 +113,7 @@ static void tty_fill_cells(uint16_t c0,uint16_t r0,uint16_t c1,uint16_t r1,uint3
     if(c1 >= tty_cols())c1 = (uint16_t)(tty_cols() - 1);
     if(r1 >= tty_rows())r1 = (uint16_t)(tty_rows() - 1);
     if(c1 < c0 || r1 < r0)return;
-    fillRect((uint16_t)(c0 * 10),(uint16_t)(r0 * 18),(uint16_t)((c1 - c0 + 1) * 10),(uint16_t)((r1 - r0 + 1) * 18),bg);
+    fillRect((uint16_t)(c0 * TTY_CELL_W),(uint16_t)(r0 * TTY_CELL_H),(uint16_t)((c1 - c0 + 1) * TTY_CELL_W),(uint16_t)((r1 - r0 + 1) * TTY_CELL_H),bg);
 }
 
 //读一个像素
@@ -119,8 +122,6 @@ static uint32_t tty_read_px(uint16_t x,uint16_t y){
     return FbReadPixel((int)x,(int)y);
 }
 
-#define TTY_CELL_W 10
-#define TTY_CELL_H 18
 static void tty_move_cells(int row,int dst_col,int src_col,int count){
     if(count <= 0)return;
     if(row < 0 || row >= (int)tty_rows())return;
@@ -383,7 +384,7 @@ static _Bool ansi_feed(char c){
 
 /*DeepSeek-V4.1-Flash*/
 #define TTY_CURSOR_W 1
-#define TTY_CURSOR_H 18//与字形同高
+#define TTY_CURSOR_H TTY_CELL_H//与字形同高
 static uint16_t g_cur_x = 0;
 static uint16_t g_cur_y = 0;
 static _Bool    g_cur_on = false;
@@ -401,8 +402,8 @@ static void tty_cursor_erase(void){
 static void tty_cursor_draw(uint32_t color,uint32_t bg){
     if(!TTY_ScreenEnabled)return;
     if(!g_cur_visible)return;
-    g_cur_x = (uint16_t)(TTY_PrintCol * 10);
-    g_cur_y = (uint16_t)(TTY_PrintRow * 18);
+    g_cur_x = (uint16_t)(TTY_PrintCol * TTY_CELL_W);
+    g_cur_y = (uint16_t)(TTY_PrintRow * TTY_CELL_H);
     g_cur_bg = bg;
     g_cur_on = true;
     fillRect(g_cur_x,g_cur_y,TTY_CURSOR_W,TTY_CURSOR_H,color);
@@ -427,7 +428,7 @@ static void tty_put_char(const char c,uint32_t color){
             TTY_PrintCol--;
         }else if(TTY_PrintRow > 0){
             TTY_PrintRow--;
-            TTY_PrintCol = (SYSTEM_ScreenInfo.Width >= 10) ? (SYSTEM_ScreenInfo.Width / 10 - 1) : 0;
+            TTY_PrintCol = (SYSTEM_ScreenInfo.Width >= TTY_CELL_W) ? (SYSTEM_ScreenInfo.Width / TTY_CELL_W - 1) : 0;
         }
         return;
     }
@@ -443,7 +444,7 @@ static void tty_put_char(const char c,uint32_t color){
         return;
     }
     //如果列超出屏幕宽度，自动换行
-    if((uint64_t)TTY_PrintCol * 10 + 10 > SYSTEM_ScreenInfo.Width){
+    if((uint64_t)TTY_PrintCol * TTY_CELL_W + TTY_CELL_W > SYSTEM_ScreenInfo.Width){
         TTY_PrintCol = 0;
         if(TTY_PrintRow >= (uint16_t)tty_bot_row()){
             TTY_PrintRow = (uint16_t)tty_bot_row();
@@ -454,13 +455,13 @@ static void tty_put_char(const char c,uint32_t color){
     }
     //如果字符为制表符
     if(c == '\t'){
-        fillRect(TTY_PrintCol * 10,TTY_PrintRow * 18,10,18,bg);
+        fillRect(TTY_PrintCol * TTY_CELL_W,TTY_PrintRow * TTY_CELL_H,TTY_CELL_W,TTY_CELL_H,bg);
         TTY_PrintCol ++;
         return;
     }
     //先整格填充背景色, 再绘制前景字形
-    fillRect(TTY_PrintCol * 10,TTY_PrintRow * 18,10,18,bg);
-    DrawChar(c,TTY_PrintCol * 10,TTY_PrintRow * 18,fg);
+    fillRect(TTY_PrintCol * TTY_CELL_W,TTY_PrintRow * TTY_CELL_H,TTY_CELL_W,TTY_CELL_H,bg);
+    DrawChar(c,TTY_PrintCol * TTY_CELL_W,TTY_PrintRow * TTY_CELL_H,fg);
     TTY_PrintCol ++;//记录打印位置
 }
 

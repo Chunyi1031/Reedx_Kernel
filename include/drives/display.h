@@ -22,6 +22,9 @@ extern uint32_t*  SYSTEM_FrameBuffer;
 #define COLOR_LGREY   0xFFC0C0C0 //亮灰
 #define COLOR_DGREY   0xFF808080 //暗灰
 
+#define CHAR_CELL_W 8
+#define CHAR_CELL_H 16
+
 uint32_t rgb(uint8_t red, uint8_t green, uint8_t blue);//rgb转16进制
 void DrawPiexl(uint16_t x,uint16_t y,uint32_t color);//画点
 void fillRect(uint16_t x,uint16_t y,uint16_t w,uint16_t h,uint32_t color);//填充矩形
