@@ -3,6 +3,7 @@
 #include <drives/disk.h>
 #include <drives/ahci.h>
 #include <drives/nvme.h>
+#include <drives/vmd.h>
 #include <fs.h>
 
 _Bool InitDiskAndFs(){
@@ -10,6 +11,7 @@ _Bool InitDiskAndFs(){
     AtaRegisterDriver();//注册ATA驱动
     AhciRegisterDriver();//注册AHCI驱动
     NvmeRegisterDriver();//注册NVMe驱动
+    VmdInitAll();//先把Intel VMD找出来
     //解析磁盘路径
     disk_info_t disk = {0};
     device_path_info_t Device;

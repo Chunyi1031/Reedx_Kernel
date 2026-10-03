@@ -1,5 +1,6 @@
 #include <drives/disk.h>
 #include <drives/pci.h>
+#include <drives/vmd.h>
 
 //驱动注册表
 static const disk_ops_t *g_disk_drivers[DISK_CTRL_MAX];
@@ -44,7 +45,9 @@ static void scan_cb(pci_device_t *d, void *arg){
     //匹配设备路径给出的PCI位置(dev/func)
     if(d->dev != ctx->want_dev || d->func != ctx->want_func) return;
     if(d->class_code != PCI_CLASS_MASS_STORAGE) return;
-    if(ctx->want_subclass && d->subclass != ctx->want_subclass) return;
+    if(ctx->want_subclass && d->subclass != ctx->want_subclass){
+        if(!(ctx->want_subclass == PCI_SUBCLASS_NVME && d->subclass == PCI_SUBCLASS_VMD))return;//允许VMD子类匹配NVMe
+    }
 
     if(d->subclass == PCI_SUBCLASS_SATA_AHCI){
         //AHCI:HBA MMIO基址在BAR5
@@ -76,6 +79,14 @@ static void scan_cb(pci_device_t *d, void *arg){
         ctx->disk->pci_func = d->func;
         ctx->disk->present = 1;
 /*DeepSeek V4 Pro-END*/
+    }else if(d->subclass == PCI_SUBCLASS_VMD){
+        //BAR由nvme驱动向VMD层要
+        ctx->disk->ctrl_type = DISK_CTRL_NVME;
+        ctx->disk->abar = 0;
+        ctx->disk->pci_bus = d->bus;
+        ctx->disk->pci_dev = d->dev;
+        ctx->disk->pci_func = d->func;
+        ctx->disk->present = 1;
     }else if(d->subclass == PCI_SUBCLASS_NVME){
         //获取BAR寄存器
         uint32_t bar0 = PciRead32(d->bus, d->dev, d->func, PCI_REG_BAR0);

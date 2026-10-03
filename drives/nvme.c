@@ -1,5 +1,6 @@
 #include <drives/nvme.h>
 #include <drives/pci.h>
+#include <drives/vmd.h>
 #include <mm/vmm.h>
 #include <mm/pmm.h>
 #include <print.h>
@@ -9,6 +10,8 @@
 //扫描上下文
 typedef struct {
     int      found;
+    int      from_vmd;
+    int      vmd_index;
     uint8_t  bus, dev, func;
     uint16_t vendor, device;
     uint32_t bar_raw0, bar_raw1;
@@ -159,13 +162,37 @@ static int nvme_probe(void){
     //扫描所有PCI总线
     PciScanAll(nvme_scan_cb,&ctx);
     if(!ctx.found){
+        //扫描Intel VMD子设备
+        vmd_child_t child;
+        int vr = VmdFindNvme(&child);
+        if(vr == 0){
+            ctx.found     = 1;
+            ctx.from_vmd  = 1;
+            ctx.vmd_index = child.ctrl_index;
+            ctx.bus       = child.bus;
+            ctx.dev       = child.dev;
+            ctx.func      = child.func;
+            ctx.vendor    = child.vendor;
+            ctx.device    = child.device;
+            ctx.bar_raw0  = child.bar_raw[0];
+            ctx.bar_raw1  = child.bar_raw[1];
+            ctx.bar       = child.bar_phys[0];
+            printk(PRINTK_INFO"NVMe: behind VMD#%d %02x:%02x.%x bar=0x%llx",
+                   child.ctrl_index,child.bus,child.dev,child.func,
+                   (unsigned long long)child.bar_phys[0]);
+        }else if(vr == -2){
+            printk(PRINTK_WARNING"NVMe: VMD has an NVMe but its BAR0 is 0 (unconfigured)");
+        }
+    }
+    if(!ctx.found){
         printk(PRINTK_ERR"NVMe: controller not found");
         return -1;
     }
-    //打开内存空间访问和总线主控
-    uint16_t cmd = PciRead16(ctx.bus, ctx.dev, ctx.func, PCI_REG_COMMAND);
-    cmd |= 0x6;
-    PciWrite16(ctx.bus, ctx.dev, ctx.func, PCI_REG_COMMAND, cmd);
+    if(!ctx.from_vmd){
+        uint16_t cmd = PciRead16(ctx.bus, ctx.dev, ctx.func, PCI_REG_COMMAND);
+        cmd |= 0x6;
+        PciWrite16(ctx.bus, ctx.dev, ctx.func, PCI_REG_COMMAND, cmd);
+    }
     //映射BAR寄存器到内核虚拟地址空间
     for(int i = 0; i < 4; i++){
         vmm_map_page(KERNEL_PML4,(uintptr_t)PHYS_TO_VIRT(ctx.bar) + (uintptr_t)i * 4096,ctx.bar + (uintptr_t)i * 4096,PTE_PRESENT | PTE_WRITABLE | PTE_CACHE_DISABLE);
