@@ -515,25 +515,32 @@ void TTY_PrintColor(const char *str,uint32_t fg,uint32_t bg){
     g_ansi_bold = sbl;
 }
 
-ktermios_t g_tty_term = {
-    .iflag = 0x6D02,//BRKINT|ICRNL|IXON|IXANY|IMAXBEL|IUTF8
-    .oflag = 0x0005,//OPOST|ONLCR(输出侧换行已由TTY_PrintChar处理, 此处仅上报)
-    .cflag = 0x04BF,//B38400|CS8|CREAD|HUPCL
-    .lflag = TTY_ISIG|TTY_ICANON|TTY_ECHO|TTY_ECHOE|TTY_ECHOK|TTY_ECHOCTL|TTY_ECHOKE|TTY_IEXTEN,
-    .line = 0,
-    .cc = {3,28,127,21,4,0,1,0,17,19,26,0,18,15,23,22},
-    .ispeed = 38400,
-    .ospeed = 38400,
-};
+//终端默认模式
+#define TTY_TERM_DEFAULT_INIT { \
+    .iflag = 0x6D02,/*BRKINT|ICRNL|IXON|IXANY|IMAXBEL|IUTF8*/ \
+    .oflag = 0x0005,/*OPOST|ONLCR*/ \
+    .cflag = 0x04BF,/*B38400|CS8|CREAD|HUPCL*/ \
+    .lflag = TTY_ISIG|TTY_ICANON|TTY_ECHO|TTY_ECHOE|TTY_ECHOK|TTY_ECHOCTL|TTY_ECHOKE|TTY_IEXTEN, \
+    .line = 0, \
+    .cc = {3,28,127,21,4,0,1,0,17,19,26,0,18,15,23,22}, \
+    .ispeed = 38400, \
+    .ospeed = 38400, \
+}
+
+ktermios_t g_tty_term = TTY_TERM_DEFAULT_INIT;
 
 static char g_line[TTY_LINE_MAX];//行编辑缓冲
 static int  g_line_len = 0;
 static volatile pid_t g_tty_fg_pid = 0;      //最后读本终端的任务(近似前台任务)
 static volatile int   g_tty_intr_pending = 0;//键盘IRQ捕获的无读者Ctrl+C, 待定时器安全点投递
+static volatile pid_t g_tty_term_owner = 0;  //最后一个改过终端模式的任务
+static volatile int   g_tty_reader_waiting = 0;//是否有任务正阻塞在终端读
 
-//键盘IRQ调用: 无终端读者时的Ctrl+C由定时器安全点投递(用于中断正在运行的前台命令)
+static inline void tty_echo(const char *s,int n);
+
+//键盘IRQ调用
 _Bool TTY_KeyInput(char c){
-    if((g_tty_term.lflag & TTY_ISIG) && c == (char)g_tty_term.cc[0] && g_tty_fg_pid > 0){
+    if((g_tty_term.lflag & TTY_ISIG) && c == (char)g_tty_term.cc[0] && g_tty_fg_pid > 0 && !g_tty_reader_waiting){
         g_tty_intr_pending = 1;
         return true;//消费该键, 不再进入按键缓冲
     }
@@ -546,12 +553,37 @@ void TTY_IntrCheck(void){
     g_tty_intr_pending = 0;
     task_struct *t = TaskFind((pid_t)g_tty_fg_pid);
     if(!t)return;
+    if(g_tty_term.lflag & TTY_ECHO)tty_echo("^C\n", 3);
     SignalSend(t, SIGINT, SI_KERNEL, 0, 0);
     TaskSignalDescendants(t, SIGINT);
 }
 
 static inline void tty_echo(const char *s, int n){
     for(int i = 0; i < n; i++)TTY_PrintChar(s[i], CurrentConsoleStyle.TextColor);
+}
+
+//按ECHOCTL规则回显
+static void tty_echo_ctl(const char *s,int n){
+    for(int i = 0; i < n; i++){
+        uint8_t ch = (uint8_t)s[i];
+        if(ch == 0x7F){
+            tty_echo("^?", 2);
+        }else if(ch < 0x20){
+            char e[2];
+            e[0] = '^';
+            e[1] = (char)(ch + 0x40);
+            tty_echo(e, 2);
+        }else{
+            tty_echo(&s[i], 1);
+        }
+    }
+}
+
+//回显一个输入字符
+static inline void tty_echo_char(char c){
+    if(!(g_tty_term.lflag & TTY_ECHO))return;
+    if(g_tty_term.lflag & TTY_ECHOCTL)tty_echo_ctl(&c, 1);
+    else tty_echo(&c, 1);
 }
 
 static int tty_line_take(char *kbuf, int ccount){
@@ -567,15 +599,45 @@ static int tty_line_take(char *kbuf, int ccount){
     return n;
 }
 
+//这个字符回显后占几列
+static int tty_echo_width(uint8_t c){
+    if((g_tty_term.lflag & TTY_ECHOCTL) && (c < 0x20 || c == 0x7F))return 2;
+    return 1;
+}
+
+//退掉行缓冲里最后一个字符
+static void tty_erase_last(void){
+    if(g_line_len <= 0)return;
+    g_line_len--;
+    int w = tty_echo_width((uint8_t)g_line[g_line_len]);
+    if(g_tty_term.lflag & TTY_ECHO){
+        for(int i = 0; i < w; i++)tty_echo("\b \b", 3);
+    }
+}
+
+static long tty_term_read(char *kbuf, long count);//先声明: 外层包装要用
+
 //行规程读取
 long TTY_TermRead(char *kbuf, long count){
+    g_tty_reader_waiting = 1;
+    long r = tty_term_read(kbuf, count);
+    g_tty_reader_waiting = 0;
+    return r;
+}
+
+//行规程读取主体
+static long tty_term_read(char *kbuf, long count){
     int ccount = (int)(count < TTY_LINE_MAX ? count : TTY_LINE_MAX);
     if(ccount <= 0)return 0;
     g_tty_fg_pid = current_task ? current_task->pid : 0;//记住前台任务
     //非规范模式: 单键直返
     if(!(g_tty_term.lflag & TTY_ICANON)){
-        char c = GetKey();
-        if(g_tty_term.lflag & TTY_ECHO)tty_echo(&c, 1);
+        char c;
+        do{
+            c = GetKey();
+        //Ctrl+Z(VSUSP)/Ctrl+\(VQUIT)不能当输入字符交给程序
+        }while((g_tty_term.lflag & TTY_ISIG) && (c == (char)g_tty_term.cc[10] || c == (char)g_tty_term.cc[1]));
+        tty_echo_char(c);
         kbuf[0] = c;
         return 1;
     }
@@ -584,13 +646,17 @@ long TTY_TermRead(char *kbuf, long count){
     for(;;){
         char c = GetKey();
         if(c == '\r' && (g_tty_term.iflag & 0x0100))c = '\n';
-        if(c == 0x1B){
+        if((uint8_t)c == 0x1B){
+            char seq[24];
+            int n = 0;
+            seq[n++] = (char)0x1B;
             char e1 = 0;
             for(int i = 0; i < 20 && e1 == 0; i++){
                 e1 = GetKey_NoBlock();
                 if(!e1)udelay(1000);
             }
             if(e1 == '[' || e1 == 'O'){
+                seq[n++] = e1;
                 for(;;){
                     char e2 = 0;
                     for(int i = 0; i < 20 && e2 == 0; i++){
@@ -598,19 +664,24 @@ long TTY_TermRead(char *kbuf, long count){
                         if(!e2)udelay(1000);
                     }
                     if(e2 == 0)break;
+                    if(n < (int)sizeof(seq) - 1)seq[n++] = e2;
                     if(e2 >= 0x40 && e2 <= 0x7E)break;
                     if(e2 < 0x20 || e2 > 0x3F)break;
                 }
-            }else if(e1 != 0 && g_line_len < TTY_LINE_MAX - 1){
-                g_line[g_line_len++] = e1;
-                if(g_tty_term.lflag & TTY_ECHO)tty_echo(&e1, 1);
+            }else if(e1 != 0){
+                seq[n++] = e1;
             }
+            //字节照样进输入缓冲
+            for(int i = 0; i < n; i++){
+                if(g_line_len < TTY_LINE_MAX - 1)g_line[g_line_len++] = seq[i];
+            }
+            if(g_tty_term.lflag & TTY_ECHO)tty_echo_ctl(seq,n);
             continue;
         }
         //Ctrl+C(VINTR)
         if((g_tty_term.lflag & TTY_ISIG) && c == (char)g_tty_term.cc[0]){
             g_tty_intr_pending = 0;//本路径自行处理, 避免定时器重复投递
-            if(g_tty_term.lflag & TTY_ECHO)tty_echo("^C\n", 3);
+            if(g_tty_term.lflag & TTY_ECHO)tty_echo("^C", 2);
             g_line_len = 0;
             if(current_task)SignalSend(current_task, SIGINT, SI_KERNEL, 0, 0);
             return -EINTR;
@@ -622,18 +693,17 @@ long TTY_TermRead(char *kbuf, long count){
         }
         //退格(VERASE/DEL/0x08)
         if(c == (char)g_tty_term.cc[2] || c == 127 || c == '\b'){
-            if(g_line_len > 0){
-                g_line_len--;
-                if(g_tty_term.lflag & TTY_ECHO)tty_echo("\b \b", 3);
-            }
+            tty_erase_last();
             continue;
         }
         //Ctrl+U(VKILL): 清行
         if(c == (char)g_tty_term.cc[3]){
-            while(g_line_len > 0){
-                g_line_len--;
-                if(g_tty_term.lflag & TTY_ECHO)tty_echo("\b \b", 3);
-            }
+            while(g_line_len > 0)tty_erase_last();
+            continue;
+        }
+        //Ctrl+Z(VSUSP)/Ctrl+\(VQUIT)
+        if((g_tty_term.lflag & TTY_ISIG) && (c == (char)g_tty_term.cc[10] || c == (char)g_tty_term.cc[1])){
+            if(g_tty_term.lflag & TTY_ECHO)tty_echo(c == (char)g_tty_term.cc[10] ? "^Z" : "^\\", 2);
             continue;
         }
         //普通字符/回车
@@ -646,7 +716,7 @@ long TTY_TermRead(char *kbuf, long count){
             goto flush;
         }
         g_line[g_line_len++] = c;
-        if(g_tty_term.lflag & TTY_ECHO)tty_echo(&c, 1);
+        tty_echo_char(c);
         continue;
 flush:
         {
@@ -690,6 +760,14 @@ static void tty_term_import(const uint32_t flags[4], uint8_t line, const uint8_t
     g_tty_term.lflag = flags[3];
     g_tty_term.line  = line;
     memcpy(g_tty_term.cc, cc, 19);
+    g_tty_term_owner = current_task ? current_task->pid : 0;//记下是谁改的
+}
+
+void TTY_TermRestoreOnExit(pid_t pid){
+    if(pid <= 0 || pid != g_tty_term_owner)return;
+    g_tty_term = (ktermios_t)TTY_TERM_DEFAULT_INIT;
+    g_tty_term_owner = 0;
+    g_line_len = 0;//丢掉它可能留在行缓冲里的半行
 }
 
 void TTY_TermImportLegacy(const void *src){

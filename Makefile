@@ -226,10 +226,7 @@ disk:
 	sudo umount $(MNT_DIR)
 
 .PHONY: system
-system: # kernel.elf
-# 	sudo mount -o loop,offset=1048576 $(SYSTEM_DISK) $(MNT_DIR)
-# 	sudo cp kernel.elf $(MNT_DIR)/SYS/KERNEL.ELF
-# 	sudo umount $(MNT_DIR)
+system: kernel.elf
 	bash ./CopyToDisk.sh
 
 update-disk: 

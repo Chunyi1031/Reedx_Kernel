@@ -76,6 +76,7 @@ void TTY_TermExportLegacy(void *dst);
 void TTY_TermExport2(void *dst);
 void TTY_TermImportLegacy(const void *src);
 void TTY_TermImport2(const void *src);
+void TTY_TermRestoreOnExit(pid_t pid);//任务退出时恢复被它改过的终端模式
 _Bool TTY_KeyInput(char c);//键盘IRQ调用: 无读者时的Ctrl+C → 消费该键并标记待投递(返回true)
 void TTY_IntrCheck(void);//定时器IRQ调用(安全点): 向前台任务及其子孙投递挂起的SIGINT
 /*DeepSeek-V4.1-Flash-END*/

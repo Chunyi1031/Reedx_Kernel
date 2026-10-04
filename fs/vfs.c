@@ -341,26 +341,40 @@ int FsGetdents(fs_file_t *f, void *buf, uint64_t len){
     spin_lock_irqsave(&g_fs_lock, flags);
     int written = 0;
     if(f && f->used && f->node && f->node->type == FT_DIR && f->node->ops->readdir && buf){
-        uint64_t cookie = f->off;
+        uint64_t pos = f->off;
         char *p = (char*)buf;
         while((uint64_t)written < len){
             fs_dirent_t de;
-            uint64_t save = cookie;
-            int rr = f->node->ops->readdir(f->node, &cookie, &de);
-            if(rr != 0){ written = (rr < 0) ? rr : written; break; }
+            uint64_t save = pos;
+            memset(&de, 0, sizeof(de));
+            if(pos < 2){
+                strcpy(de.name, pos == 0 ? "." : "..");
+                de.ino  = f->node->ino;
+                de.type = FT_DIR;
+                pos++;
+            }else{
+                uint64_t cookie = pos - 2;
+                int rr = f->node->ops->readdir(f->node, &cookie, &de);
+                if(rr != 0){ written = (rr < 0) ? rr : written; break; }
+                pos = cookie + 2;
+            }
             int nlen = strlen(de.name);
             uint16_t reclen = (uint16_t)(19 + nlen + 1);
             reclen = (uint16_t)((reclen + 7) & ~7);//8字节对齐
-            if((uint64_t)written + reclen > len){ cookie = save; break; }//放不下则回退
+            //放不下则回退
+            if((uint64_t)written + reclen > len){
+                pos = save;
+                break;
+            }
             linux_dirent64_t *d = (linux_dirent64_t*)(p + written);
             d->d_ino = de.ino;
-            d->d_off = (int64_t)cookie;
+            d->d_off = (int64_t)pos;
             d->d_reclen = reclen;
             d->d_type = (uint8_t)((de.type == FT_DIR) ? DT_DIR : ((de.type == FT_FILE) ? DT_REG : DT_UNKNOWN));
             strcpy(d->d_name, de.name);
             written += reclen;
         }
-        f->off = cookie;
+        f->off = pos;
     }
     spin_unlock_irqrestore(&g_fs_lock, flags);
     return written;

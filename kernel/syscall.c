@@ -1647,6 +1647,7 @@ void UserTaskExit(long status){
 			uint32_t zero = 0;
 			copy_to_user(current_task->clear_child_tid, &zero, sizeof(zero));
 		}
+		TTY_TermRestoreOnExit(current_task->pid);//改过终端模式就把它恢复回来
 		for(int i = 0; i < MAX_FD; i++)fd_close_one(i);//关闭所有打开的文件描述符
 		current_task->exit_code = (int)status;//保存退出码
 		TaskExit();//退出任务

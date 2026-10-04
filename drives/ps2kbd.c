@@ -117,6 +117,8 @@ static int scan_to_buf(uint8_t sc, char *buf){
 		uint8_t base = sc & 0x7F;
 		if (ext_prefix) {
 			ext_prefix = false;
+			if(base == 0x1D)ctrl_state = false;
+			else if(base == 0x38)alt_state = false;
 		} else {
 			if (base == KEY_LeftShift || base == KEY_RightShift)
 				shift_state = false;
