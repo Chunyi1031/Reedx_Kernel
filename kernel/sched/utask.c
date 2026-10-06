@@ -13,12 +13,12 @@ task_struct* CreateProcess(uintptr_t entry, mm_struct* mm, const char* name) {
     if(!task)return NULL;
     memset(task,0,TASK_STRUCT_PAGES * 4096);
     //分配内核栈
-    void* stack = (void*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(1));
+    void* stack = (void*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(TASK_KERNEL_STACK_PAGES));
     if(!stack){
         Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)task),TASK_STRUCT_PAGES);
         return NULL;
     }
-    memset(stack,0,4096);
+    memset(stack,0,TASK_KERNEL_STACK_PAGES * 4096);
     cli();
     //初始化任务结构体
     task->pid = AllocPid();
@@ -27,11 +27,11 @@ task_struct* CreateProcess(uintptr_t entry, mm_struct* mm, const char* name) {
     waitq_init(&task->child_wq);
     task->mm = mm;
     task->kernel_stack = stack;
-    task->stack_size = 4096;
+    task->stack_size = TASK_KERNEL_STACK_PAGES * 4096;
     strcpy(task->name, name);
     strcpy(task->cwd, "/");//初始工作目录为根
     //伪造首次切换的栈帧
-    uint64_t stack_bottom = (uint64_t)stack + 4096;
+    uint64_t stack_bottom = (uint64_t)stack + TASK_KERNEL_STACK_PAGES * 4096;
     uint64_t* f = (uint64_t*)(stack_bottom - 17 * 8);
     memset(f, 0, 17 * 8);
     f[0]  = mm->start_stack + PAGE_SIZE - 16;//用户栈顶

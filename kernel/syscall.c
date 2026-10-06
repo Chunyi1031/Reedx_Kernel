@@ -2051,7 +2051,7 @@ void InitSyscall(void){
 	syscall_table[SYS_GETEUID]    = sys_geteuid;
 	syscall_table[SYS_GETGID]     = sys_getgid;
 	syscall_table[SYS_GETEGID]    = sys_getegid;
-	syscall_table[SYS_CLONE]      = sys_fork;
+	syscall_table[SYS_CLONE]      = sys_clone;
 	syscall_table[SYS_FORK]       = sys_fork;
 	syscall_table[SYS_VFORK]      = sys_vfork;
 	syscall_table[SYS_EXECVE]     = sys_execve;

@@ -8,6 +8,10 @@
 #include <pipe.h>
 #include <signals.h>
 
+//clone(2)标志位
+#define CLONE_SETTLS 0x00080000
+#define CLONE_VFORK  0x00004000
+
 __attribute__((naked))
 void fork_trampoline(void){
 	__asm__ volatile(
@@ -20,7 +24,7 @@ void fork_trampoline(void){
 }
 
 //执行fork
-pid_t do_fork(void){
+pid_t do_fork_ex(uintptr_t child_stack, uint64_t tls){
 	if (!current_task || !current_task->mm) return -1;
 	task_struct *parent = current_task;
 	//COW复制地址空间
@@ -28,21 +32,21 @@ pid_t do_fork(void){
 	if (!child_mm) return -1;
 	//分配子task_struct与内核栈
 	task_struct *child = (task_struct*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(TASK_STRUCT_PAGES));
-	void *stack = (void*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(1));
+	void *stack = (void*)(uintptr_t)PHYS_TO_VIRT(Pmm_Malloc(TASK_KERNEL_STACK_PAGES));
 	if (!child || !stack) {
 		if (child) Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)child), TASK_STRUCT_PAGES);
-		if (stack) Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)stack), 1);
+		if (stack) Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)stack), TASK_KERNEL_STACK_PAGES);
 		vmm_destroy_address_space(child_mm);
 		return -1;
 	}
 	memset(child, 0, TASK_STRUCT_PAGES * 4096);
-	memset(stack, 0, 4096);
+	memset(stack, 0, TASK_KERNEL_STACK_PAGES * 4096);
 	cli();
 	//拷贝父进程当前内核栈帧到子栈对应位置
 	uintptr_t cur_rsp;
 	__asm__ volatile("movq %%rsp, %0" : "=r"(cur_rsp));
 	uintptr_t parent_top = user_kernel_stack_top;
-	uintptr_t child_top = (uintptr_t)stack + 4096;
+	uintptr_t child_top = (uintptr_t)stack + TASK_KERNEL_STACK_PAGES * 4096;
 	memcpy((void*)(child_top - (parent_top - cur_rsp)), (void*)cur_rsp, parent_top - cur_rsp);
 	//构造子进程首次调度的伪帧
 	uint64_t *f = (uint64_t*)(child_top - 160);
@@ -66,7 +70,7 @@ pid_t do_fork(void){
 	f[16] = (uint64_t)fork_trampoline;//ret目标
 	f[17] = p[12];//用户RIP
 	f[18] = p[4];//用户RFLAGS
-	f[19] = p[15];//用户RSP
+	f[19] = child_stack ? child_stack : p[15];//用户RSP
 	child->context.rsp = (uint64_t)f;
 	//初始化子任务并加入就绪队列
 	child->pid = AllocPid();
@@ -77,9 +81,9 @@ pid_t do_fork(void){
 	waitq_init(&child->child_wq);
 	child->mm = child_mm;
 	child->kernel_stack = stack;
-	child->stack_size = 4096;
+	child->stack_size = TASK_KERNEL_STACK_PAGES * 4096;
 	strcpy(child->name, parent->name);
-	child->fs_base = parent->fs_base;//继承TLS的FS段基址
+	child->fs_base = tls ? tls : parent->fs_base;//TLS的FS段基址
 	strcpy(child->cwd, parent->cwd);//继承当前工作目录
 	//继承父进程文件描述符表
 	for (int i = 0; i < MAX_FD; i++) {
@@ -93,13 +97,17 @@ pid_t do_fork(void){
 	return child->pid;
 }
 
+//普通fork
+pid_t do_fork(void){
+	return do_fork_ex(0, 0);
+}
+
 long sys_fork(long a, long b, long c, long a4, long a5, long a6){
 	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
 	if (!current_task || !current_task->mm) return -ENOSYS;//检查当前任务是否存在或为内核任务
 	pid_t pid = do_fork();//执行fork
 	return pid < 0 ? -EAGAIN : (long)pid;
 }
-
 long sys_vfork(long a, long b, long c, long a4, long a5, long a6){
 	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
 	if(!current_task || !current_task->mm)return -ENOSYS;
@@ -114,4 +122,13 @@ long sys_vfork(long a, long b, long c, long a4, long a5, long a6){
 	if(child)child->vfork_parent = parent->pid;
 	while(parent->vfork_waiting)sleep_on(&parent->child_wq);
 	return (long)pid;
+}
+
+//clone(2)
+long sys_clone(long flags, long child_stack, long ptid, long ctid, long tls, long a6){
+	(void)ptid; (void)ctid; (void)a6;
+	if(!current_task || !current_task->mm)return -ENOSYS;
+	uint64_t newtls = (flags & CLONE_SETTLS) ? (uint64_t)tls : 0;
+	pid_t pid = do_fork_ex((uintptr_t)child_stack, newtls);
+	return pid < 0 ? -EAGAIN : (long)pid;
 }

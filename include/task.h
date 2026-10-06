@@ -74,6 +74,7 @@ typedef struct task_struct {
 } task_struct;
 
 #define TASK_STRUCT_PAGES 4 //task_struct占用的页数
+#define TASK_KERNEL_STACK_PAGES 4 //用户任务内核栈页数
 typedef char task_struct_fits_in_pages[(sizeof(task_struct) <= TASK_STRUCT_PAGES * 4096) ? 1 : -1];//结构体不得超出分配的页数
 
 typedef struct mutex {

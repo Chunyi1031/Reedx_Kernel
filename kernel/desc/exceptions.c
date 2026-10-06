@@ -161,6 +161,7 @@ pf_error:
 	TTY_Print(error_code & PF_ERR_EXEC ? "[EXEC]" : "", COLOR_YELLOW);
 	TTY_Print(error_code & PF_ERR_PRESENT ? "[PRESENT]" : "[NOT PRESENT]", COLOR_YELLOW);
 	TTY_Print(error_code & PF_ERR_RSVD ? "[RESERVED]" : "", COLOR_YELLOW);
+	TTY_PrintChar('\n',0);
 	DrawString("The machine needs to restart\n",SYSTEM_ScreenInfo.Width/2-145,SYSTEM_ScreenInfo.Height/2-8,COLOR_YELLOW);
 	SYSTEM_STOP();
 }
