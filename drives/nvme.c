@@ -441,33 +441,89 @@ static int nvme_bringup(void){
     return 0;
 }
 
+/*DeepSeek-V4.1-Flash*/
+#define NVME_MAX_XFER_BLK  256//单条命令最多搬的块数
+
+//大传输用的PRP列表页和连续bounce缓冲
+static uint64_t g_prp_list_phys = 0;
+static uint64_t g_bounce_phys   = 0;
+static uint32_t g_bounce_blk    = 0;
+
+//设置PRP1/PRP2
+static uint64_t nvme_prp_setup(uint64_t phys,uint32_t bytes,uint64_t *prp2){
+    uint32_t first_len = (uint32_t)(PAGE_SIZE - (phys & (PAGE_SIZE - 1)));//第一页能装多少
+    if(first_len >= bytes){ *prp2 = 0; return phys; }//整段都在第一页里
+    uint64_t next = phys + first_len;//下一个页边界
+    uint32_t rest = bytes - first_len;
+    uint32_t npg = (rest + PAGE_SIZE - 1) / PAGE_SIZE;
+    if(npg == 1){
+        *prp2 = next;
+        return phys;
+    }
+    uint64_t *lst = (uint64_t*)PHYS_TO_VIRT(g_prp_list_phys);
+    for(uint32_t i = 0; i < npg; i++)lst[i] = next + (uint64_t)i * PAGE_SIZE;
+    *prp2 = g_prp_list_phys;
+    return phys;
+}
+/*DeepSeek-V4.1-Flash-END*/
+
 //经disk层的传输
 static int nvme_dma_xfer(int write, uint64_t lba, uint32_t count, void *buf){
-    uint32_t per = (PAGE_SIZE * 2) / g_nvme.blksz;//每块最多几扇区
-    uint32_t per_page = PAGE_SIZE / g_nvme.blksz;
-    uintptr_t va = (uintptr_t)buf;
-    //页对齐的内核高半区缓冲区: 直接当PRP用, 省掉一次拷贝
-    if(va >= KERNEL_VIRTUAL_ADDR_START && !(va & (PAGE_SIZE - 1)) && count <= per){
-        uint64_t phys = (uint64_t)VIRT_TO_PHYS(va);
-        return nvme_read_write(write, lba, count, phys,count > per_page ? phys + PAGE_SIZE : 0);
+    if(!g_nvme.ioq_ready)return -1;
+    //单条命令的最大块数
+    uint32_t maxblk = NVME_MAX_XFER_BLK;
+    if(g_nvme.mdts){
+        uint32_t m = (1u << g_nvme.mdts) * (PAGE_SIZE / g_nvme.blksz);
+        if(maxblk > m)maxblk = m;
     }
-    uint64_t bounce = (uint64_t)Pmm_Malloc(2);//2页物理连续
-    if(!bounce)return -1;
-    uint8_t *b = (uint8_t*)PHYS_TO_VIRT(bounce);
+    if(!maxblk)return -1;
+    uintptr_t va = (uintptr_t)buf;
+    //页对齐的内核缓冲区直接当PRP用，PRP列表支持任意长度
+    if(va >= KERNEL_VIRTUAL_ADDR_START && !(va & (PAGE_SIZE - 1))){
+        uint64_t phys = (uint64_t)VIRT_TO_PHYS(va);
+        while(count){
+            uint32_t chunk = count > maxblk ? maxblk : count;
+            uint64_t prp2 = 0;
+            uint64_t prp1 = nvme_prp_setup(phys,chunk * g_nvme.blksz,&prp2);
+            int r = nvme_read_write(write,lba,chunk,prp1,prp2);
+            if(r)return r;
+            lba   += chunk;
+            phys  += (uint64_t)chunk * g_nvme.blksz;
+            count -= chunk;
+        }
+        return 0;
+    }
+    //其他情况，走连续的中转缓冲
+    if(!g_bounce_phys){
+        int pages = (int)((NVME_MAX_XFER_BLK * g_nvme.blksz + PAGE_SIZE - 1) / PAGE_SIZE);
+        while(pages >= 2 && !g_bounce_phys){
+            g_bounce_phys = (uint64_t)Pmm_Malloc(pages);
+            if(g_bounce_phys)g_bounce_blk = (uint32_t)((pages * PAGE_SIZE) / g_nvme.blksz);
+            else pages /= 2;
+        }
+        if(!g_bounce_phys)return -1;
+    }
+    if(g_bounce_blk < maxblk)maxblk = g_bounce_blk;
+    if(!g_prp_list_phys){
+        g_prp_list_phys = (uint64_t)Pmm_Malloc(1);
+        if(!g_prp_list_phys)return -1;
+    }
+    uint8_t *b = (uint8_t*)PHYS_TO_VIRT(g_bounce_phys);
     uint8_t *p = (uint8_t*)buf;
     int r = 0;
     while(count){
-        uint32_t chunk = count > per ? per : count;
+        uint32_t chunk = count > maxblk ? maxblk : count;
         uint32_t bytes = chunk * g_nvme.blksz;
         if(write)memcpy(b, p, bytes);
-        r = nvme_read_write(write, lba, chunk, bounce, bytes > PAGE_SIZE ? bounce + PAGE_SIZE : 0);
+        uint64_t prp2 = 0;
+        uint64_t prp1 = nvme_prp_setup(g_bounce_phys,bytes,&prp2);
+        r = nvme_read_write(write, lba, chunk, prp1, prp2);
         if(r)break;
         if(!write)memcpy(p, b, bytes);
         lba   += chunk;
         p     += bytes;
         count -= chunk;
     }
-    Pmm_Free((void*)bounce, 2);
     return r;
 }
 

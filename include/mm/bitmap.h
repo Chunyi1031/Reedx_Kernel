@@ -6,6 +6,7 @@
 
 typedef struct bitmap_t {
     uint32_t bit_size;
+    uint32_t hint;
     uint8_t *bits;
 } bitmap_t;
 

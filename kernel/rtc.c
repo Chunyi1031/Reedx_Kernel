@@ -39,6 +39,8 @@
 
 static uint64_t boot_epoch = 0;//启动时的UTC Unix时间戳
 _Bool rtc_efi_available = false;//UEFI 运行时服务 GetTime 是否可用
+static uint64_t rtc_last_sync_ticks = 0;//上次用固件校准时的tick
+static _Bool    rtc_sync_done = false;//是否已校准过
 
 //读CMOS 寄存器
 static uint8_t cmos_read(uint8_t reg){
@@ -234,6 +236,21 @@ static _Bool rtc_read_efi(rtc_time_t *tm){
 	return true;
 }
 
+#define RTC_EFI_RESYNC_SEC 30
+
+static void rtc_efi_resync(void){
+	if (!rtc_efi_available) return;
+	uint64_t t = SYSTEM_TimerTicks;
+	if (rtc_sync_done && (t - rtc_last_sync_ticks) < (uint64_t)OS_TICK_HZ * RTC_EFI_RESYNC_SEC) return;
+	rtc_time_t tm;
+	if(!rtc_read_efi(&tm))return;
+	uint64_t e = date_to_epoch(tm.year,tm.month,tm.day,tm.hour,tm.minute,tm.second);
+	uint64_t sec = t / OS_TICK_HZ;
+	boot_epoch = (e > sec) ? (e - sec) : e;
+	rtc_last_sync_ticks = t;
+	rtc_sync_done = true;
+}
+
 void rtc_init(void){
 	rtc_time_t tm;
 	uint64_t raw_epoch;
@@ -250,11 +267,7 @@ void rtc_init(void){
 }
 
 uint64_t rtc_get_epoch(void){
-	if (rtc_efi_available) {
-		rtc_time_t tm;
-		if (rtc_read_efi(&tm))
-			return date_to_epoch(tm.year, tm.month, tm.day, tm.hour, tm.minute, tm.second);
-	}
+	rtc_efi_resync();
 	return boot_epoch + SYSTEM_TimerTicks / OS_TICK_HZ;
 }
 
@@ -263,12 +276,12 @@ void rtc_epoch_to_utc(uint64_t epoch, rtc_time_t *tm){
 }
 
 void rtc_get_utc(rtc_time_t *tm){
-	if (rtc_read_efi(tm)) return;
+	rtc_efi_resync();
 	epoch_to_date(rtc_get_epoch(), tm);
 }
 
 void rtc_get_local(rtc_time_t *tm){
-	if (rtc_read_efi(tm)) return;
+	rtc_efi_resync();
 	uint64_t local_epoch;
 	local_epoch = rtc_get_epoch() + TIMEZONE_OFFSET_HOURS * 3600;
 	epoch_to_date(local_epoch, tm);

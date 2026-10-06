@@ -280,6 +280,8 @@ static int ahci_dma_xfer(uint64_t lba, uint32_t count, void *buf, int write){
     return 0;
 }
 
+#define AHCI_MAX_SECTORS 1024 //单条命令最多扇区数
+
 // 读扇区
 static int ahci_disk_read(disk_info_t *d, uint64_t lba, uint32_t count, void *buf){
     (void)d;
@@ -289,7 +291,7 @@ static int ahci_disk_read(disk_info_t *d, uint64_t lba, uint32_t count, void *bu
     int r = 0;
     uint8_t *p = (uint8_t*)buf;
     while(count){
-        uint32_t chunk = count > 256 ? 256 : count;
+        uint32_t chunk = count > AHCI_MAX_SECTORS ? AHCI_MAX_SECTORS : count;//单条命令最多256扇区
         if(ahci_dma_xfer(lba, chunk, p, 0)){ r = -1; break; }
         lba += chunk;
         p += (uint64_t)chunk * 512;
@@ -308,7 +310,7 @@ static int ahci_disk_write(disk_info_t *d, uint64_t lba, uint32_t count, const v
     int r = 0;
     const uint8_t *p = (const uint8_t*)buf;
     while(count){
-        uint32_t chunk = count > 256 ? 256 : count;
+        uint32_t chunk = count > AHCI_MAX_SECTORS ? AHCI_MAX_SECTORS : count;//单条命令最多256扇区
         if(ahci_dma_xfer(lba, chunk, (void*)p, 1)){ r = -1; break; }
         lba += chunk;
         p += (uint64_t)chunk * 512;

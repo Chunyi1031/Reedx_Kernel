@@ -1,6 +1,7 @@
 #include <fs.h>
 #include <syscalls.h>
 #include <task.h>
+#include <mm/pagecache.h>
 
 static fs_node_t *fs_root = NULL;
 static spinlock_t g_fs_lock = {0};//全局文件系统锁
@@ -436,6 +437,7 @@ int FsRename(const char *oldpath, const char *newpath){
 }
 
 void FsInit(struct disk_info *disk){
+    PageCacheInit();//初始化文件页缓存
     //优先挂载FAT32,失败则回退ramfs
     if(disk && (fat32_mount(disk) == 0)){
         fs_root = fat32_root();

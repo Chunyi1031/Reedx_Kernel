@@ -1,6 +1,7 @@
 #include <fs.h>
 #include <drives/disk.h>
 #include <mm/pmm.h>
+#include <mm/pagecache.h>
 #include <mm/vmm.h>
 #include <print.h>
 #include <rtc.h>
@@ -111,12 +112,151 @@ typedef struct fat_node_priv {
     uint32_t pos_clu;     //顺序读缓存: 下次继续读的簇
     uint64_t pos_off;     //顺序读缓存: 下次继续读的文件偏移
     uint64_t pos_within;  //顺序读缓存: 该簇内的偏移
+    uint32_t it_pos;      //目录迭代游标: 已经走到第几个簇
+    uint32_t it_clu;      //目录迭代游标: 该簇号
+    uint32_t it_valid;    //目录迭代游标是否有效
 } fat_node_priv_t;
 
 static fat32_fs_t g_fat;
 static fs_node_ops_t fat_ops;
 
-//FAT扇区缓存
+/*DeepSeek-V4.1-Flash*/
+//目录项缓存
+#define FAT_DC_BUCKETS  1024
+#define FAT_DC_ENTRIES  4096
+#define FAT_DC_NAME_MAX 48
+#define FAT_DC_NIL      0xFFFFFFFFu
+
+typedef struct fat_dcache_ent {
+    uint32_t   dir_clu;     //父目录起始簇
+    uint32_t   hnext;       //哈希链
+    uint64_t   name_hash;   //完整项名哈希
+    uint32_t   name_len;    //完整项名长度
+    fs_node_t *node;        //命中节点+
+    char       name[FAT_DC_NAME_MAX];
+} fat_dcache_ent_t;
+
+static fat_dcache_ent_t *g_dc;
+static uint32_t *g_dc_hash;
+static uint32_t  g_dc_used;//已用条目数
+static uint32_t  g_dc_cursor;//环形替换游标
+static fs_node_t *g_root_node;//根目录节点
+
+static uint64_t fat_dc_hashname(const char *s){
+    uint64_t h = 1469598103934665603ULL;//FNV-1a
+    while(*s){ h ^= (uint8_t)*s++; h *= 1099511628211ULL; }
+    return h;
+}
+
+static void fat_dc_init(void){
+    if(g_dc) return;
+    int pages = (int)((sizeof(fat_dcache_ent_t) * FAT_DC_ENTRIES + PAGE_SIZE - 1) / PAGE_SIZE);
+    void *m = Pmm_Malloc(pages);
+    if(!m) return;
+    void *hb = Pmm_Malloc((FAT_DC_BUCKETS * (int)sizeof(uint32_t) + PAGE_SIZE - 1) / PAGE_SIZE);
+    if(!hb){ Pmm_Free(m, pages); return; }
+    g_dc = (fat_dcache_ent_t*)PHYS_TO_VIRT((uintptr_t)m);
+    g_dc_hash = (uint32_t*)PHYS_TO_VIRT((uintptr_t)hb);
+    memset(g_dc_hash, 0xFF, FAT_DC_BUCKETS * sizeof(uint32_t));
+    g_dc_used = 0;
+    g_dc_cursor = 0;
+}
+
+//把条目从哈希链上摘下(不回收节点)
+static void fat_dc_unlink(uint32_t i){
+    uint32_t b = (uint32_t)(g_dc[i].name_hash & (FAT_DC_BUCKETS - 1));
+    uint32_t *pp = &g_dc_hash[b];
+    while(*pp != FAT_DC_NIL){
+        if(*pp == i){ *pp = g_dc[i].hnext; break; }
+        pp = &g_dc[*pp].hnext;
+    }
+    g_dc[i].hnext = FAT_DC_NIL;
+}
+
+//查找: hit=1表示缓存命中(返回值可能为NULL, 即负缓存)
+static fs_node_t *fat_dc_lookup(uint32_t dir_clu, const char *name, uint64_t h, uint32_t len, int *hit){
+    *hit = 0;
+    if(!g_dc) return NULL;
+    uint32_t b = (uint32_t)(h & (FAT_DC_BUCKETS - 1));
+    for(uint32_t i = g_dc_hash[b]; i != FAT_DC_NIL; i = g_dc[i].hnext){
+        if(g_dc[i].dir_clu != dir_clu || g_dc[i].name_hash != h || g_dc[i].name_len != len) continue;
+        if(memcmp(g_dc[i].name, name, len) != 0) continue;
+        *hit = 1;
+        return g_dc[i].node;
+    }
+    return NULL;
+}
+
+static void fat_dc_store(uint32_t dir_clu, const char *name, uint64_t h, uint32_t len, fs_node_t *node){
+    if(!g_dc || len == 0 || len >= FAT_DC_NAME_MAX) return;
+    uint32_t b = (uint32_t)(h & (FAT_DC_BUCKETS - 1));
+    //同键已存在则只更新节点(避免同键多条目)
+    for(uint32_t i = g_dc_hash[b]; i != FAT_DC_NIL; i = g_dc[i].hnext){
+        if(g_dc[i].dir_clu == dir_clu && g_dc[i].name_hash == h && g_dc[i].name_len == len &&
+           memcmp(g_dc[i].name, name, len) == 0){ g_dc[i].node = node; return; }
+    }
+    uint32_t i;
+    if(g_dc_used < FAT_DC_ENTRIES){
+        i = g_dc_used++;
+    }else{
+        i = g_dc_cursor;
+        if(++g_dc_cursor >= FAT_DC_ENTRIES) g_dc_cursor = 0;
+        fat_dc_unlink(i);
+    }
+    g_dc[i].dir_clu = dir_clu;
+    g_dc[i].name_hash = h;
+    g_dc[i].name_len = len;
+    g_dc[i].node = node;
+    for(uint32_t k = 0; k < len; k++) g_dc[i].name[k] = name[k];
+    g_dc[i].name[len] = 0;
+    g_dc[i].hnext = g_dc_hash[b];
+    g_dc_hash[b] = i;
+}
+
+//使某目录下的一项失效
+static void fat_dc_drop(uint32_t dir_clu, const char *name){
+    if(!g_dc || !name || !*name) return;
+    uint64_t h = fat_dc_hashname(name);
+    uint32_t len = (uint32_t)strlen(name);
+    uint32_t b = (uint32_t)(h & (FAT_DC_BUCKETS - 1));
+    uint32_t *pp = &g_dc_hash[b];
+    while(*pp != FAT_DC_NIL){
+        uint32_t i = *pp;
+        if(g_dc[i].dir_clu == dir_clu && g_dc[i].name_hash == h && g_dc[i].name_len == len &&
+           memcmp(g_dc[i].name, name, len) == 0){ *pp = g_dc[i].hnext; g_dc[i].hnext = FAT_DC_NIL; break; }
+        pp = &g_dc[i].hnext;
+    }
+}
+
+static void fat_dc_clear(void){
+    if(!g_dc) return;
+    memset(g_dc_hash, 0xFF, FAT_DC_BUCKETS * sizeof(uint32_t));
+    g_dc_used = 0;
+    g_dc_cursor = 0;
+}
+
+//取目录节点的身份(起始簇)
+static uint32_t fat_dir_id(fs_node_t *dir){
+    if(!dir || !dir->priv) return 0;
+    return ((fat_node_priv_t*)dir->priv)->first_clu;
+}
+/*DeepSeek-V4.1-Flash-END*/
+
+//磁盘块缓存
+#define FAT_PAGE_SIZE    4096
+#define FAT_PAGE_BUDGET  (2 * 1024 * 1024)  //FAT页缓存上限(2MB)
+#define CLU_BUDGET       (256 * 1024)       //簇缓存上限(256KB)
+#define CLU_MAX_SLOTS    512
+
+static uint8_t  *g_fatpg_mem;       //FAT页缓存
+static uint32_t *g_fatpg_tag;       //页号+1，0=空
+static uint32_t  g_fatpg_slots;     //缓存的页数
+static uint32_t  g_fatpg_total;     //FAT总页数
+static uint8_t  *g_clu_mem;         //簇缓存
+static uint32_t *g_clu_tag;         //簇号+1，0=空
+static uint32_t  g_clu_slots;
+
+//单扇区FAT缓存
 static uint32_t g_fat_cache_lba = ~0u;
 static uint8_t  g_fat_cache[512];
 
@@ -125,19 +265,59 @@ static int fat_read_sectors(uint32_t lba, void *buf, uint32_t count){
     return DiskRead(g_fat.disk, lba, count, buf);
 }
 
+//定位FAT页缓存槽位
+static uint8_t *fat_page_slot(uint32_t pi){
+    uint32_t slot = pi % g_fatpg_slots;
+    if(g_fatpg_tag[slot] != pi + 1){
+        uint32_t per_page = FAT_PAGE_SIZE / g_fat.bps;
+        uint32_t first = pi * per_page;
+        uint32_t nsec = per_page;
+        if(first >= g_fat.fat_sz) return NULL;
+        if(first + nsec > g_fat.fat_sz) nsec = g_fat.fat_sz - first;
+        uint8_t *pg = g_fatpg_mem + (uint64_t)slot * FAT_PAGE_SIZE;
+        if(fat_read_sectors(g_fat.fat_start + first, pg, nsec)) return NULL;
+        g_fatpg_tag[slot] = pi + 1;
+    }
+    return g_fatpg_mem + (uint64_t)slot * FAT_PAGE_SIZE;
+}
+
 //读FAT表项
 static uint32_t fat_get_entry(uint32_t clu){
     uint32_t fat_off = clu * 4;
-    uint32_t fat_lba = g_fat.fat_start + fat_off / g_fat.bps;
-    if(fat_lba != g_fat_cache_lba){
-        if(fat_read_sectors(fat_lba, g_fat_cache, 1)) return 0;
-        g_fat_cache_lba = fat_lba;
+    //有缓存时
+    if(g_fatpg_slots){
+        uint32_t pi = fat_off / FAT_PAGE_SIZE;
+        if(pi >= g_fatpg_total)return 0;
+        uint8_t *pg = fat_page_slot(pi);//定位缓存槽位
+        if(!pg)return 0;
+        return *(uint32_t*)(pg + (fat_off % FAT_PAGE_SIZE)) & 0x0FFFFFFF;
     }
-    return *(uint32_t*)(g_fat_cache + fat_off % g_fat.bps) & 0x0FFFFFFF;
+    //缓存不可用，单扇区缓存
+    {
+        uint32_t fat_lba = g_fat.fat_start + fat_off / g_fat.bps;
+        if(fat_lba != g_fat_cache_lba){
+            if(fat_read_sectors(fat_lba, g_fat_cache, 1)) return 0;
+            g_fat_cache_lba = fat_lba;
+        }
+        return *(uint32_t*)(g_fat_cache + fat_off % g_fat.bps) & 0x0FFFFFFF;
+    }
 }
 
 //读一簇到簇缓冲
 static int fat_read_cluster(uint32_t clu){
+    if(clu < 2) return -1;
+    if(g_clu_slots){
+        uint32_t slot = clu % g_clu_slots;
+        uint8_t *dst = g_clu_mem + (uint64_t)slot * g_fat.bpc;
+        if(g_clu_tag[slot] == clu + 1){
+            memcpy(g_fat.cluster_buf, dst, g_fat.bpc);
+            return 0;
+        }
+        if(fat_read_sectors(g_fat.data_start + (clu - 2) * g_fat.spc, dst, g_fat.spc)) return -1;
+        g_clu_tag[slot] = clu + 1;
+        memcpy(g_fat.cluster_buf, dst, g_fat.bpc);
+        return 0;
+    }
     return fat_read_sectors(g_fat.data_start + (clu - 2) * g_fat.spc,g_fat.cluster_buf, g_fat.spc);
 }
 
@@ -148,6 +328,7 @@ static int fat_write_sectors(uint32_t lba, const void *buf, uint32_t count){
 
 //簇缓冲写回磁盘
 static int fat_write_cluster(uint32_t clu){
+    if(g_clu_slots && clu >= 2) g_clu_tag[clu % g_clu_slots] = 0;
     return fat_write_sectors(g_fat.data_start + (clu - 2) * g_fat.spc,g_fat.cluster_buf, g_fat.spc);
 }
 
@@ -163,8 +344,55 @@ static int fat_set_entry(uint32_t clu, uint32_t value){
     for(int f = 0; f < g_fat.nfats; f++){
         if(fat_write_sectors(fat_lba + (uint32_t)f * g_fat.fat_sz, sec, 1)) return -1;
     }
-    g_fat_cache_lba = ~0u;//FAT已修改, 使缓存失效
+    //FAT已修改，使缓存失效
+    g_fat_cache_lba = ~0u;
+    if(g_fatpg_slots) g_fatpg_tag[(fat_off / FAT_PAGE_SIZE) % g_fatpg_slots] = 0;
     return 0;
+}
+
+//分配并初始化块缓存
+static void fat_cache_init(void){
+    g_fatpg_slots = 0;
+    g_fatpg_total = 0;
+    g_clu_slots = 0;
+    if(g_fat.bps <= FAT_PAGE_SIZE && (FAT_PAGE_SIZE % g_fat.bps) == 0){
+        uint64_t bytes = (uint64_t)g_fat.fat_sz * g_fat.bps;
+        uint32_t total = (uint32_t)((bytes + FAT_PAGE_SIZE - 1) / FAT_PAGE_SIZE);
+        uint32_t slots = total;
+        uint32_t cap = FAT_PAGE_BUDGET / FAT_PAGE_SIZE;
+        if(slots > cap)slots = cap;
+        if(slots){
+            int np = (int)(((uint64_t)slots * FAT_PAGE_SIZE + PAGE_SIZE - 1) / PAGE_SIZE);
+            void *m = Pmm_Malloc(np);
+            void *t = m ? Pmm_Malloc((int)((slots * sizeof(uint32_t) + PAGE_SIZE - 1) / PAGE_SIZE)) : NULL;
+            if(m && t){
+                g_fatpg_mem = (uint8_t*)PHYS_TO_VIRT((uintptr_t)m);
+                g_fatpg_tag = (uint32_t*)PHYS_TO_VIRT((uintptr_t)t);
+                memset(g_fatpg_tag, 0, slots * sizeof(uint32_t));
+                g_fatpg_slots = slots;
+                g_fatpg_total = total;
+            }else{
+                if(m)Pmm_Free(m, np);
+            }
+        }
+    }
+    //簇缓存
+    {
+        uint32_t n = CLU_BUDGET / g_fat.bpc;
+        if(n > CLU_MAX_SLOTS) n = CLU_MAX_SLOTS;
+        if(n < 8) n = 8;
+        int np = (int)(((uint64_t)n * g_fat.bpc + PAGE_SIZE - 1) / PAGE_SIZE);
+        void *m = Pmm_Malloc(np);
+        void *t = m ? Pmm_Malloc((int)((n * sizeof(uint32_t) + PAGE_SIZE - 1) / PAGE_SIZE)) : NULL;
+        if(m && t){
+            g_clu_mem = (uint8_t*)PHYS_TO_VIRT((uintptr_t)m);
+            g_clu_tag = (uint32_t*)PHYS_TO_VIRT((uintptr_t)t);
+            memset(g_clu_tag, 0, n * sizeof(uint32_t));
+            g_clu_slots = n;
+        }else{
+            if(m)Pmm_Free(m, np);
+        }
+    }
 }
 
 //扫描FAT寻找空闲簇
@@ -445,18 +673,32 @@ static int fat_find_dirent(fs_node_t *dir, const char *name, uint32_t *out_clus,
 
 //目录查找
 static fs_node_t *fat_lookup(fs_node_t *dir, const char *name){
+    if(!dir || !dir->priv || !name || !*name)return NULL;
+    uint32_t dir_clu = fat_dir_id(dir);
+    uint64_t h = fat_dc_hashname(name);
+    uint32_t len = (uint32_t)strlen(name);
+    int hit = 0;
+    if(dir_clu >= 2){
+        fs_node_t *c = fat_dc_lookup(dir_clu, name, h, len, &hit);
+        if(hit)return c;
+    }
     uint32_t clu, off;
-    if(fat_find_dirent(dir, name, &clu, &off) != 0)return NULL;
+    if(fat_find_dirent(dir, name, &clu, &off) != 0){
+        if(dir_clu >= 2)fat_dc_store(dir_clu, name, h, len, NULL);
+        return NULL;
+    }
     if(fat_read_cluster(clu))return NULL;
     fat_dir_entry_t *de = (fat_dir_entry_t*)(g_fat.cluster_buf + off);
     uint32_t first = ((uint32_t)de->fst_clus_hi << 16) | de->fst_clus_lo;
     uint32_t size = de->file_size;
     int type = (de->attr & FAT_ATTR_DIRECTORY) ? FT_DIR : FT_FILE;
-    return fat_new_node(name, type, first, size, clu, off);
+    fs_node_t *n = fat_new_node(name, type, first, size, clu, off);
+    if(n && dir_clu >= 2)fat_dc_store(dir_clu, name, h, len, n);
+    return n;
 }
 
-//文件读取
-static uint64_t fat_read(fs_node_t *node, uint64_t off, void *buf, uint64_t len){
+//文件直接读盘读取
+static uint64_t fat_read_direct(fs_node_t *node, uint64_t off, void *buf, uint64_t len){
     if(!node || !node->priv)return 0;
     fat_node_priv_t *p = (fat_node_priv_t*)node->priv;
     if(off >= p->size)return 0;
@@ -498,7 +740,7 @@ static uint64_t fat_read(fs_node_t *node, uint64_t off, void *buf, uint64_t len)
         //探测连续簇长度
         uint32_t run = 1;
         uint32_t probe = clu;
-        uint32_t max_run = 256 / g_fat.spc;
+        uint32_t max_run = 512 / g_fat.spc;
         while(run < max_run){
             uint32_t nxt = fat_get_entry(probe);
             if(nxt != probe + 1) break;
@@ -529,6 +771,29 @@ static uint64_t fat_read(fs_node_t *node, uint64_t off, void *buf, uint64_t len)
     p->pos_clu = clu;
     p->pos_within = within;
     return done;
+}
+
+//页缓存填充回调
+static uint64_t fat_pcache_fill(void *ctx, uint64_t off, void *buf, uint64_t len){
+    return fat_read_direct((fs_node_t*)ctx, off, buf, len);
+}
+
+//文件读取
+static uint64_t fat_read(fs_node_t *node, uint64_t off, void *buf, uint64_t len){
+    if(!node || !node->priv)return 0;
+    fat_node_priv_t *p = (fat_node_priv_t*)node->priv;
+    if(off >= p->size)return 0;
+    //计算页缓存可覆盖部分
+    uint64_t want = len;
+    if(want > p->size - off)want = p->size - off;
+    if(node->type == FT_FILE && PageCacheReady()){
+        uint64_t done = PageCacheRead(node->ino, off, buf, want, p->size, fat_pcache_fill, node);
+        if(done == want)return done;
+        //缓存未能覆盖全部
+        uint64_t rest = fat_read_direct(node, off + done, (uint8_t*)buf + done, want - done);
+        return done + rest;
+    }
+    return fat_read_direct(node, off, buf, want);
 }
 
 //文件写入
@@ -579,6 +844,7 @@ static uint64_t fat_write(fs_node_t *node, uint64_t off, const void *buf, uint64
         node->size = p->size;
     }
     fat_update_dirent(p);
+    if(done)PageCacheInvalidateRange(node->ino, base, done);//写入的区间已失效，丢弃对应缓存页
     return done;
 }
 
@@ -655,7 +921,15 @@ static fs_node_t *fat_create(fs_node_t *dir, const char *name, int type){
     if(!g_fat.disk || !dir || !dir->priv)return NULL;
     uint32_t clu, off;
     if(fat_alloc_dirent(dir, name, type, 0, &clu, &off))return NULL;
-    return fat_new_node(name, type, 0, 0, clu, off);
+    PageCacheInvalidate(((uint64_t)clu << 32) | off);//新文件占用复用的槽位，丢弃残留缓存
+    fs_node_t *n = fat_new_node(name, type, 0, 0, clu, off);
+    //去掉可能的负缓存并登记新节点
+    uint32_t dir_clu = fat_dir_id(dir);
+    if(dir_clu >= 2){
+        fat_dc_drop(dir_clu, name);
+        if(n)fat_dc_store(dir_clu, name, fat_dc_hashname(name), (uint32_t)strlen(name), n);
+    }
+    return n;
 }
 
 //截断/扩展文件
@@ -698,6 +972,7 @@ static int fat_truncate(fs_node_t *node, uint64_t newsize){
     p->pos_off = 0;
     p->pos_within = 0;
     fat_update_dirent(p);
+    PageCacheInvalidate(node->ino);//大小与内容都可能变化，整文件缓存作废
     return 0;
 }
 
@@ -754,7 +1029,9 @@ static int fat_mkdir(fs_node_t *dir, const char *name, int mode){
     if(fat_write_cluster(newclu)) return -1;
     //在父目录分配目录项
     uint32_t clu, off;
-    return fat_alloc_dirent(dir, name, FT_DIR, newclu, &clu, &off);
+    int r = fat_alloc_dirent(dir, name, FT_DIR, newclu, &clu, &off);
+    if(r == 0)fat_dc_drop(fat_dir_id(dir), name);//新增了目录项，负缓存作废
+    return r;
 }
 
 /*DeepSeek V4.1 Flash*/
@@ -792,6 +1069,8 @@ static int fat_unlink(fs_node_t *dir, const char *name){
     de = (fat_dir_entry_t*)(g_fat.cluster_buf + off);
     //释放文件/目录的簇链
     if(first >= 2) fat_free_chain(first);
+    PageCacheInvalidate(((uint64_t)clu << 32) | off);//丢弃此标识下的页缓存
+    fat_dc_drop(fat_dir_id(dir), name);//目录项缓存作废
     //标记短条目及其前面的LFN条目为已删除
     de->name[0] = FAT_DIRENT_FREE;
     uint32_t lfn_off = off;
@@ -836,6 +1115,10 @@ static int fat_rename(fs_node_t *olddir, const char *oldname, fs_node_t *newdir,
     if(fat_write_cluster(new_clus)) return -1;
     //释放旧目录项
     if(fat_read_cluster(old_clus)) return -1;
+    PageCacheInvalidate(((uint64_t)old_clus << 32) | old_off);//丢弃旧标识下的页缓存
+    //两侧的键都作废
+    fat_dc_drop(fat_dir_id(olddir), oldname);
+    fat_dc_drop(fat_dir_id(newdir), newname);
     ode = (fat_dir_entry_t*)(g_fat.cluster_buf + old_off);
     ode->name[0] = FAT_DIRENT_FREE;
     uint32_t lfn_off = old_off;
@@ -853,12 +1136,26 @@ static int fat_dir_entry_at(fat_node_priv_t *dp, uint32_t idx, uint32_t *clu, ui
     uint32_t epp = g_fat.bpc / sizeof(fat_dir_entry_t);//每簇目录项数
     uint32_t cluster_idx = idx / epp;
     uint32_t within = idx % epp;
-    uint32_t c = dp->first_clu;
-    for(uint32_t i = 0; i < cluster_idx; i++){
+    uint32_t c, steps;
+    if(dp->it_valid && dp->it_pos <= cluster_idx && cluster_idx - dp->it_pos < 4096){
+        c = dp->it_clu;
+        steps = cluster_idx - dp->it_pos;
+    }else{
+        c = dp->first_clu;
+        steps = cluster_idx;
+    }
+    while(steps--){
         uint32_t nxt = fat_get_entry(c);
-        if(nxt < 2 || nxt >= FAT_CLUSTER_EOF)return -1;
+        if(nxt < 2 || nxt >= FAT_CLUSTER_EOF){
+            dp->it_valid = 0;
+            return -1;
+        }
         c = nxt;
     }
+    if(c < 2 || c >= FAT_CLUSTER_EOF){ dp->it_valid = 0; return -1; }
+    dp->it_pos = cluster_idx;
+    dp->it_clu = c;
+    dp->it_valid = 1;
     *clu = c;
     *off = within * sizeof(fat_dir_entry_t);
     return 0;
@@ -981,6 +1278,9 @@ static fs_node_ops_t fat_ops = {
 int fat32_mount(struct disk_info *disk){
     if(!disk) return 1;
     memset(&g_fat, 0, sizeof(g_fat));
+    g_root_node = NULL;
+    fat_dc_init();
+    fat_dc_clear();
     //拷贝磁盘信息到自身
     g_fat.disk_copy = *disk;
     g_fat.disk = &g_fat.disk_copy;
@@ -1005,10 +1305,12 @@ int fat32_mount(struct disk_info *disk){
     //分配簇缓冲
     g_fat.cluster_buf = (uint8_t*)PHYS_TO_VIRT((uintptr_t)Pmm_Malloc((int)((g_fat.bpc + 4095) / 4096)));
     if(!g_fat.cluster_buf)return 4;
+    fat_cache_init();//分配FAT页缓存与簇缓存
     return 0;
 }
 
 //FAT32根目录节点
 fs_node_t *fat32_root(void){
-    return fat_new_node("/", FT_DIR, g_fat.root_clu, 0, 0, 0);
+    if(!g_root_node)g_root_node = fat_new_node("/", FT_DIR, g_fat.root_clu, 0, 0, 0);
+    return g_root_node;
 }
