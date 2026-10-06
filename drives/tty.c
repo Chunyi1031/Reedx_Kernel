@@ -725,7 +725,7 @@ flush:
     }
 }
 
-//导出为老式 struct termios(glibc x86_64 布局60字节)
+//导出为内核 struct termios(TCGETS): 36字节, 只有 iflag..lflag + line + cc[19]
 void TTY_TermExportLegacy(void *dst){
     tty_termios_legacy_t *u = (tty_termios_legacy_t*)dst;
     memset(u, 0, sizeof(*u));
@@ -734,9 +734,7 @@ void TTY_TermExportLegacy(void *dst){
     u->cflag = g_tty_term.cflag;
     u->lflag = g_tty_term.lflag;
     u->line  = g_tty_term.line;
-    memcpy(u->cc, g_tty_term.cc, 19);//NCCS=19, 其余保持0
-    u->ispeed = g_tty_term.ispeed;
-    u->ospeed = g_tty_term.ospeed;
+    memcpy(u->cc, g_tty_term.cc, 19);//NCCS=19
 }
 
 //导出为 struct termios2(glibc TCGETS2, 44字节)

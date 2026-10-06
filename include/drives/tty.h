@@ -66,9 +66,11 @@ struct tty_winsize { uint16_t ws_row, ws_col, ws_xpixel, ws_ypixel; };
 
 #define TTY_LINE_MAX 256
 
-//用户侧结构布局(与glibc一致; packed避免对齐填充差异)
-typedef struct __attribute__((packed)) { uint32_t iflag,oflag,cflag,lflag; uint8_t line; uint8_t cc[19]; uint32_t ispeed,ospeed; } tty_termios2_t;//44字节(TCGETS2)
-typedef struct __attribute__((packed)) { uint32_t iflag,oflag,cflag,lflag; uint8_t line; uint8_t cc[32]; uint8_t pad[3]; uint32_t ispeed,ospeed; } tty_termios_legacy_t;//60字节(TCGETS)
+//用户侧结构布局
+typedef struct __attribute__((packed)) { uint32_t iflag,oflag,cflag,lflag; uint8_t line; uint8_t cc[19]; uint32_t ispeed,ospeed; } tty_termios2_t;
+typedef struct __attribute__((packed)) { uint32_t iflag,oflag,cflag,lflag; uint8_t line; uint8_t cc[19]; } tty_termios_legacy_t;
+_Static_assert(sizeof(tty_termios2_t) == 44, "termios2 ABI must be 44 bytes");
+_Static_assert(sizeof(tty_termios_legacy_t) == 36, "kernel termios ABI must be 36 bytes");
 
 extern ktermios_t g_tty_term;
 long TTY_TermRead(char *kbuf, long count);//行规程读取: 返回字节数; Ctrl+D空行返回0; Ctrl+C返回-EINTR

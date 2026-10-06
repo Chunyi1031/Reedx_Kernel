@@ -124,6 +124,7 @@ static int resolve_parent(const char *path, fs_node_t **parent, char name[MAX_NA
 static int fs_open_node(fs_node_t *node, int flags, fs_file_t *out){
     if(!out || !node)return -EINVAL;
     if(node->type != FT_FILE && node->type != FT_DIR)return -EINVAL;
+    if((flags & O_DIRECTORY) && node->type != FT_DIR)return -ENOTDIR;
     //目录只能以只读方式打开(POSIX: EISDIR)
     if(node->type == FT_DIR && (flags & O_ACCMODE) != O_RDONLY)return -EISDIR;
     if(flags & O_TRUNC){

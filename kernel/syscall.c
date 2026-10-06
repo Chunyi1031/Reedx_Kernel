@@ -1523,6 +1523,127 @@ static long sys_poll(long fds, long nfds, long timeout, long a4, long a5, long a
 }
 
 /*
+ * int select(int nfds, fd_set *r, fd_set *w, fd_set *e, struct timeval *timeout)
+ * int pselect6(int nfds, fd_set *r, fd_set *w, fd_set *e, const struct timespec *ts, const sigset_t *mask)
+ * 复用 poll 的就绪判定: 控制台按 TTY_ReadReady 判定, 管道按 pipeReady, 普通文件恒就绪
+ */
+#define KSEL_BYTES 128//fd_set = 1024bit
+#define KSEL_IN    0x1
+#define KSEL_OUT   0x2
+#define KSEL_EXC   0x4
+
+//返回0表示fd有效, *revents 填入已就绪事件; 返回-1表示fd无效
+static int sel_fd_check(long fd, int want, int *revents){
+	int rv = 0;
+	if(!current_task || fd < 0 || fd >= MAX_FD){
+		*revents = 0;
+		return -1;
+	}
+	_Bool con_in = false, con_out = false;
+	if(fd < 3 && !current_task->files[fd].used){
+		con_in = con_out = true;//标准输入输出默认就是控制台
+	}else if(fd_is_console(fd)){
+		int acc = current_task->files[fd].flags & O_ACCMODE;
+		con_in  = (acc != O_WRONLY);
+		con_out = (acc != O_RDONLY);
+	}
+	if(con_in || con_out){
+		if(con_in && TTY_ReadReady())rv |= KSEL_IN;
+		if(con_out)rv |= KSEL_OUT;
+	}else if(current_task->files[fd].used){
+		int acc = current_task->files[fd].flags & O_ACCMODE;
+		if(current_task->files[fd].pipe){
+			int pr = pipeReady((struct pipe*)current_task->files[fd].pipe);
+			if((pr & 1) && acc != O_WRONLY)rv |= KSEL_IN;
+			if((pr & 2) && acc != O_RDONLY)rv |= KSEL_OUT;
+		}else{//普通文件/设备: 恒就绪
+			if(acc != O_WRONLY)rv |= KSEL_IN;
+			if(acc != O_RDONLY)rv |= KSEL_OUT;
+		}
+	}else{
+		*revents = 0;
+		return -1;
+	}
+	*revents = rv & want;
+	return 0;
+}
+
+static long select_common(long nfds, long rfd, long wfd, long efd, uint64_t timeout_ms, _Bool have_timeout){
+	if(nfds < 0)return -EINVAL;
+	unsigned char rb[KSEL_BYTES], wb[KSEL_BYTES], eb[KSEL_BYTES];
+	unsigned char ro[KSEL_BYTES], wo[KSEL_BYTES], eo[KSEL_BYTES];
+	memset(rb, 0, sizeof(rb)); memset(wb, 0, sizeof(wb)); memset(eb, 0, sizeof(eb));
+	unsigned long nset = ((unsigned long)nfds + 7) / 8;
+	if(nset > KSEL_BYTES)nset = KSEL_BYTES;
+	if(rfd && copy_from_user(rb, (void*)rfd, nset))return -EFAULT;
+	if(wfd && copy_from_user(wb, (void*)wfd, nset))return -EFAULT;
+	if(efd && copy_from_user(eb, (void*)efd, nset))return -EFAULT;
+	uint64_t waited = 0;
+	for(;;){
+		memset(ro, 0, sizeof(ro)); memset(wo, 0, sizeof(wo)); memset(eo, 0, sizeof(eo));
+		int cnt = 0;
+		long lim = nfds < MAX_FD ? nfds : MAX_FD;
+		for(long fd = 0; fd < lim; fd++){
+			int want = 0;
+			if(rfd && (rb[fd >> 3] & (1 << (fd & 7))))want |= KSEL_IN;
+			if(wfd && (wb[fd >> 3] & (1 << (fd & 7))))want |= KSEL_OUT;
+			if(efd && (eb[fd >> 3] & (1 << (fd & 7))))want |= KSEL_EXC;
+			if(!want)continue;
+			int rv = 0;
+			if(sel_fd_check(fd, want | KSEL_EXC, &rv) < 0)continue;//无效fd: 不置位
+			if(rv & KSEL_IN){ ro[fd >> 3] |= (unsigned char)(1 << (fd & 7)); cnt++; }
+			if(rv & KSEL_OUT){ wo[fd >> 3] |= (unsigned char)(1 << (fd & 7)); cnt++; }
+			if(rv & KSEL_EXC){ eo[fd >> 3] |= (unsigned char)(1 << (fd & 7)); cnt++; }
+		}
+		if(cnt > 0){
+			if(rfd && copy_to_user((void*)rfd, ro, nset))return -EFAULT;
+			if(wfd && copy_to_user((void*)wfd, wo, nset))return -EFAULT;
+			if(efd && copy_to_user((void*)efd, eo, nset))return -EFAULT;
+			return cnt;
+		}
+		if(have_timeout && timeout_ms == 0)return 0;
+		if(SignalPending())return -EINTR;
+		uint64_t step = 2;
+		if(have_timeout){
+			uint64_t left = timeout_ms - waited;
+			if(left < step)step = left;
+			if(step == 0)step = 1;
+		}
+		msleep(step);
+		waited += step;
+		if(have_timeout && waited >= timeout_ms)return 0;
+	}
+}
+
+static long sys_select(long nfds, long rfd, long wfd, long efd, long timeout, long a6){
+	(void)a6;
+	uint64_t ms = 0;
+	_Bool have = false;
+	if(timeout){
+		struct { long sec; long usec; } tv;
+		if(copy_from_user(&tv, (void*)timeout, sizeof(tv)))return -EFAULT;
+		if(tv.sec < 0 || tv.usec < 0)return -EINVAL;
+		ms = (uint64_t)tv.sec * 1000 + (uint64_t)(tv.usec / 1000);
+		have = true;
+	}
+	return select_common(nfds, rfd, wfd, efd, ms, have);
+}
+
+static long sys_pselect6(long nfds, long rfd, long wfd, long efd, long tsp, long a6){
+	(void)a6;//sigmask 暂不支持(不阻塞待投递信号)
+	uint64_t ms = 0;
+	_Bool have = false;
+	if(tsp){
+		struct { long sec; long nsec; } ts;
+		if(copy_from_user(&ts, (void*)tsp, sizeof(ts)))return -EFAULT;
+		if(ts.sec < 0 || ts.nsec < 0)return -EINVAL;
+		ms = (uint64_t)ts.sec * 1000 + (uint64_t)(ts.nsec / 1000000);
+		have = true;
+	}
+	return select_common(nfds, rfd, wfd, efd, ms, have);
+}
+
+/*
  * int rt_sigaction(int signum, const struct sigaction *act, struct sigaction *oldact, size_t sigsetsize)
  * 存储信号动作表
  */
@@ -2031,6 +2152,8 @@ void InitSyscall(void){
 	syscall_table[SYS_CLOCK_NANOSLEEP] = sys_clock_nanosleep;
 	syscall_table[SYS_NANOSLEEP]  = sys_nanosleep;
 	syscall_table[SYS_POLL]       = sys_poll;
+	syscall_table[SYS_SELECT]     = sys_select;
+	syscall_table[SYS_PSELECT6]   = sys_pselect6;
 	syscall_table[SYS_RT_SIGACTION]     = sys_rt_sigaction;
 	syscall_table[SYS_RT_SIGPROCMASK]   = sys_rt_sigprocmask;
 	syscall_table[SYS_RT_SIGRETURN]     = sys_rt_sigreturn;

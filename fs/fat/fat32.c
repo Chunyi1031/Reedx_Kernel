@@ -542,16 +542,19 @@ static void to_83(const char *name, char *base, char *ext){
     int i;
     for(i = 0; i < 8; i++)base[i] = ' ';
     for(i = 0; i < 3; i++)ext[i] = ' ';
-    i = 0;
-    while(name[i] && name[i] != '.' && i < 8){
-        base[i] = (name[i] >= 'a' && name[i] <= 'z') ? name[i] - 32 : name[i];
-        i++;
+    const char *dot = 0;
+    for(const char *p = name; *p; p++){
+        if(*p == '.' && p != name)dot = p;
     }
-    const char *dot = name;
-    while(*dot && *dot != '.')dot++;
-    if(*dot == '.'){
-        dot++;
-        for(int j = 0; j < 3 && dot[j]; j++)ext[j] = (dot[j] >= 'a' && dot[j] <= 'z') ? dot[j] - 32 : dot[j];
+    i = 0;
+    for(const char *p = name; *p && p != dot && i < 8; p++, i++){
+        base[i] = (*p >= 'a' && *p <= 'z') ? (char)(*p - 32) : *p;
+    }
+    if(dot){
+        int j = 0;
+        for(const char *p = dot + 1; *p && j < 3; p++, j++){
+            ext[j] = (*p >= 'a' && *p <= 'z') ? (char)(*p - 32) : *p;
+        }
     }
 }
 
@@ -564,17 +567,21 @@ static uint8_t fat_lfn_checksum(const uint8_t shortname[11]){
 
 //判断名字是否需要LFN
 static int fat_needs_lfn(const char *name){
-    int i = 0, dot = -1;
+    int i = 0, dot = -1, ndots = 0;
     for(; name[i]; i++){
         if(name[i] == '.'){
-            if(dot < 0) dot = i;
-            else return 1;//多个点
+            //首字符的'.'不当作扩展名分隔符
+            if(i > 0){
+                dot = i;
+                ndots++;
+            }
         }else if(name[i] >= 'a' && name[i] <= 'z'){
             return 1;//小写字母需LFN保留原样
         }else if(!((name[i] >= 'A' && name[i] <= 'Z') || (name[i] >= '0' && name[i] <= '9') || name[i] == '_' || name[i] == '-' || name[i] == ' ')){
             return 1;//非8.3合法字符
         }
     }
+    if(ndots > 1)return 1;//主名里再出现'.'无法用8.3表达
     int base = dot < 0 ? i : dot;
     int ext = dot < 0 ? 0 : i - dot - 1;
     if(base > 8 || ext > 3) return 1;
