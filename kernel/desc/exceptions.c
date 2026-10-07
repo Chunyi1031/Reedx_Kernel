@@ -2,6 +2,8 @@
  * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
  * kernel/desc/exceptions.c — 异常分发与注册
+ * 
+ * Copyright (C) 2026 Liu Chunyi
  */
 
 #include <idt.h>

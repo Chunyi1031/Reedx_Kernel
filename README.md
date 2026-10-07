@@ -1,11 +1,15 @@
-# Reedx Beta 0.0.1 Pre-realese
+# Reedx Beta 0.0.1
 
 [English](README_en.md) | 中文
 
 ## 简介
 - Reedx是一个完全使用C语言编写的类`Unix`宏内核,严格按照POSIX标准,可以运行基本的Unix程序,当前版本为测试版
 - 目前仅支持`x86-64`架构，使用固定的UEFI引导程序启动(`data/BOOTX64.EFI`)启动，内核为ELF文件,目前必须将所有文件放在ESP分区中，目前仅支持`FAT32`文件系统
-- 目前支持的硬件驱动有`PS/2键盘驱动`,`ATA(IDE)驱动`,`SATA(AHCI)驱动`,`NVMe驱动`
+- 目前支持的硬件驱动有`PS/2键盘驱动`,`ATA(IDE)驱动`,`SATA(AHCI)驱动`,`NVMe驱动`,`Intel VMD驱动`
+
+[源代码仓库](https://github.com/Chunyi1031/Reedx_Kernel)
+
+## [开源许可证](LICENSE)
 
 ## API接口
 
@@ -44,6 +48,7 @@
 | 20  | `writev` | 从多个缓冲区聚集写入 |
 | 21  | `access` | 检查文件可访问性 |
 | 22  | `pipe` | 创建管道 |
+| 23  | `select` | I/O 多路复用（等待 fd 可读/可写/异常） |
 | 32  | `dup` | 复制文件描述符 |
 | 33  | `dup2` | 复制到指定 fd 号 |
 | 72  | `fcntl` | 文件描述符控制（复制 / 文件锁 / 管道大小） |
@@ -71,6 +76,8 @@
 | 267 | `readlinkat` | 相对 dirfd 读取链接 |
 | 268 | `fchmodat` | 相对 dirfd 修改权限 |
 | 269 | `faccessat` | 相对 dirfd 检查权限 |
+| 270 | `pselect6` | I/O 多路复用（带信号掩码） |
+| 271 | `ppoll` | 等待 fd 事件（带信号掩码，纳秒超时） |
 | 280 | `utimensat` | 设置文件时间戳 |
 | 292 | `dup3` | 复制 fd（带 flags） |
 | 293 | `pipe2` | 创建管道（带 flags） |
@@ -139,6 +146,8 @@
 | 104 | `getgid` | 获取组 ID |
 | 107 | `geteuid` | 获取有效用户 ID |
 | 108 | `getegid` | 获取有效组 ID |
+| 118 | `getresuid` | 获取真实/有效/保存的用户 ID |
+| 120 | `getresgid` | 获取真实/有效/保存的组 ID |
 | 157 | `prctl` | 进程控制 |
 | 169 | `reboot` | 重启 / 关机 / 停机 |
 | 202 | `futex` | 快速用户态互斥（`FUTEX_WAIT`/`FUTEX_WAKE`） |
@@ -164,6 +173,14 @@
 
 ### 内核启动参数
 ```c
+typedef struct {
+  UINT32                  Type;
+  EFI_PHYSICAL_ADDRESS    PhysicalStart;
+  EFI_VIRTUAL_ADDRESS     VirtualStart;
+  UINT64                  NumberOfPages;
+  UINT64                  Attribute;
+} EFI_MEMORY_DESCRIPTOR;
+
 typedef struct memory_info {
     UINT64 MapSize;
     UINT64 DescriptorSize;
@@ -202,13 +219,50 @@ typedef struct boot_param {
 }__attribute__((packed)) boot_param_t;
 ```
 
-## 构建
-|项目|要求|
-|-------|---------|
-|操作系统|Linux发行版|
-|构建工具|`gcc-x86-64-linux-gnu`,`GNU-Make`|
+## 编译，安装及运行
+- 此系统所有组件必须安装在ESP分区，ESP分区为FAT32格式
+- 注意：此内核还在开发阶段，不建议作为主力操作系统的内核
 
-- 构建命令见`make help`
+### ESP分区目录结构（使用默认引导程序）
+```text
+/
+├─EFI
+| └─BOOT
+|   ├─BOOTX64.EFI
+|   └─BOOT.CFG
+└─SYS
+  └─KERNEL.ELF
+```
+
+### `init`加载顺序
+
+1.`/sbin/init`
+
+2.`/bin/init`
+
+### 编译
+
+所需软件包：
+
+- `build-essential`
+- `binutils`
+- `gcc-x86-64-linux-gnu`
+
+构建命令见`make help`
+
+### 虚拟机测试（可选）
+
+所需软件包：
+
+- `coreutils`
+- `parted`
+- `util-linux`
+- `dosfstools`
+- `util-linux`
+- `udisks2`
+- `qemu-system-x86_64`
+- Linux内核`kvm`模块
+- `OVMF.fd`固件，需放在源代码根目录
 
 ## 参与开发:
 - Liu Chunyi(67%)

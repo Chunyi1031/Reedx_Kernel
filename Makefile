@@ -55,7 +55,7 @@ script-dir := scripts
 KBUILD_CFLAGS := -I$(srctree) -I$(srctree)/include
 # 内核基础标志
 KBUILD_CFLAGS += -ffreestanding -fno-stack-protector -mno-red-zone
-KBUILD_CFLAGS += -fno-builtin -nostdlib -m64 -g
+KBUILD_CFLAGS += -fno-builtin -nostdlib -m64
 KBUILD_CFLAGS += -Wall -Wno-unused-function -Wno-unused-variable -O0
 
 # 链接标志

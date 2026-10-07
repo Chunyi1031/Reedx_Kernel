@@ -5,7 +5,9 @@ English | [中文](README.md)
 ## Introduction
 - Reedx is a Unix-like macrokernel written entirely in C, strictly following the POSIX standard. It can run basic Unix programs. The current version is a beta release.
 - Currently only the `x86-64` architecture is supported. It boots via a fixed UEFI bootloader (`data/BOOTX64.EFI`). The kernel is an ELF file. Currently all files must be placed in the ESP partition, and only the `FAT32` file system is supported.
-- Currently supported hardware drivers include: `PS/2 keyboard driver`, `ATA (IDE) driver`, `SATA (AHCI) driver`, `NVMe driver`.
+- Currently supported hardware drivers include: `PS/2 keyboard driver`, `ATA (IDE) driver`, `SATA (AHCI) driver`, `NVMe driver`, `Intel VMD driver`.
+
+## [License](LICENSE)
 
 ## API Interface
 
@@ -44,6 +46,7 @@ English | [中文](README.md)
 | 20  | `writev` | Gather write from multiple buffers |
 | 21  | `access` | Check file accessibility |
 | 22  | `pipe` | Create a pipe |
+| 23  | `select` | I/O multiplexing (wait for fds to be readable/writable) |
 | 32  | `dup` | Duplicate a file descriptor |
 | 33  | `dup2` | Duplicate to a specified fd number |
 | 72  | `fcntl` | File descriptor control (duplicate / file locks / pipe size) |
@@ -71,6 +74,8 @@ English | [中文](README.md)
 | 267 | `readlinkat` | Read link relative to dirfd |
 | 268 | `fchmodat` | Change permissions relative to dirfd |
 | 269 | `faccessat` | Check permissions relative to dirfd |
+| 270 | `pselect6` | I/O multiplexing (with signal mask) |
+| 271 | `ppoll` | Wait for fd events (with signal mask, nanosecond timeout) |
 | 280 | `utimensat` | Set file timestamps |
 | 292 | `dup3` | Duplicate fd (with flags) |
 | 293 | `pipe2` | Create pipe (with flags) |
@@ -139,6 +144,8 @@ English | [中文](README.md)
 | 104 | `getgid` | Get group ID |
 | 107 | `geteuid` | Get effective user ID |
 | 108 | `getegid` | Get effective group ID |
+| 118 | `getresuid` | Get real/effective/saved user IDs |
+| 120 | `getresgid` | Get real/effective/saved group IDs |
 | 157 | `prctl` | Process control |
 | 169 | `reboot` | Reboot / power off / halt |
 | 202 | `futex` | Fast userspace mutex (`FUTEX_WAIT`/`FUTEX_WAKE`) |
@@ -164,6 +171,14 @@ English | [中文](README.md)
 
 ### Kernel Boot Parameters
 ```c
+typedef struct {
+  UINT32                  Type;
+  EFI_PHYSICAL_ADDRESS    PhysicalStart;
+  EFI_VIRTUAL_ADDRESS     VirtualStart;
+  UINT64                  NumberOfPages;
+  UINT64                  Attribute;
+} EFI_MEMORY_DESCRIPTOR;
+
 typedef struct memory_info {
     UINT64 MapSize;
     UINT64 DescriptorSize;
@@ -202,13 +217,52 @@ typedef struct boot_param {
 }__attribute__((packed)) boot_param_t;
 ```
 
-## Building
-| Item | Requirement |
-|------|-------------|
-| Operating System | Linux distribution |
-| Build Tools | `gcc-x86-64-linux-gnu`, `GNU-Make` |
+## Compilation, Installation, and Running
 
-- For build commands, see `make help`
+- All components of this system must be installed in the ESP partition, and the ESP partition must be in FAT32 format.
+- Note: This kernel is still in the development stage and is not recommended as the kernel of a primary operating system.
+
+### ESP Partition Directory Structure (Using the Default Bootloader)
+
+```text
+/
+├─EFI
+| └─BOOT
+|   ├─BOOTX64.EFI
+|   └─BOOT.CFG
+└─SYS
+  └─KERNEL.ELF
+```
+
+### `init` Loading Order
+
+1. `/sbin/init`
+
+2. `/bin/init`
+
+### Compilation
+
+Required packages:
+
+- `build-essential`
+- `binutils`
+- `gcc-x86-64-linux-gnu`
+
+For build commands, see `make help`.
+
+### Virtual Machine Testing (Optional)
+
+Required packages:
+
+- `coreutils`
+- `parted`
+- `util-linux`
+- `dosfstools`
+- `util-linux`
+- `udisks2`
+- `qemu-system-x86_64`
+- Linux kernel `kvm` module
+- `OVMF.fd` firmware, which must be placed in the source code root directory
 
 ## Participants:
 - Liu Chunyi(67%)
