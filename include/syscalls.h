@@ -68,6 +68,8 @@
 #define SYS_SETPGID         109
 #define SYS_GETPPID         110
 #define SYS_GETPGRP         111
+#define SYS_GETRESUID       118
+#define SYS_GETRESGID       120
 #define SYS_GETPGID         121
 #define SYS_SIGALTSTACK     131
 #define SYS_PRCTL           157

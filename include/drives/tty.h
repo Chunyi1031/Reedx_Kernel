@@ -63,6 +63,7 @@ typedef struct {
 #define TTY_FIONREAD   0x541BUL
 //窗口尺寸查询结构
 struct tty_winsize { uint16_t ws_row, ws_col, ws_xpixel, ws_ypixel; };
+void TTY_GetWinsize(struct tty_winsize *ws);//导出控制台行列/像素尺寸
 
 #define TTY_LINE_MAX 256
 

@@ -627,6 +627,10 @@ static int fat_lfn_eq(const uint16_t *lfn, int lfn_len, const char *name){
     }
 }
 
+static inline int fat_is_dot(const fat_dir_entry_t *de){
+    return de->name[0] == '.' && (de->name[1] == ' ' || (de->name[1] == '.' && de->name[2] == ' '));
+}
+
 //在目录中定位匹配名字的目录项(支持LFN长文件名), 返回所在簇+偏移
 static int fat_find_dirent(fs_node_t *dir, const char *name, uint32_t *out_clus, uint32_t *out_off){
     if(!g_fat.disk || !dir || !dir->priv || !name) return -1;
@@ -658,7 +662,11 @@ static int fat_find_dirent(fs_node_t *dir, const char *name, uint32_t *out_clus,
                 continue;
             }
             if(de->attr & FAT_ATTR_VOLUME_ID){ lfn_len = 0; continue; }//卷标
-            if(de->name[0] == '.'){ lfn_len = 0; continue; }//.和..
+            //.和..
+            if(fat_is_dot(de)){
+                lfn_len = 0;
+                continue;
+            }
             //短条目: 8.3短名匹配优先
             if(memcmp(de->name, base, 8) == 0 && memcmp(de->ext, ext, 3) == 0){
                 *out_clus = clu;
@@ -1052,7 +1060,7 @@ static int fat_dir_is_empty(uint32_t first_clu){
             fat_dir_entry_t *e = (fat_dir_entry_t*)(g_fat.cluster_buf + i);
             if(e->name[0] == FAT_DIRENT_END)return 1;//结束标记
             if(e->name[0] == FAT_DIRENT_FREE)continue;//已删除
-            if(e->name[0] == '.')continue;//. 和 ..
+            if(fat_is_dot(e))continue;//. 和 ..
             if(e->attr == FAT_ATTR_LFN)continue;//LFN 残留
             return 0;//还有其它条目
         }
@@ -1252,7 +1260,7 @@ static int fat_readdir(fs_node_t *dir, uint64_t *cookie, fs_dirent_t *out){
         fat_dir_entry_t *de = (fat_dir_entry_t*)(g_fat.cluster_buf + eoff);
         uint8_t c = de->name[0];
         if(c == FAT_DIRENT_END)return 1;
-        if(c == FAT_DIRENT_FREE || de->attr == FAT_ATTR_LFN || (de->attr & FAT_ATTR_VOLUME_ID) || c == '.'){
+        if(c == FAT_DIRENT_FREE || de->attr == FAT_ATTR_LFN || (de->attr & FAT_ATTR_VOLUME_ID) || fat_is_dot(de)){
             idx++;
             continue;
         }

@@ -1062,10 +1062,7 @@ static long sys_ioctl(long fd, long request, long arg, long a4, long a5, long a6
 	case TTY_TIOCSPGRP:return 0;//作业控制设置: 接受并忽略(假装成功)
 	case TTY_TIOCGWINSZ:{
 		struct tty_winsize ws;
-		ws.ws_row = (uint16_t)(SYSTEM_ScreenInfo.Height / 18);//字符单元: 10x18像素
-		ws.ws_col = (uint16_t)(SYSTEM_ScreenInfo.Width / 10);
-		ws.ws_xpixel = (uint16_t)SYSTEM_ScreenInfo.Width;
-		ws.ws_ypixel = (uint16_t)SYSTEM_ScreenInfo.Height;
+		TTY_GetWinsize(&ws);
 		if(copy_to_user((void*)arg, &ws, sizeof(ws)))return -EFAULT;
 		return 0;
 	}
@@ -2114,6 +2111,24 @@ static long sys_reboot(long magic,long magic2,long cmd,long arg,long a5,long a6)
 	return 0;
 }
 
+static long sys_getresuid(long r, long e, long s, long a4, long a5, long a6){
+    (void)a4;(void)a5;(void)a6;
+    int32_t v = 0;
+    if(r && copy_to_user((void*)r, &v, 4))return -EFAULT;
+    if(e && copy_to_user((void*)e, &v, 4))return -EFAULT;
+    if(s && copy_to_user((void*)s, &v, 4))return -EFAULT;
+    return 0;
+}
+
+static long sys_getresgid(long r, long e, long s, long a4, long a5, long a6){
+    (void)a4;(void)a5;(void)a6;
+    int32_t v = 0;
+    if(r && copy_to_user((void*)r, &v, 4))return -EFAULT;
+    if(e && copy_to_user((void*)e, &v, 4))return -EFAULT;
+    if(s && copy_to_user((void*)s, &v, 4))return -EFAULT;
+    return 0;
+}
+
 void InitSyscall(void){
     //初始化系统调用表
 	memset(syscall_table, 0, sizeof(syscall_table));
@@ -2209,6 +2224,8 @@ void InitSyscall(void){
 	syscall_table[SYS_MPROTECT]   = sys_mprotect;
 	syscall_table[SYS_UNAME]	  = sys_uname;
 	syscall_table[SYS_REBOOT]	  = sys_reboot;
+	syscall_table[SYS_GETRESUID] = sys_getresuid;
+	syscall_table[SYS_GETRESGID] = sys_getresgid;
 	//启用SYSCALL/SYSRET
 	{
 		uint64_t efer = rdmsr(IA32_EFER) | (1ULL << 0);//SCE

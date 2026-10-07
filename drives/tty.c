@@ -106,6 +106,15 @@ static uint16_t tty_rows(void){
     return r ? r : 1;
 }
 
+//导出当前控制台尺寸
+void TTY_GetWinsize(struct tty_winsize *ws){
+    if(!ws)return;
+    ws->ws_row = tty_rows();
+    ws->ws_col = tty_cols();
+    ws->ws_xpixel = (uint16_t)SYSTEM_ScreenInfo.Width;
+    ws->ws_ypixel = (uint16_t)SYSTEM_ScreenInfo.Height;
+}
+
 //按格子范围填充(擦除用)
 static void tty_fill_cells(uint16_t c0,uint16_t r0,uint16_t c1,uint16_t r1,uint32_t bg){
     if(!TTY_ScreenEnabled)return;
