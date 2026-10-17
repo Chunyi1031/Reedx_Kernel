@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * fs/fat/fat32.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <fs.h>
 #include <drives/disk.h>
 #include <mm/pmm.h>

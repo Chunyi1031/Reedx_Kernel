@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * include/futex.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #ifndef _FUTEX_H_
 #define _FUTEX_H_
 

@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/signal.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 //由DeepSeek V4.1 Flash生成
 #include <signals.h>
 #include <task.h>

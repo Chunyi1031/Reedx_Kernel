@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * drives/ps2kbd.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <drives/ps2kbd.h>
 #include <drives/tty.h>
 #include <irq.h>

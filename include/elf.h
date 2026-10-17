@@ -1,4 +1,9 @@
-/*
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * include/elf.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
  * 由glibc elf.h删减
  */
 #ifndef _ELF_H

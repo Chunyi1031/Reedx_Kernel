@@ -1,7 +1,12 @@
-/*
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/desc/idt.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
  * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
- * kernel/desc/idt.c — IDT 初始化与加载
+ * IDT初始化与加载
  */
 
 #include <idt.h>

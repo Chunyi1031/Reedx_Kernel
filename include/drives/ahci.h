@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * include/drives/ahci.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 //由DeepSeek V4 Pro生成
 #ifndef _DRIVER_DISK_AHCI_H_
 #define _DRIVER_DISK_AHCI_H_

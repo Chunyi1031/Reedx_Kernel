@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * drives/ata/ata.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <drives/disk.h>
 #include <drives/ata.h>
 #include <drives/timer.h>

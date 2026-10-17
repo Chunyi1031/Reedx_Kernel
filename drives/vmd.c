@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /**
  * drives/vmd.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
  *
  * Intel VMD: 把藏在 VMD 后面的设备(NVMe)枚举出来
  *

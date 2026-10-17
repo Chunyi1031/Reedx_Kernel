@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * include/drives/display.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #ifndef _DISPLAY_H_
 #define _DISPLAY_H_
 

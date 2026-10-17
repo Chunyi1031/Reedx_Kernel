@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/sched/utask.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <task.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>

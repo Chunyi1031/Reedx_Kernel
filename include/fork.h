@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * include/fork.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #ifndef _FORK_H_
 #define _FORK_H_
 

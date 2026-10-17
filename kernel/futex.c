@@ -1,5 +1,10 @@
-/*
- 由DeepSeek V4 Flash生成
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/futex.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ * 由DeepSeek V4 Flash生成
 */
 
 #include <task.h>

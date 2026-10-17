@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * init/disk.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <klib.h>
 #include <print.h>
 #include <drives/disk.h>

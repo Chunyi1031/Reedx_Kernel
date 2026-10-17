@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/print/print.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <print.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>

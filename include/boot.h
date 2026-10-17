@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * include/boot.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #ifndef _BOOT_H_
 #define _BOOT_H_
 

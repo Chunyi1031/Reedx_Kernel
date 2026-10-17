@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/syscall.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <syscalls.h>
 #include <desc.h>
 #include <serial.h>

@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * drives/disk.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <drives/disk.h>
 #include <drives/pci.h>
 #include <drives/vmd.h>

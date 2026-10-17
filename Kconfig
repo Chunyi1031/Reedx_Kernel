@@ -1,6 +1,8 @@
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: GPL-2.0-only
 #
-# T001 Kernel Configuration
+# Copyright (C) 2026 Liu Chunyi
+#
+# Reedx Kernel Configuration
 #
 # 原理：
 #   Kconfig 是内核的配置描述语言。每个 config 条目定义一个编译期
@@ -9,15 +11,15 @@
 #
 #   运行 `make config` 生成 auto.conf。
 
-mainmenu "T001 Kernel Configuration"
+mainmenu "Reeedx Kernel Configuration"
 
 menu "General Setup"
 
-config T001_VERSION
+config REEDX_VERSION
 	string "Kernel version string"
-	default "0.1.0"
+	default "0.0.2"
 	help
-	  T001 kernel version.  This is appended to the kernel release string
+	  Reedx kernel version.  This is appended to the kernel release string
 	  and is displayed in the TTY on boot.
 
 endmenu

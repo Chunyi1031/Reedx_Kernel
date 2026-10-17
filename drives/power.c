@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * drives/power.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <acpi/power.h>
 #include <idt.h>
 #include <delay.h>

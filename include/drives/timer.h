@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * include/drives/timer.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #ifndef _TIMER_H_
 #define _TIMER_H_
 

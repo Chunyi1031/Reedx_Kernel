@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * include/drives/nvme.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #ifndef _DRIVER_DISK_NVME_H_
 #define _DRIVER_DISK_NVME_H_
 

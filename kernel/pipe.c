@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/pipe.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <pipe.h>
 #include <task.h>
 #include <signals.h>

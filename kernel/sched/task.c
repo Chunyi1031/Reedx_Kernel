@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/sched/task.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <task.h>
 #include <signals.h>
 #include <mm/pmm.h>

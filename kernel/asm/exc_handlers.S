@@ -1,3 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+/**
+ * kernel/asm/exc_handlers.S
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 /*
  * 由Hermes Agent + DeepSeek-V4-Pro生成
  *

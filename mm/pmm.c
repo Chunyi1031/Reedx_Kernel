@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * mm/pmm.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <mm/pmm.h>
 #include <mm/vmm.h>
 #include <print.h>

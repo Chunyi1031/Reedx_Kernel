@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/acpi/acpi.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <acpi/acpi.h>
 #include <klib.h>
 #include <print.h>

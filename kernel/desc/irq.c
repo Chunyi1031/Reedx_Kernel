@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/desc/irq.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <irq.h>
 #include <drives/timer.h>
 #include <drives/ps2kbd.h>

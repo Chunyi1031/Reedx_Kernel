@@ -1,5 +1,10 @@
-/*
- * lib/vsprintf.c — 格式化字符串输出
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * lib/vsprintf.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ * 格式化字符串输出
  *
  * 支持的格式化说明符：
  *   %s    字符串

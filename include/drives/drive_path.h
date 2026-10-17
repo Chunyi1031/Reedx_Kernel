@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * include/drives/drive_path.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #ifndef _EFI_DRIVE_PATH_H_
 #define _EFI_DRIVE_PATH_H_
 

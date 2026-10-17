@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /**
  * include/drives/vmd.h
- *
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
  * Intel VMD (Volume Management Device) 支持
  *
  * 由DeepSeek V4.1 Flash生成

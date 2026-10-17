@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/delay.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <delay.h>
 
 //读取TSC当前值

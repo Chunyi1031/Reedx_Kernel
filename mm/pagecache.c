@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * mm/pagecache.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 //由DeepSeek V4.1 Flash生成
 #include <mm/pagecache.h>
 #include <mm/pmm.h>

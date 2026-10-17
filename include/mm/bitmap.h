@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * include/mm/bitmap.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 //物理内存管理-位图
 #ifndef _MM_BITMAP_H
 #define _MM_BITMAP_H 

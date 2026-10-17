@@ -1,4 +1,9 @@
-/*
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/rtc.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
  * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
  * 参考：Tomohiko Sakamoto (day-of-week algorithm)

@@ -1,4 +1,9 @@
-/*
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * drives/timer.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
  * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
  * drives/timer.c — TSC 校准 (CPUID 0x16 → 0x15+晶振候选 → PIT)

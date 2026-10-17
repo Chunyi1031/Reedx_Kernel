@@ -1,3 +1,11 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+/**
+ * kernel64.ld
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ * Reedx内核链接脚本
+ */
 OUTPUT_FORMAT(elf64-x86-64)
 OUTPUT_ARCH(i386:x86-64)
 ENTRY(KernelStart)

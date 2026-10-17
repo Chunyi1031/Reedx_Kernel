@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * 由Hermes Agent + DeepSeek-V4-Pro生成
  *

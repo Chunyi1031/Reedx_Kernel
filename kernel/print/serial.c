@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/print/serial.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <serial.h>
 #include <io.h>
 

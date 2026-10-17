@@ -1,34 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * 由DeepSeek-V4-Pro生成
  *
- * include/desc.h — x86 段描述符与 GDT 操作
+ * include/desc.h
  * 
  * Copyright (C) 2026 Liu Chunyi
  *
- * 原理：
- *   GDT（Global Descriptor Table，全局描述符表）是 x86 保护模式的基石。
- *   在 64 位长模式下，分段机制被大幅简化——CS/DS/ES/SS 的基址和限长被
- *   硬件忽略（强制平坦模式），但 GDT 仍然必须存在，因为：
- *     1. 段选择子的 DPL 字段决定当前特权级（CPL）
- *     2. FS/GS 的基址仍然生效（用于 TLS、per-CPU 数据）
- *     3. 长模式代码段描述符中 L=1 标志位告知 CPU 当前运行在 64 位模式
- *
- *   每个段描述符 8 字节，布局如下（x86 小端序）：
- *     [63:56] base[31:24]
- *     [55:52] Flags(G|D|L|AVL)
- *     [51:48] limit[19:16]
- *     [47:40] Access(P|DPL[1:0]|S|Type[3:0])
- *     [39:32] base[23:16]
- *     [31:16] base[15:0]
- *     [15:0]  limit[15:0]
- *
- *   lgdt 指令加载 10 字节 GDTR（2 字节 size + 4/8 字节 address）。
- *   加载后必须用 far jump/ret 刷新 CS，再重载其余段寄存器。
- *
- *   32/64 位切换：
- *     本文件通过 types.h 中的 ARCH_X86_64 / ARCH_X86_32 宏，
- *     使用预处理条件编译选择对应的 GDT 布局和汇编指令序列。
- *     desc_ptr.address 使用 uintptr_t 自动适配指针宽度。
+ * x86段描述符与GDT操作
  */
 
 #ifndef _ASM_DESC_H_

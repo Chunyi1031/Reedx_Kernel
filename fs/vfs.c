@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * fs/vfs.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <fs.h>
 #include <syscalls.h>
 #include <task.h>

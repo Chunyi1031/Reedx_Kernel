@@ -1,21 +1,10 @@
-/*
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/desc/gdt.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
  * 由DeepSeek-V4-Pro生成
- *
- * kernel/desc/gdt.c — GDT 初始化与加载
- *
- * 原理：
- *   1. 定义静态 GDT 表，使用 GDT_ENTRY_INIT 宏逐项填充描述符
- *   2. 构造 GDTR 指针，执行 lgdt 加载
- *   3. 通过远返回刷新 CS 进入目标代码段
- *   4. 重载 DS/ES/FS/GS/SS 全部数据段寄存器
- *
- *   32/64 位切换：
- *     ARCH_X86_64:  使用 pushq/lretq，GDT 含 64 位代码段和 32 位兼容段
- *     ARCH_X86_32:  使用 pushl/lret，GDT 仅含 32 位保护模式段
- *
- *   注意：
- *     在 64 位长模式下 CS/DS/ES/SS 的基址和限长被硬件忽略，
- *     但 FS/GS 的基址仍然有效（通过 MSR 或描述符），这里全部设为平坦模式。
  */
 #include <desc.h>
 #include <kstring.h>

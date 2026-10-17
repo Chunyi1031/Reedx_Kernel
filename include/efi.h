@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /**
  * UEFI 运行时服务定义
  * 基于 EDK2 RuntimeServices 标准定义（MdePkg/Include/Uefi/UefiSpec.h）

@@ -1,4 +1,9 @@
-/*
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * include/apic.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
  * 由Hermes Agent + DeepSeek-V4-Pro生成
  */
 

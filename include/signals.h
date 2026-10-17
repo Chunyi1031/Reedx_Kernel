@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * include/signals.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 //由DeepSeek V4.1 Flash生成
 #ifndef _SIGNAL_H_
 #define _SIGNAL_H_

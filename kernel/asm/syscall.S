@@ -1,5 +1,10 @@
-/*
- * kernel/asm/syscall.S — syscall 指令入口（ring3 → ring0）
+/* SPDX-License-Identifier: GPL-2.0-only */
+/**
+ * kernel/asm/syscall.S
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ * syscall指令入口
  *
  * 由DeepSeek V4 Pro生成
  *

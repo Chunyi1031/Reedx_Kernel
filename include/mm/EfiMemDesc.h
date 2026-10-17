@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * include/mm/EfiMemDesc.h
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 //物理内存管理-UEFI 内存描述符
 #ifndef _MEMORY_EFI_MEM_DESC_H_
 #define _MEMORY_EFI_MEM_DESC_H_

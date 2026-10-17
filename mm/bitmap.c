@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * mm/bitmap.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <mm/bitmap.h>
 
 //计算位图大小对应的字节数

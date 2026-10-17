@@ -1,7 +1,12 @@
-/*
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/desc/apic.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
  * 由Hermes Agent + DeepSeek-V4-Pro生成
  *
- * kernel/desc/apic.c — Local APIC 初始化、定时器校准、MADT解析、I/O APIC配置
+ * Local APIC 初始化、定时器校准、MADT解析、I/O APIC配置
  *
  * 参考：ACPI Specification 6.5 §5.2.12 (MADT)
  *              Intel SDM Vol.3 §10.12 (x2APIC)

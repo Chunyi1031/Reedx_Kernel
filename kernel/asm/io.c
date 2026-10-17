@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * kernel/asm/io.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <io.h>
 
 void outb(uint16_t port, uint8_t value) {

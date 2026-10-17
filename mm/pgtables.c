@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * mm/pgtables.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 #include <mm/pgtables.h>
 #include <mm/pmm.h>
 

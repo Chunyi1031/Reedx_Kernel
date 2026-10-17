@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * drives/ata/ahci.c
+ * 
+ * Copyright (C) 2026 Liu Chunyi
+ * 
+ */
 //由DeepSeek V4 Pro生成
 #include <drives/disk.h>
 #include <drives/ahci.h>

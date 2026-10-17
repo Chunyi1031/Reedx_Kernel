@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * include/acpi/acpi.h — x86_64 ACPI 表结构精简定义
  *
