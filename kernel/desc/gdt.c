@@ -160,7 +160,7 @@ void setup_tss(void)
 {
 	memset(&cpu_tss, 0, sizeof(cpu_tss));
 	cpu_tss.rsp0 = (uint64_t)(tss_rsp0_stack + sizeof(tss_rsp0_stack));
-
+	cpu_tss.io_map_base = (u16)sizeof(cpu_tss);//I/O权限位图
 	struct tss_desc *td = (struct tss_desc *)&gdt_table[GDT_ENTRY_TSS];
 	uint64_t base = (uint64_t)&cpu_tss;
 	uint32_t limit = sizeof(cpu_tss) - 1;

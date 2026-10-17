@@ -10,6 +10,7 @@
 #include <serial.h>
 #include <klib.h>
 #include <print.h>
+#include <signals.h>
 #include <task.h>
 #include <mm/vmm.h>
 #include <mm/pmm.h>
@@ -51,13 +52,38 @@ static const char *const exception_names[] = {
 	[31] = "Reserved(31)",
 };
 
+//按SIG_DFL语义终止出错进程
+static void __attribute__((noreturn)) user_exception_exit(int sig){
+	if(current_task && current_task->mm){
+		current_task->sig_exit = sig;
+		UserTaskExit(128 + sig);
+	}
+	SYSTEM_STOP();
+}
+
+//异常向量转默认信号
+static int exc_to_signal(uint32_t vector){
+	switch(vector){
+	case INT_GATE_DE: return SIGFPE;
+	case INT_GATE_MF: return SIGFPE;
+	case INT_GATE_UD: return SIGILL;
+	case INT_GATE_BP: return SIGTRAP;
+	default:          return SIGSEGV;
+	}
+}
+
 //异常公共分发函数
-void exc_dispatch(uint32_t vector,uintptr_t rip){
+void exc_dispatch(uint32_t vector,uintptr_t rip,uint64_t cs){
 	if (vector < NUM_EXCEPTION_VECTORS){
 		if(vector == INT_GATE_NMI){
 			static volatile uint64_t nmi_counter = 0;
     		nmi_counter++;
 			return;
+		}
+		if((cs & 3) == 3){
+			//用户态异常
+			early_printk("%s [USER] pid=%d RIP=%p\n",exception_names[vector],current_task?(int)current_task->pid:-1,rip);
+			user_exception_exit(exc_to_signal(vector));
 		}
 		print_error();
 		early_printk("%s at RIP=%p\n",exception_names[vector],rip);
@@ -155,6 +181,12 @@ void interrupt_PF(uint64_t fault_addr, uint64_t error_code, uintptr_t rip, uintp
 		}
 	}
 pf_error:
+	//用户态缺页且无法处理
+	if(error_code & PF_ERR_USER){
+		early_printk("%s [USER] pid=%d RIP=%p CR2=%p ec=%X\n",exception_names[INT_GATE_PF],current_task?(int)current_task->pid:-1,rip,fault_addr,error_code);
+		(void)user_rsp;
+		user_exception_exit(SIGSEGV);
+	}
 	print_error();
 	early_printk("%s pid=%d\nRIP=%p CR2=%p Error Code=%X\n",exception_names[INT_GATE_PF],current_task?(int)current_task->pid:-1,rip,fault_addr,error_code);
 	(void)user_rsp;
@@ -172,10 +204,15 @@ pf_error:
 volatile uintptr_t gp_recover_ip = 0;
 volatile uint64_t gp_probe_active = 0;
 
-void interrupt_GP(uint64_t error_code, uint64_t rip){
+void interrupt_GP(uint64_t error_code, uint64_t rip, uint64_t cs){
     if(gp_probe_active && gp_recover_ip){
         gp_probe_active = 0;//汇编handler检测gp_recover_ip非零后跳转恢复
         return;
+    }
+	//用户态#GP
+    if((cs & 3) == 3){
+        early_printk("%s [USER] pid=%d ec=%p RIP=%p\n",exception_names[INT_GATE_GP],current_task?(int)current_task->pid:-1,error_code,rip);
+        user_exception_exit(SIGSEGV);
     }
     print_error();
 	early_printk("%s\nError Code=%p RIP=%p\n",exception_names[INT_GATE_GP],error_code,rip);

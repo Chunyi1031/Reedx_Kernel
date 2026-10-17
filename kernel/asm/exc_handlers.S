@@ -60,6 +60,7 @@ exc_common_handler:
 	subq $8, %rsp
 	movq 128(%rsp), %rdi
 	movq 144(%rsp), %rsi
+	movq 152(%rsp), %rdx
 	call exc_dispatch
 	addq $8, %rsp
 	popq %r15
@@ -101,6 +102,7 @@ int_13_handler:
 	sub $8, %rsp
 	movq 128(%rsp), %rdi
 	movq 136(%rsp), %rsi
+	movq 144(%rsp), %rdx
 	call interrupt_GP
 	movq gp_recover_ip(%rip), %rax
 	testq %rax, %rax

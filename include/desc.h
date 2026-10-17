@@ -98,6 +98,8 @@ struct tss_struct {
 	u16 io_map_base;
 } __attribute__((packed));
 
+_Static_assert(sizeof(struct tss_struct) == 104, "tss_struct must be 104 bytes");//TSS必须是Intel SDM规定的104字节布局
+
 void setup_tss(void);//初始化 TSS（写描述符 + ltr）
 
 extern struct tss_struct cpu_tss;//调度器在切换用户任务时更新 rsp0

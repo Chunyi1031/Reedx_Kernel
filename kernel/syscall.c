@@ -2017,6 +2017,7 @@ static long sys_munmap(long addr, long length, long a3, long a4, long a5, long a
 	(void)a3; (void)a4; (void)a5; (void)a6;
 	if(!current_task || !current_task->mm)return -EINVAL;
 	if(length <= 0)return -EINVAL;
+	if((uintptr_t)addr >= USER_VADDR_MAX)return -ENOMEM;//REEDX-202610-002修复:地址必须用户态
 	return vmm_munmap(current_task->mm, (uintptr_t)addr, (uint64_t)length);
 }
 
@@ -2025,8 +2026,9 @@ static long sys_munmap(long addr, long length, long a3, long a4, long a5, long a
  */
 static long sys_mprotect(long addr, long len, long prot, long a4, long a5, long a6){
 	(void)a4; (void)a5; (void)a6;
-	if(!current_task || !current_task->mm) return -ENOMEM;
-	if(len <= 0) return -EINVAL;
+	if(!current_task || !current_task->mm)return -ENOMEM;
+	if(len <= 0)return -EINVAL;
+	if((uintptr_t)addr >= USER_VADDR_MAX)return -ENOMEM;//REEDX-202610-001修复:地址必须用户态
 	uint64_t vm_flags = 0;
 	if(prot & PROT_READ) vm_flags |= VM_READ;
 	if(prot & PROT_WRITE) vm_flags |= VM_WRITE;
