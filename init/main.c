@@ -91,7 +91,7 @@ static void user_main_end(void) {
 void fill_utsname(){
     strcpy(system_utsname.sysname,"Reedx");
     strcpy(system_utsname.nodename,"(none)");
-    strcpy(system_utsname.release,"0.0.1-beta");
+    strcpy(system_utsname.release,KERNEL_VERSION);
     strcpy(system_utsname.version,"(unknown)");
     strcpy(system_utsname.machine,"x86_64");
     strcpy(system_utsname.domainname,"(none)");

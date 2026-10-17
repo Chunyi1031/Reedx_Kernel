@@ -36,4 +36,6 @@ typedef struct utsname {
 
 extern utsname_t system_utsname;
 
+#define KERNEL_VERSION "0.0.2-beta"
+
 #endif

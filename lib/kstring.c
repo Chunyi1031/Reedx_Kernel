@@ -174,9 +174,14 @@ size_t strnlen(const char *s, size_t count)
  */
 void *memset(void *s, int c, size_t count)
 {
-	char *xs = s;
-	while (count--)*xs++ = c;
-	return s;
+	void *ret = s;
+	/* 用 rep stosb: -O0 下的逐字节循环约 5~10 cycles/byte,
+	 * 而块缓存/页缓存会频繁 memset 整页, 必须走硬件快速路径 */
+	__asm__ volatile("cld\n\trep stosb"
+	                 : "+D"(s), "+c"(count)
+	                 : "a"((uint8_t)c)
+	                 : "memory");
+	return ret;
 }
 
 /**
@@ -241,10 +246,12 @@ void *memset64(uint64_t *s, uint64_t v, size_t count)
  */
 void *memcpy(void *dest, const void *src, size_t count)
 {
-	char *tmp = dest;
-	const char *s = src;
-	while (count--)*tmp++ = *s++;
-	return dest;
+	void *ret = dest;
+	__asm__ volatile("cld\n\trep movsb"
+	                 : "+D"(dest), "+S"(src), "+c"(count)
+	                 :
+	                 : "memory");
+	return ret;
 }
 
 /**

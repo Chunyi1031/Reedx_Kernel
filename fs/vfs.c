@@ -451,11 +451,5 @@ void FsInit(struct disk_info *disk){
         fs_root = fat32_root();
     }else{
         fs_root = ramfs_init();
-        fs_file_t f;
-        if(FsOpen("/hello.txt", O_CREAT | O_RDWR, &f) == 0){
-            static const char *s = "Hello from ramfs!\n";
-            FsWrite(&f, s, strlen(s));
-            FsClose(&f);
-        }
     }
 }

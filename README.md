@@ -1,4 +1,4 @@
-# Reedx Beta 0.0.1
+# Reedx Beta 0.0.2
 
 [English](README_en.md) | 中文
 

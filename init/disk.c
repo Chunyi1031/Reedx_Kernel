@@ -8,6 +8,7 @@
 #include <klib.h>
 #include <print.h>
 #include <drives/disk.h>
+#include <drives/blkdev.h>
 #include <drives/ahci.h>
 #include <drives/nvme.h>
 #include <drives/vmd.h>
@@ -54,6 +55,13 @@ _Bool InitDiskAndFs(){
             printk(PRINTK_WARNING"Disk driver not ready");
             FsInit(NULL);//磁盘不可用, 回退到ramfs
             return false;
+        }
+        //注册到通用块设备层, 扫描分区表并打印盘/分区清单
+        if(BlkAddDisk(&disk)){
+            BlkPartScanAll();
+            BlkDumpAll();
+        }else{
+            printk(PRINTK_WARNING"Block layer: disk not registered");
         }
     }else{
         printk(PRINTK_WARNING"Disk controller not found");
