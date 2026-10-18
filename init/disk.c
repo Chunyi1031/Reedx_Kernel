@@ -9,6 +9,7 @@
 #include <print.h>
 #include <drives/disk.h>
 #include <drives/blkdev.h>
+#include <drives/bcache.h>
 #include <drives/ahci.h>
 #include <drives/nvme.h>
 #include <drives/vmd.h>
@@ -69,5 +70,14 @@ _Bool InitDiskAndFs(){
         return false;
     }
     FsInit(&disk);//初始化文件系统
+    //块缓存自检
+    gendisk_t *gd = BlkDiskAt(0);
+    bdev_t *bd = gd ? BlkWholeDevice(gd) : NULL;
+    if(bd){
+        int r = BCacheSelfTest(bd);
+        if(r == 0)printk(PRINTK_INFO"bcache:Self-check passed");
+        else      printk(PRINTK_WARNING"bcache:Self-test failure r=%d", r);
+        BCacheStats();
+    }
     return true;
 }
