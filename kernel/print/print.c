@@ -143,6 +143,7 @@ void print_to_console(int count){
 	idx = (info_head + console_read) % PRINTK_COUNT_MAX;
 	for (i = 0; i < to_print; i++) {
 		info = &PRINTK_log_info[(idx + i) % PRINTK_COUNT_MAX];
+		if (info->level > PRINTK_LVL_INFO)continue;//DEBUG 级只进环形缓冲区，不上屏
 		//无等级→原样直出，不套任何格式
 		if (info->level == PRINTK_LVL_NONE) {
 			int show_len = (info->length < 256) ? info->length : 256;

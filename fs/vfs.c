@@ -10,6 +10,7 @@
 #include <task.h>
 #include <mm/pagecache.h>
 #include <drives/bcache.h>
+#include <vfs.h>
 
 static fs_node_t *fs_root = NULL;
 static spinlock_t g_fs_lock = {0};//全局文件系统锁
@@ -446,6 +447,7 @@ int FsRename(const char *oldpath, const char *newpath){
 }
 
 void FsInit(struct disk_info *disk){
+    FsVfsInit();
     BCacheInit(BC_MAX_PAGES);//块缓初始化
     PageCacheInit();//初始化文件页缓存
     //优先挂载FAT32,失败则回退ramfs

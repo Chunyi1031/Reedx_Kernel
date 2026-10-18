@@ -11,3 +11,4 @@ app/
 scripts/mkfont.py
 docs/
 scripts/mk-testdisk.sh
+tests/

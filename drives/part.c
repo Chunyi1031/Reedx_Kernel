@@ -295,14 +295,17 @@ static int part_scan_disk(gendisk_t *gd){
     }
     //优先GPT
     if(gpt_scan(gd) == 0){
-        printk(PRINTK_INFO"blk: %s partition-table=GPT partitions=%d", gd->gd_name, gd->gd_nr_parts);
+        gd->gd_table = " GPT";
+        printk(PRINTK_DEBUG"blk: %s partition-table=GPT partitions=%d", gd->gd_name, gd->gd_nr_parts);
         return 0;
     }
     if(has_mbr && mbr_scan(gd) == 0){
-        printk(PRINTK_INFO"blk: %s partition-table=MBR partitions=%d", gd->gd_name, gd->gd_nr_parts);
+        gd->gd_table = " MBR";
+        printk(PRINTK_DEBUG"blk: %s partition-table=MBR partitions=%d", gd->gd_name, gd->gd_nr_parts);
         return 0;
     }
     //裸盘
+    gd->gd_table = " bare";
     printk(PRINTK_WARNING"blk: %s Partition table not found, treated as bare disk.", gd->gd_name);
     return 1;
 }

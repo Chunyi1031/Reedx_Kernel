@@ -50,6 +50,7 @@ typedef struct gendisk {
     bdev_t      *gd_whole;              //整盘块设备
     int          gd_nr_parts;           //已发现分区数
     int          gd_scanned;            //分区表是否已扫描
+    const char  *gd_table;              //分区表类型
     struct list_node gd_partitions;     //bdev链表(含整盘)
     struct list_node gd_list;
 } gendisk_t;

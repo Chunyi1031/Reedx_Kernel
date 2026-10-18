@@ -125,7 +125,7 @@ void BCacheInit(uint64_t max_pages){
     g_nr_used = 0;
     g_limit = (max_pages == 0 || max_pages > BC_MAX_PAGES) ? BC_MAX_PAGES : max_pages;
     g_ready = 1;
-    printk(PRINTK_INFO"bcache: Page container =%u bytes maximum =%llu pages (%llu KB)",(uint32_t)BC_PAGE_SIZE, g_limit, g_limit * (BC_PAGE_SIZE / 1024));
+    printk(PRINTK_DEBUG"bcache: Page container =%u bytes maximum =%llu pages (%llu KB)",(uint32_t)BC_PAGE_SIZE, g_limit, g_limit * (BC_PAGE_SIZE / 1024));
 }
 
 _Bool BCacheReady(void){

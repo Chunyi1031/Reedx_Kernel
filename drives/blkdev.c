@@ -107,7 +107,7 @@ gendisk_t *BlkAddDisk(disk_info_t *disk){
     }
     blk_list_add_tail(&gd->gd_list, &g_disk_list);
     gd->gd_whole = BlkNewBdev(gd, 0, gd->gd_nr_sectors, PART_WHOLE, 0, "whole");//整盘本身也是一个块设备
-    printk(PRINTK_INFO"blk:Register disk %s Sector number:%llu Single upper limit:%u sectors",gd->gd_name, gd->gd_nr_sectors, gd->gd_max_transfer);
+    printk(PRINTK_DEBUG"blk:Register disk %s Sector number:%llu Single upper limit:%u sectors",gd->gd_name, gd->gd_nr_sectors, gd->gd_max_transfer);
     return gd;
 }
 
@@ -290,24 +290,19 @@ int bdev_write(bdev_t *bd, uint64_t off, const void *buf, uint32_t len){
 
 //打印全部盘与分区
 void BlkDumpAll(void){
-    printk(PRINTK_INFO"Blk:There are %d physical disks and %d block devices.", g_nr_disks, g_nr_bdevs);
     struct list_node *n;
     blk_list_for_each(n, &g_disk_list){
         gendisk_t *gd = blk_list_entry(n, gendisk_t, gd_list);
-        printk(PRINTK_INFO"  %s %llu Sector (%llu MB) Single Maximum=%u",
-               gd->gd_name, gd->gd_nr_sectors,
-               (gd->gd_nr_sectors * gd->gd_sector_size) / (1024ULL * 1024ULL),
-               gd->gd_max_transfer);
+        char line[256];
+        int  len = 0;
+        len += sprintf(line + len, "blk: %s %lluMB%s", gd->gd_name,((gd->gd_nr_sectors * gd->gd_sector_size) / (1024ULL * 1024ULL)),gd->gd_table ? gd->gd_table : "");
         struct list_node *m;
         blk_list_for_each(m, &gd->gd_partitions){
             bdev_t *bd = blk_list_entry(m, bdev_t, bd_list);
-            const char *kind = (bd->bd_part_type == PART_WHOLE) ? "whole" :
-                               (bd->bd_part_type == PART_LOGICAL) ? "logical" : "primary";
-            printk(PRINTK_INFO"    %s [%s] start=%llu size=%llu type=%s name=%s fs=%s",
-                   bd->bd_name, kind, bd->bd_start, bd->bd_nr_sectors,
-                   bd->bd_part_name,
-                   bd->bd_label[0] ? bd->bd_label : "-",
-                   bd->bd_fs_type[0] ? bd->bd_fs_type : "-");
+            if(bd->bd_part_type == PART_WHOLE)continue;//整盘信息已在前面
+            if(len > 200)break;
+            len += sprintf(line + len, " | p%d %llu+%llu %s(%s)",bd->bd_part_no, bd->bd_start, bd->bd_nr_sectors,bd->bd_part_name,bd->bd_fs_type[0] ? bd->bd_fs_type : "?");
         }
+        printk(PRINTK_INFO"%s", line);
     }
 }
