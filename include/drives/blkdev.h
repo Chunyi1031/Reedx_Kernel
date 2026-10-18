@@ -99,6 +99,7 @@ int BlkBdevCount(void);//分区块设备总数
 bdev_t *BlkBdevAt(int idx);//获取bdev池中的某个bdev
 bdev_t *BlkWholeDevice(gendisk_t *gd);//检查设备是否为整盘块设备
 bdev_t *BlkNameToBdev(const char *name);//由blk名查bdev
+bdev_t *BlkFindBdev(uint64_t start_lba, uint64_t nr_sectors);//按分区起始LBA查
 //I/O
 int submit_bio(bio_t *bio);//同步提交
 int bdev_read(bdev_t *bd, uint64_t off, void *buf, uint32_t len);//按字节读

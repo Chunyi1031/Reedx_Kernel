@@ -141,6 +141,22 @@ bdev_t *BlkNameToBdev(const char *name){
     return NULL;
 }
 
+//按分区起始LBA查找块设备
+bdev_t *BlkFindBdev(uint64_t start_lba, uint64_t nr_sectors){
+    for(int i = 0;i < g_nr_bdevs;i ++){
+        bdev_t *bd = &g_bdev_pool[i];
+        if(bd->bd_part_type == PART_WHOLE)continue;
+        if(bd->bd_start != start_lba)continue;
+        if(nr_sectors && bd->bd_nr_sectors != nr_sectors)continue;
+        return bd;
+    }
+    for(int i = 0;i < g_nr_bdevs;i ++){
+        bdev_t *bd = &g_bdev_pool[i];
+        if(bd->bd_part_type != PART_WHOLE && bd->bd_start == start_lba)return bd;
+    }
+    return NULL;
+}
+
 int submit_bio(bio_t *bio){
     if(!bio || !bio->bi_bdev)return -1;
     bdev_t *bd = bio->bi_bdev;

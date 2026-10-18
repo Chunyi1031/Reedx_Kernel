@@ -7,6 +7,8 @@
  */
 #include <fs.h>
 #include <drives/disk.h>
+#include <drives/blkdev.h>
+#include <drives/bcache.h>
 #include <mm/pmm.h>
 #include <mm/pagecache.h>
 #include <mm/vmm.h>
@@ -95,7 +97,8 @@ typedef struct __attribute__((packed)) fat_lfn_entry {
 typedef struct fat32_fs {
     disk_info_t disk_copy; //磁盘信息拷贝
     disk_info_t *disk;     //指向disk_copy
-    uint32_t part_lba;    //分区起始LBA
+    bdev_t   *bdev;       //分区块设备(块缓存/分区层)
+    uint32_t part_lba;    //分区起始扇区(绝对LBA)
     uint16_t bps;         //每扇区字节(必须512)
     uint8_t  spc;         //每簇扇区数
     uint16_t rsvd;        //保留扇区数
@@ -249,94 +252,60 @@ static uint32_t fat_dir_id(fs_node_t *dir){
 }
 /*DeepSeek-V4.1-Flash-END*/
 
-//磁盘块缓存
-#define FAT_PAGE_SIZE    4096
-#define FAT_PAGE_BUDGET  (2 * 1024 * 1024)  //FAT页缓存上限(2MB)
-#define CLU_BUDGET       (256 * 1024)       //簇缓存上限(256KB)
-#define CLU_MAX_SLOTS    512
-
-static uint8_t  *g_fatpg_mem;       //FAT页缓存
-static uint32_t *g_fatpg_tag;       //页号+1，0=空
-static uint32_t  g_fatpg_slots;     //缓存的页数
-static uint32_t  g_fatpg_total;     //FAT总页数
-static uint8_t  *g_clu_mem;         //簇缓存
-static uint32_t *g_clu_tag;         //簇号+1，0=空
-static uint32_t  g_clu_slots;
-
-//单扇区FAT缓存
-static uint32_t g_fat_cache_lba = ~0u;
-static uint8_t  g_fat_cache[512];
-
 //读磁盘扇区
 static int fat_read_sectors(uint32_t lba, void *buf, uint32_t count){
-    return DiskRead(g_fat.disk, lba, count, buf);
-}
-
-//定位FAT页缓存槽位
-static uint8_t *fat_page_slot(uint32_t pi){
-    uint32_t slot = pi % g_fatpg_slots;
-    if(g_fatpg_tag[slot] != pi + 1){
-        uint32_t per_page = FAT_PAGE_SIZE / g_fat.bps;
-        uint32_t first = pi * per_page;
-        uint32_t nsec = per_page;
-        if(first >= g_fat.fat_sz) return NULL;
-        if(first + nsec > g_fat.fat_sz) nsec = g_fat.fat_sz - first;
-        uint8_t *pg = g_fatpg_mem + (uint64_t)slot * FAT_PAGE_SIZE;
-        if(fat_read_sectors(g_fat.fat_start + first, pg, nsec)) return NULL;
-        g_fatpg_tag[slot] = pi + 1;
+    if(!g_fat.bdev) return -1;
+    if(lba < g_fat.part_lba) return -1;
+    uint64_t blk = (uint64_t)(lba - g_fat.part_lba);
+    buffer_head_t bh;
+    uint8_t *p = (uint8_t*)buf;
+    for(uint32_t i = 0;i < count;i ++){
+        if(sb_bread(g_fat.bdev, blk + i, &bh)) return -1;
+        memcpy(p + (uint64_t)i * 512, bh.b_data, 512);
+        sb_brelse(&bh);
     }
-    return g_fatpg_mem + (uint64_t)slot * FAT_PAGE_SIZE;
+    return 0;
 }
 
 //读FAT表项
 static uint32_t fat_get_entry(uint32_t clu){
     uint32_t fat_off = clu * 4;
-    //有缓存时
-    if(g_fatpg_slots){
-        uint32_t pi = fat_off / FAT_PAGE_SIZE;
-        if(pi >= g_fatpg_total)return 0;
-        uint8_t *pg = fat_page_slot(pi);//定位缓存槽位
-        if(!pg)return 0;
-        return *(uint32_t*)(pg + (fat_off % FAT_PAGE_SIZE)) & 0x0FFFFFFF;
-    }
-    //缓存不可用，单扇区缓存
-    {
-        uint32_t fat_lba = g_fat.fat_start + fat_off / g_fat.bps;
-        if(fat_lba != g_fat_cache_lba){
-            if(fat_read_sectors(fat_lba, g_fat_cache, 1)) return 0;
-            g_fat_cache_lba = fat_lba;
-        }
-        return *(uint32_t*)(g_fat_cache + fat_off % g_fat.bps) & 0x0FFFFFFF;
-    }
+    uint32_t sec = fat_off / 512;
+    if(!g_fat.bdev || sec >= g_fat.fat_sz)return 0;
+    buffer_head_t bh;
+    uint64_t blk = (uint64_t)(g_fat.fat_start - g_fat.part_lba) + sec;
+    if(sb_bread(g_fat.bdev, blk, &bh))return 0;
+    uint32_t v = *(uint32_t*)(bh.b_data + fat_off % 512) & 0x0FFFFFFF;
+    sb_brelse(&bh);
+    return v;
 }
 
 //读一簇到簇缓冲
 static int fat_read_cluster(uint32_t clu){
     if(clu < 2) return -1;
-    if(g_clu_slots){
-        uint32_t slot = clu % g_clu_slots;
-        uint8_t *dst = g_clu_mem + (uint64_t)slot * g_fat.bpc;
-        if(g_clu_tag[slot] == clu + 1){
-            memcpy(g_fat.cluster_buf, dst, g_fat.bpc);
-            return 0;
-        }
-        if(fat_read_sectors(g_fat.data_start + (clu - 2) * g_fat.spc, dst, g_fat.spc)) return -1;
-        g_clu_tag[slot] = clu + 1;
-        memcpy(g_fat.cluster_buf, dst, g_fat.bpc);
-        return 0;
-    }
-    return fat_read_sectors(g_fat.data_start + (clu - 2) * g_fat.spc,g_fat.cluster_buf, g_fat.spc);
+    return fat_read_sectors(g_fat.data_start + (clu - 2) * g_fat.spc, g_fat.cluster_buf, g_fat.spc);
 }
 
 //写磁盘扇区
 static int fat_write_sectors(uint32_t lba, const void *buf, uint32_t count){
-    return DiskWrite(g_fat.disk, lba, count, buf);
+    if(!g_fat.bdev) return -1;
+    if(lba < g_fat.part_lba) return -1;
+    uint64_t blk = (uint64_t)(lba - g_fat.part_lba);
+    buffer_head_t bh;
+    const uint8_t *p = (const uint8_t*)buf;
+    for(uint32_t i = 0;i < count;i ++){
+        if(sb_bget(g_fat.bdev, blk + i, &bh)) return -1;
+        memcpy(bh.b_data, p + (uint64_t)i * 512, 512);
+        sb_bwrite_dirty(&bh);
+        sb_brelse(&bh);
+    }
+    return 0;
 }
 
 //簇缓冲写回磁盘
 static int fat_write_cluster(uint32_t clu){
-    if(g_clu_slots && clu >= 2) g_clu_tag[clu % g_clu_slots] = 0;
-    return fat_write_sectors(g_fat.data_start + (clu - 2) * g_fat.spc,g_fat.cluster_buf, g_fat.spc);
+    if(clu < 2)return -1;
+    return fat_write_sectors(g_fat.data_start + (clu - 2) * g_fat.spc, g_fat.cluster_buf, g_fat.spc);
 }
 
 //写FAT表项
@@ -351,55 +320,7 @@ static int fat_set_entry(uint32_t clu, uint32_t value){
     for(int f = 0; f < g_fat.nfats; f++){
         if(fat_write_sectors(fat_lba + (uint32_t)f * g_fat.fat_sz, sec, 1)) return -1;
     }
-    //FAT已修改，使缓存失效
-    g_fat_cache_lba = ~0u;
-    if(g_fatpg_slots) g_fatpg_tag[(fat_off / FAT_PAGE_SIZE) % g_fatpg_slots] = 0;
     return 0;
-}
-
-//分配并初始化块缓存
-static void fat_cache_init(void){
-    g_fatpg_slots = 0;
-    g_fatpg_total = 0;
-    g_clu_slots = 0;
-    if(g_fat.bps <= FAT_PAGE_SIZE && (FAT_PAGE_SIZE % g_fat.bps) == 0){
-        uint64_t bytes = (uint64_t)g_fat.fat_sz * g_fat.bps;
-        uint32_t total = (uint32_t)((bytes + FAT_PAGE_SIZE - 1) / FAT_PAGE_SIZE);
-        uint32_t slots = total;
-        uint32_t cap = FAT_PAGE_BUDGET / FAT_PAGE_SIZE;
-        if(slots > cap)slots = cap;
-        if(slots){
-            int np = (int)(((uint64_t)slots * FAT_PAGE_SIZE + PAGE_SIZE - 1) / PAGE_SIZE);
-            void *m = Pmm_Malloc(np);
-            void *t = m ? Pmm_Malloc((int)((slots * sizeof(uint32_t) + PAGE_SIZE - 1) / PAGE_SIZE)) : NULL;
-            if(m && t){
-                g_fatpg_mem = (uint8_t*)PHYS_TO_VIRT((uintptr_t)m);
-                g_fatpg_tag = (uint32_t*)PHYS_TO_VIRT((uintptr_t)t);
-                memset(g_fatpg_tag, 0, slots * sizeof(uint32_t));
-                g_fatpg_slots = slots;
-                g_fatpg_total = total;
-            }else{
-                if(m)Pmm_Free(m, np);
-            }
-        }
-    }
-    //簇缓存
-    {
-        uint32_t n = CLU_BUDGET / g_fat.bpc;
-        if(n > CLU_MAX_SLOTS) n = CLU_MAX_SLOTS;
-        if(n < 8) n = 8;
-        int np = (int)(((uint64_t)n * g_fat.bpc + PAGE_SIZE - 1) / PAGE_SIZE);
-        void *m = Pmm_Malloc(np);
-        void *t = m ? Pmm_Malloc((int)((n * sizeof(uint32_t) + PAGE_SIZE - 1) / PAGE_SIZE)) : NULL;
-        if(m && t){
-            g_clu_mem = (uint8_t*)PHYS_TO_VIRT((uintptr_t)m);
-            g_clu_tag = (uint32_t*)PHYS_TO_VIRT((uintptr_t)t);
-            memset(g_clu_tag, 0, n * sizeof(uint32_t));
-            g_clu_slots = n;
-        }else{
-            if(m)Pmm_Free(m, np);
-        }
-    }
 }
 
 //扫描FAT寻找空闲簇
@@ -1307,6 +1228,14 @@ int fat32_mount(struct disk_info *disk){
     g_fat.disk_copy = *disk;
     g_fat.disk = &g_fat.disk_copy;
     g_fat.part_lba = (uint32_t)disk->partition_start_lba;//分区起始LBA
+    //绑定分区对应的块设备
+    g_fat.bdev = BlkFindBdev(disk->partition_start_lba, disk->partition_size_lba);
+    if(!g_fat.bdev){
+        printk(PRINTK_ERR"fat32:Cannot find the block device corresponding to LBA %llu.",(uint64_t)disk->partition_start_lba);
+        return 5;
+    }
+    g_fat.bdev->bd_block_size = 512;
+    g_fat.bdev->bd_holder = &g_fat;
     //读取并解析BPB
     uint8_t boot[512];
     if(fat_read_sectors(g_fat.part_lba, boot, 1))return 2;
@@ -1327,7 +1256,6 @@ int fat32_mount(struct disk_info *disk){
     //分配簇缓冲
     g_fat.cluster_buf = (uint8_t*)PHYS_TO_VIRT((uintptr_t)Pmm_Malloc((int)((g_fat.bpc + 4095) / 4096)));
     if(!g_fat.cluster_buf)return 4;
-    fat_cache_init();//分配FAT页缓存与簇缓存
     return 0;
 }
 
