@@ -18,6 +18,7 @@
 #include <idt.h>
 #include <fork.h>
 #include <fs.h>
+#include <vfs.h>
 #include <futex.h>
 #include <pipe.h>
 #include <signals.h>
@@ -240,7 +241,7 @@ static long sys_pread64(long fd, long buf, long count, long off, long a5, long a
 	if(count < 0)return -EINVAL;
 	if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
 	if((current_task->files[fd].flags & O_ACCMODE) == O_WRONLY)return -EBADF;
-	uint64_t old_off = current_task->files[fd].off;
+	uint64_t old_off = current_task->files[fd].f ? current_task->files[fd].f->f_pos : 0;
 	FsSeek(&current_task->files[fd], (int64_t)off, SEEK_SET);
 	long total = 0;
 	char kbuf[512];
@@ -313,7 +314,6 @@ static void fd_close_one(long fd){
 	current_task->files[fd].used = false;
 	current_task->files[fd].pipe = NULL;
 	current_task->files[fd].node = NULL;
-	current_task->files[fd].off = 0;
 }
 
 //复制文件描述符表项
@@ -336,7 +336,7 @@ static long fd_dup_to(long oldfd, long newfd){
 	}
 	fd_close_one(newfd);//目标已占用则先关闭
 	current_task->files[newfd] = current_task->files[oldfd];//复制描述符
-	//引用计数
+	FileGet(current_task->files[newfd].f);//引用计数增加
 	if(current_task->files[newfd].node)current_task->files[newfd].node->refs++;
 	if(current_task->files[newfd].pipe)pipeForkRef((struct pipe*)current_task->files[newfd].pipe,(current_task->files[newfd].flags & O_ACCMODE) == O_WRONLY);
 	return newfd;
@@ -386,12 +386,12 @@ static long sys_pipe2(long fds, long flags, long a3, long a4, long a5, long a6){
 	current_task->files[rfd].used = true;
 	current_task->files[rfd].node = NULL;
 	current_task->files[rfd].pipe = p;
-	current_task->files[rfd].off = 0;
+	current_task->files[rfd].f = NULL;
 	current_task->files[rfd].flags = O_RDONLY;
 	current_task->files[wfd].used = true;
 	current_task->files[wfd].node = NULL;
 	current_task->files[wfd].pipe = p;
-	current_task->files[wfd].off = 0;
+	current_task->files[wfd].f = NULL;
 	current_task->files[wfd].flags = O_WRONLY;
 	//输出到用户空间
 	int out[2] = {rfd, wfd};

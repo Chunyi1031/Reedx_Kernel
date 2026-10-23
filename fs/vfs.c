@@ -140,9 +140,16 @@ static int fs_open_node(fs_node_t *node, int flags, fs_file_t *out){
         if(node->ops->truncate)node->ops->truncate(node, 0);
     }
     node->refs++;
+    struct file *file = FileAlloc();
+    if(!file){
+        node->refs--;
+        return -ENOMEM;
+    }
     out->node = node;
     out->flags = flags;
-    out->off = (flags & O_APPEND) ? node->size : 0;
+    out->f = file;
+    file->f_flags = (uint32_t)flags;
+    file->f_pos = (flags & O_APPEND) ? node->size : 0;
     out->used = true;
     return 0;
 }
@@ -258,9 +265,12 @@ void FsClose(fs_file_t *f){
     spin_lock_irqsave(&g_fs_lock, flags);
     if(f && f->used){
         //清理数据
+        if(f->f){
+            FilePut(f->f);
+            f->f = NULL;
+        }
         f->used = false;
         f->node = NULL;
-        f->off = 0;
     }
     spin_unlock_irqrestore(&g_fs_lock, flags);
 }
@@ -269,9 +279,10 @@ uint64_t FsRead(fs_file_t *f, void *buf, uint64_t len){
     uint64_t flags;
     spin_lock_irqsave(&g_fs_lock, flags);
     uint64_t n = 0;
-    if(f && f->used && f->node && f->node->ops->read && (f->flags & O_ACCMODE) != O_WRONLY){//只写打开的文件不可读
-        n = f->node->ops->read(f->node, f->off, buf, len);
-        f->off += n;
+    //只写打开的文件不可读
+    if(f && f->used && f->node && f->f && f->node->ops->read && (f->flags & O_ACCMODE) != O_WRONLY){
+        n = f->node->ops->read(f->node, f->f->f_pos, buf, len);
+        f->f->f_pos += n;
     }
     spin_unlock_irqrestore(&g_fs_lock, flags);
     return n;
@@ -281,10 +292,11 @@ uint64_t FsWrite(fs_file_t *f, const void *buf, uint64_t len){
     uint64_t flags;
     spin_lock_irqsave(&g_fs_lock, flags);
     uint64_t n = 0;
-    if(f && f->used && f->node && f->node->ops->write && (f->flags & O_ACCMODE) != O_RDONLY){//只读打开的文件不可写
-        if(f->flags & O_APPEND) f->off = f->node->size;//追加模式每次写强制写到文件末尾
-        n = f->node->ops->write(f->node, f->off, buf, len);
-        f->off += n;
+    //只读打开的文件不可写
+    if(f && f->used && f->node && f->f && f->node->ops->write && (f->flags & O_ACCMODE) != O_RDONLY){
+        if(f->flags & O_APPEND) f->f->f_pos = f->node->size;//追加模式每次写强制写到文件末尾
+        n = f->node->ops->write(f->node, f->f->f_pos, buf, len);
+        f->f->f_pos += n;
     }
     spin_unlock_irqrestore(&g_fs_lock, flags);
     return n;
@@ -294,16 +306,16 @@ int FsSeek(fs_file_t *f, int64_t off, int whence){
     uint64_t flags;
     spin_lock_irqsave(&g_fs_lock, flags);
     int r = -1;
-    if(f && f->used && f->node){
+    if(f && f->used && f->node && f->f){
         int64_t base;
         if(whence == SEEK_SET) base = 0;
-        else if(whence == SEEK_CUR) base = (int64_t)f->off;
+        else if(whence == SEEK_CUR) base = (int64_t)f->f->f_pos;
         else if(whence == SEEK_END) base = (int64_t)f->node->size;
         else goto done;
         int64_t npos = base + off;
         if(npos < 0)goto done;
-        f->off = (uint64_t)npos;
-        r = (int)f->off;
+        f->f->f_pos = (uint64_t)npos;
+        r = (int)f->f->f_pos;
     }
 done:
     spin_unlock_irqrestore(&g_fs_lock, flags);
@@ -351,8 +363,8 @@ int FsGetdents(fs_file_t *f, void *buf, uint64_t len){
     uint64_t flags;
     spin_lock_irqsave(&g_fs_lock, flags);
     int written = 0;
-    if(f && f->used && f->node && f->node->type == FT_DIR && f->node->ops->readdir && buf){
-        uint64_t pos = f->off;
+    if(f && f->used && f->node && f->node->type == FT_DIR && f->f && f->node->ops->readdir && buf){
+        uint64_t pos = f->f->f_pos;
         char *p = (char*)buf;
         while((uint64_t)written < len){
             fs_dirent_t de;
@@ -385,7 +397,7 @@ int FsGetdents(fs_file_t *f, void *buf, uint64_t len){
             strcpy(d->d_name, de.name);
             written += reclen;
         }
-        f->off = pos;
+        f->f->f_pos = pos;
     }
     spin_unlock_irqrestore(&g_fs_lock, flags);
     return written;

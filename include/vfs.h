@@ -218,6 +218,12 @@ void          DcacheSetLimit(uint32_t max);
 uint32_t      DcacheCount(void);
 int           DcacheSelfTest(void);
 
+//文件描述
+struct file *FileAlloc(void);//新建一个打开文件描述(引用计数=1)
+struct file *FileGet(struct file *f);//增加引用计数
+void FilePut(struct file *f);//减少引用计数,归零则释放
+uint32_t FileCount(void);//已打开文件数
+
 //挂载树
 struct vfsmount *MntAlloc(void);
 void             MntFree(struct vfsmount *m);

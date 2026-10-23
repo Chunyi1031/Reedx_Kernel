@@ -13,6 +13,7 @@
 #include <klib.h>
 #include <print.h>
 #include <pipe.h>
+#include <vfs.h>
 #include <signals.h>
 
 //clone(2)标志位
@@ -95,6 +96,7 @@ pid_t do_fork_ex(uintptr_t child_stack, uint64_t tls){
 	//继承父进程文件描述符表
 	for (int i = 0; i < MAX_FD; i++) {
 		child->files[i] = parent->files[i];
+		FileGet(child->files[i].f);//共享同一个打开文件描述
 		if (child->files[i].used && child->files[i].node) child->files[i].node->refs++;
 		if (child->files[i].used && child->files[i].pipe) pipeForkRef((struct pipe*)child->files[i].pipe, (child->files[i].flags & O_ACCMODE) == O_WRONLY);
 	}

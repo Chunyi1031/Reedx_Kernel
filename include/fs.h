@@ -41,6 +41,7 @@ typedef struct linux_dirent64 {
 } __attribute__((packed)) linux_dirent64_t;
 
 typedef struct fs_node fs_node_t;
+struct file;
 struct disk_info;//磁盘信息(定义在drives/disk.h,此处仅前置声明)
 
 //节点操作集
@@ -75,9 +76,9 @@ struct fs_node{
 
 //打开文件描述
 typedef struct fs_file{
+    struct file *f;     //共享的打开文件描述
     fs_node_t *node;    //文件节点
     void      *pipe;    //管道对象
-    uint64_t   off;     //文件指针
     int        flags;   //打开标志
     _Bool      used;    //是否使用
     _Bool      tty_mark;//控制台fd是否已查询终端
