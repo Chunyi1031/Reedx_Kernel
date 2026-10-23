@@ -206,8 +206,10 @@
 #define ENOSPC              28
 #define EPIPE               32
 #define ERANGE              34
+#define ENAMETOOLONG        36
 #define ENOSYS              38
 #define ENOTEMPTY           39
+#define ELOOP               40
 #define EOPNOTSUPP          95
 #define ETIMEDOUT           110
 
