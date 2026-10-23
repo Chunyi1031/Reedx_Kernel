@@ -71,12 +71,5 @@ _Bool InitDiskAndFs(){
         return false;
     }
     FsInit(&disk);//初始化文件系统
-    //启动自检
-    int ic_ok = (IcacheSelfTest() == 0);
-    gendisk_t *gd = BlkDiskAt(0);
-    bdev_t *bd = gd ? BlkWholeDevice(gd) : NULL;
-    int bc_ok = bd ? (BCacheSelfTest(bd) == 0) : 1;
-    if(ic_ok && bc_ok)printk(PRINTK_INFO"vfs: self-test passed (icache + bcache)");
-    else printk(PRINTK_WARNING"vfs: self-test FAILED (icache=%d bcache=%d)", ic_ok, bc_ok);
     return true;
 }

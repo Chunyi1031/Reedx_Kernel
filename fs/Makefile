@@ -2,4 +2,4 @@
 #
 # Copyright (C) 2026 Liu Chunyi
 #
-obj-y := vfs.o ramfs.o vfs/super.o vfs/inode.o fat/fat32.o
+obj-y := vfs.o ramfs.o ramfs2.o vfs/super.o vfs/inode.o vfs/dcache.o vfs/mount.o fat/fat32.o
