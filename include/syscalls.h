@@ -76,6 +76,8 @@
 #define SYS_PRCTL           157
 #define SYS_ARCH_PRCTL      158
 #define SYS_SYNC            162
+#define SYS_MOUNT           165
+#define SYS_UMOUNT2         166
 #define SYS_REBOOT          169
 #define SYS_GETTID          186
 #define SYS_TKILL           200

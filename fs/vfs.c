@@ -16,6 +16,7 @@
 static struct path g_vfs_root;//新VFS的根
 static spinlock_t g_fs_lock = {0};//全局文件系统锁
 
+//获取当前VFS的根目录
 const struct path *VfsRoot(void){
     return g_vfs_root.dentry ? &g_vfs_root : NULL;
 }
@@ -26,7 +27,7 @@ static const struct path *cwd_path(void){
     return VfsRoot();
 }
 
-//解析起点: 绝对路径从根走, 相对路径从 cwd 走
+//解析起点
 static const struct path *lookup_root(const char *path){
     if(path && path[0] == '/')return VfsRoot();
     const struct path *c = cwd_path();
@@ -56,8 +57,7 @@ int FsGetcwd(char *buf, int size){
     return d_path(c, buf, size);
 }
 
-/*==================== 目录项查找/创建/删除 ====================*/
-//在目录 dentry 下查一个名字; 返回带引用的 dentry(d_inode 为 NULL 表示不存在)
+//在目录dentry下查一个名字，返回带引用的dentry
 static struct dentry *dir_lookup(struct dentry *dir, const char *name){
     if(!dir || !dir->d_inode || !name || !*name)return NULL;
     if((dir->d_inode->i_mode & S_IFMT) != S_IFDIR)return NULL;
@@ -513,8 +513,57 @@ int FsRenameAt(struct dentry *odir, const char *oname, struct dentry *ndir, cons
     return r;
 }
 
-/*==================== 属性 ====================*/
-//inode → stat
+//把type类型的文件系统挂到target目录上
+int FsMount(const char *type, const char *target){
+    if(!type || !target)return -EINVAL;
+    const struct path *root = lookup_root(target);
+    if(!root)return -ENOENT;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    //解析目标路径拿到挂载点dentry
+    struct path p;
+    int r = path_lookup(target, root, LOOKUP_DIRECTORY, &p);
+    //在挂载点上建立一个新文件系统并挂上去
+    if(r == 0){
+        r = VfsMountNew(p.mnt, p.dentry, type);
+        dput(p.dentry);
+    }
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
+//卸载挂在target目录上的文件系统
+int FsUmount(const char *target){
+    if(!target)return -EINVAL;
+    const struct path *root = lookup_root(target);
+    if(!root)return -ENOENT;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    //拆成"父目录 + 末段名"
+    struct path pdir;
+    char name[NAMELEN_MAX + 1];
+    int r = path_lookup_parent(target, root, &pdir, name, sizeof(name));
+    if(r){
+        spin_unlock_irqrestore(&g_fs_lock, lk);
+        return r;
+    }
+    //在父目录里取出挂载点自己的dentry
+    struct dentry *d = dir_lookup(pdir.dentry, name);
+    dput(pdir.dentry);
+    if(!d){
+        spin_unlock_irqrestore(&g_fs_lock, lk);
+        return -ENOENT;
+    }
+    //卸载
+    struct vfsmount *m = d->d_mounted;
+    if(!m)r = -EINVAL;
+    else r = VfsDetachMount(m);
+    dput(d);
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
+//inode转stat
 static void inode_to_stat(struct inode *i, struct stat *st){
     memset(st, 0, sizeof(*st));
     st->st_dev      = 1;

@@ -120,6 +120,14 @@ int path_lookup(const char *path, const struct path *root, unsigned flags, struc
         out->dentry = NULL;
         return -ENOENT;
     }
+    //末段正好是个挂载点,穿到被挂载文件系统的根
+    while(out->dentry->d_mounted){
+        struct vfsmount *sm = out->dentry->d_mounted;
+        dput(out->dentry);
+        out->mnt = sm;
+        out->dentry = dget(sm->mnt_root);
+        if(!out->dentry)return -ENOENT;
+    }
     //如果LOOKUP_DIRECTORY被设置，但解析结果不是目录，返回-ENOTDIR
     if((flags & LOOKUP_DIRECTORY) && ((out->dentry->d_inode->i_mode & S_IFMT) != S_IFDIR)){
         dput(out->dentry);

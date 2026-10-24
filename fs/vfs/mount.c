@@ -7,6 +7,7 @@
  * 挂载树(mount tree)
  */
 #include <vfs.h>
+#include <fs.h>
 #include <mm/kslab.h>
 #include <print.h>
 
@@ -140,4 +141,23 @@ void VfsDumpMounts(void){
                m->mnt_parent ? " (attached)" : " (root)",
                m->mnt_sb ? m->mnt_sb->s_magic : 0, m->mnt_flags);
     }
+}
+
+//在mountpoint上挂一个新的内存文件系统
+int VfsMountNew(struct vfsmount *parent, struct dentry *mountpoint, const char *type){
+    //检查参数与挂载点
+    if(!parent || !mountpoint || !type)return -EINVAL;
+    if((mountpoint->d_inode->i_mode & S_IFMT) != S_IFDIR)return -ENOTDIR;
+    if(strcmp(type, "ramfs") && strcmp(type, "tmpfs"))return -ENODEV;
+    //新建一个超级块,并把它的根目录dentry建出来
+    struct super_block *sb = SuperAlloc("ramfs", 0x01021994, Ramfs2InodeSize(), Ramfs2SuperOps());
+    if(!sb)return -ENOMEM;
+    struct dentry *root = Ramfs2FillSuper(sb);
+    if(!root)return -ENOMEM;
+    //先把新文件系统挂成一棵独立的挂载树,再挂到mountpoint下面
+    struct vfsmount *m = VfsKernMount(sb, root, 0);
+    if(!m)return -ENOMEM;
+    int r = VfsAttachMount(parent, mountpoint, m);
+    if(r)VfsDetachMount(m);//挂载失败要回收刚建的挂载树
+    return r;
 }

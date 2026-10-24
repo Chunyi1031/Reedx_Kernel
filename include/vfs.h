@@ -247,6 +247,7 @@ void             MntFree(struct vfsmount *m);
 struct vfsmount *VfsKernMount(struct super_block *sb, struct dentry *root, uint32_t flags);//内核挂载
 int              VfsAttachMount(struct vfsmount *parent, struct dentry *mountpoint,struct vfsmount *child);//把子挂载挂到目录上
 int              VfsDetachMount(struct vfsmount *m);//卸载
+int              VfsMountNew(struct vfsmount *parent, struct dentry *mountpoint, const char *type);//在目录上新建并挂载ramfs/tmpfs
 struct dentry   *VfsDotDot(struct vfsmount **mnt_io, struct dentry *dentry);
 uint32_t         VfsMountCount(void);
 void             VfsDumpMounts(void);

@@ -112,6 +112,8 @@ int FsUtime(const char *path, int64_t atime, int64_t mtime, int64_t ctime);//按
 int FsUtimeAt(struct dentry *dir, const char *name, int64_t atime, int64_t mtime, int64_t ctime);//在目录 dentry 下改时间
 int FsUtimeFd(fs_file_t *f, int64_t atime, int64_t mtime, int64_t ctime);//按已打开文件改时间
 int FsAccess(const char *path, int mask);//存在性/权限检查
+int FsMount(const char *type, const char *target);//把type类型的文件系统挂到target目录上
+int FsUmount(const char *target);//卸载挂在target目录上的文件系统
 int FsExistsAt(struct dentry *dir, const char *name);//存在性检查(0存在,-ENOENT不存在)
 
 void FsClose(fs_file_t *f);//关闭文件

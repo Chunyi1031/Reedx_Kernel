@@ -441,6 +441,31 @@ static long sys_dup3(long oldfd, long newfd, long flags, long a4, long a5, long 
 }
 
 /*
+ * int mount(const char *source, const char *target, const char *type,unsigned long flags, const void *data)
+ */
+static long sys_mount(long source, long target, long fstype, long flags, long data, long a6){
+	(void)source; (void)flags; (void)data; (void)a6;
+	if(!current_task)return -EPERM;
+	if(!target || !fstype)return -EFAULT;
+	char ktarget[256],ktype[64];
+	if(strncpy_from_user(ktarget, (void*)target, 256) < 0)return -EFAULT;
+	if(strncpy_from_user(ktype, (void*)fstype, 64) < 0)return -EFAULT;
+	return FsMount(ktype, ktarget);
+}
+
+/*
+ * int umount2(const char *target, int flags)
+ */
+static long sys_umount2(long target, long flags, long a3, long a4, long a5, long a6){
+	(void)flags; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	if(!target)return -EFAULT;
+	char ktarget[256];
+	if(strncpy_from_user(ktarget, (void*)target, 256) < 0)return -EFAULT;
+	return FsUmount(ktarget);
+}
+
+/*
  * int mkdir(const char *pathname, mode_t mode)
  */
 static long sys_mkdir(long path, long mode, long unused, long a4, long a5, long a6){
@@ -2126,6 +2151,8 @@ void InitSyscall(void){
 	syscall_table[SYS_EXIT]       = sys_exit;
 	syscall_table[SYS_WAIT4]      = sys_waitpid;
 	syscall_table[SYS_EXIT_GROUP] = sys_exit_group;
+	syscall_table[SYS_MOUNT]      = sys_mount;
+	syscall_table[SYS_UMOUNT2]    = sys_umount2;
 	syscall_table[SYS_MKDIR]      = sys_mkdir;
 	syscall_table[SYS_MKDIRAT]    = sys_mkdirat;
 	syscall_table[SYS_RMDIR]      = sys_rmdir;
