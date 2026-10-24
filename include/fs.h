@@ -42,7 +42,9 @@ typedef struct linux_dirent64 {
 
 typedef struct fs_node fs_node_t;
 struct file;
-struct disk_info;//磁盘信息(定义在drives/disk.h,此处仅前置声明)
+struct super_block;
+struct dentry;
+struct disk_info;//磁盘信息
 
 //节点操作集
 typedef struct fs_node_ops{
@@ -110,6 +112,10 @@ int FsGetdents(fs_file_t *f, void *buf, uint64_t len);//读取目录项到缓冲
 //FAT32
 int fat32_mount(struct disk_info *disk);//挂载FAT32分区
 fs_node_t *fat32_root(void);//FAT32根目录节点
+//FAT32在新VFS上的适配
+uint32_t FatVfsInodeSize(void);
+const struct super_operations *FatVfsSuperOps(void);
+struct dentry *FatVfsFillSuper(struct super_block *sb);
 //RamFS
 fs_node_t *ramfs_init(void);//初始化ramfs
 

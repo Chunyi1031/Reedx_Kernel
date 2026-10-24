@@ -13,7 +13,12 @@
 #include <vfs.h>
 
 static fs_node_t *fs_root = NULL;
+static struct path g_vfs_root;//新VFS的根
 static spinlock_t g_fs_lock = {0};//全局文件系统锁
+
+const struct path *VfsRoot(void){
+    return g_vfs_root.dentry ? &g_vfs_root : NULL;
+}
 
 fs_node_t *FsRoot(void){
     return fs_root;
@@ -465,6 +470,15 @@ void FsInit(struct disk_info *disk){
     //优先挂载FAT32,失败则回退ramfs
     if(disk && (fat32_mount(disk) == 0)){
         fs_root = fat32_root();
+        struct super_block *sb = SuperAlloc("vfat", 0x4D44, FatVfsInodeSize(), FatVfsSuperOps());
+        if(sb){
+            struct dentry *root = FatVfsFillSuper(sb);
+            struct vfsmount *mnt = root ? VfsKernMount(sb, root, 0) : NULL;
+            if(mnt){
+                g_vfs_root.mnt = mnt;
+                g_vfs_root.dentry = root;
+            }
+        }
     }else{
         fs_root = ramfs_init();
     }

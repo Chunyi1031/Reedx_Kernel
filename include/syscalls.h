@@ -204,6 +204,7 @@
 #define ENOTTY              25
 #define ENFILE              23
 #define ENOSPC              28
+#define EROFS               30
 #define EPIPE               32
 #define ERANGE              34
 #define ENAMETOOLONG        36
