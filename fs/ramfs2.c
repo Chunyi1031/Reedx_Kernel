@@ -110,20 +110,16 @@ static const struct file_operations g_ramfs_fops = {
 };
 
 //==================== inode 操作 ====================
-//把一个新的 dentry 挂到父目录的 children 链上
-//★ 两个链用两个不同的节点: d_child 挂父 dentry 的 d_subdirs,
-//   d_alias 挂 ramfs 自己的目录 children(一个节点不能同时属于两个链)
+//把新的dentry挂到本FS自己的目录children链上
 static void ramfs_link_child(struct inode *dir, struct dentry *dentry){
     ramfs_inode_info_t *ri = RAMFS_INFO(dir);
     if(!ri)return;
     l_add_tail(&dentry->d_alias, &ri->children);
-    if(dentry->d_parent)l_add_tail(&dentry->d_child, &dentry->d_parent->d_subdirs);
 }
 
 static void ramfs_unlink_child(struct inode *dir, struct dentry *dentry){
     (void)dir;
     if(dentry->d_alias.next)l_del(&dentry->d_alias);
-    if(dentry->d_child.next)l_del(&dentry->d_child);
 }
 
 static struct inode *ramfs_new_inode(struct inode *dir, uint16_t mode){

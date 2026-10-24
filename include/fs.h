@@ -46,6 +46,7 @@ struct inode;
 struct vfsmount;
 struct super_block;
 struct dentry;
+struct stat;
 struct disk_info;//磁盘信息
 
 //节点操作集
@@ -84,7 +85,6 @@ typedef struct fs_file{
     struct inode    *inode; //新VFS的inode
     struct dentry   *dentry;//新VFS的目录项
     struct vfsmount *mnt;   //解析时经过的挂载点
-    fs_node_t       *node;  //旧节点
     void            *pipe;  //管道对象
     int              flags; //打开标志
     _Bool            used;  //是否使用
@@ -92,16 +92,27 @@ typedef struct fs_file{
 } fs_file_t;
 
 void FsInit(struct disk_info *disk);//初始化文件系统
-fs_node_t *FsRoot(void);//文件系统根目录节点
-fs_node_t *FsResolve(const char *path);//解析绝对路径返回节点
-int FsNormalizePath(const char *path, char *out, int outsz);//规范化路径, 输出绝对规范路径
+int  FsNormalizePath(const char *path, char *out, int outsz);//规范化路径, 输出绝对规范路径
+
+//路径/目录项接口
+struct dentry *FsDirOfFd(int fd);//fd对应的目录dentry
 int FsOpen(const char *path, int flags, fs_file_t *out);//打开文件
-int FsOpenIn(fs_node_t *dir, const char *name, int flags, fs_file_t *out);//在已打开目录下打开
-int FsMkdirIn(fs_node_t *dir, const char *name, int mode);//在已打开目录下建子目录
-int FsUnlinkIn(fs_node_t *dir, const char *name);//删除已打开目录下的目录项
-int FsRenameIn(fs_node_t *olddir, const char *oldname, fs_node_t *newdir, const char *newname);//两侧均为目录+名字的重命名
-int FsExistsIn(fs_node_t *dir, const char *name);//存在性检查
-fs_node_t *FsParentOf(const char *path, char *name, int namesz);//取路径的父目录节点与末段名
+int FsOpenAt(struct dentry *dir, const char *name, int flags, fs_file_t *out);//在目录dentry下打开
+int FsMkdir(const char *path, int mode);//创建目录
+int FsMkdirAt(struct dentry *dir, const char *name, int mode);//在目录dentry下创建目录
+int FsUnlink(const char *path, int isdir);//删除文件/目录
+int FsUnlinkAt(struct dentry *dir, const char *name, int isdir);//在目录dentry下删除
+int FsRename(const char *oldpath, const char *newpath, int flags);//改名/移动
+int FsRenameAt(struct dentry *odir, const char *oname, struct dentry *ndir, const char *nname, int flags);//在目录dentry下改名/移动
+int FsStat(const char *path, struct stat *st);//按路径取属性
+int FsStatAt(struct dentry *dir, const char *name, struct stat *st);//在目录dentry下取属性
+int FsStatFile(fs_file_t *f, struct stat *st);//按已打开文件取属性
+int FsUtime(const char *path, int64_t atime, int64_t mtime, int64_t ctime);//按路径改时间
+int FsUtimeAt(struct dentry *dir, const char *name, int64_t atime, int64_t mtime, int64_t ctime);//在目录 dentry 下改时间
+int FsUtimeFd(fs_file_t *f, int64_t atime, int64_t mtime, int64_t ctime);//按已打开文件改时间
+int FsAccess(const char *path, int mask);//存在性/权限检查
+int FsExistsAt(struct dentry *dir, const char *name);//存在性检查(0存在,-ENOENT不存在)
+
 void FsClose(fs_file_t *f);//关闭文件
 uint64_t FsRead(fs_file_t *f, void *buf, uint64_t len);//读取文件
 uint64_t FsWrite(fs_file_t *f, const void *buf, uint64_t len);//写入文件
@@ -109,9 +120,6 @@ int FsSeek(fs_file_t *f, int64_t off, int whence);//移动文件指针
 uint64_t FsSize(fs_file_t *f);//获取文件大小
 int FsTruncate(fs_file_t *f, uint64_t len);//按fd截断/扩展文件(ftruncate)
 int FsTruncatePath(const char *path, uint64_t len);//按路径截断/扩展文件(truncate)
-int FsMkdir(const char *path, int mode);//创建目录
-int FsUnlink(const char *path);//删除目录项(文件或目录)
-int FsRename(const char *oldpath, const char *newpath);//重命名(移动)目录项
 int FsGetdents(fs_file_t *f, void *buf, uint64_t len);//读取目录项到缓冲区
 
 //FAT32
@@ -121,7 +129,6 @@ fs_node_t *fat32_root(void);//FAT32根目录节点
 uint32_t FatVfsInodeSize(void);
 const struct super_operations *FatVfsSuperOps(void);
 struct dentry *FatVfsFillSuper(struct super_block *sb);
-fs_node_t *FatVfsNode(struct inode *inode);//FAT inode 对应的旧节点
 //RamFS
 uint32_t Ramfs2InodeSize(void);
 const struct super_operations *Ramfs2SuperOps(void);

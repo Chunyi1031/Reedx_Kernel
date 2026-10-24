@@ -98,6 +98,13 @@ struct dentry *d_alloc(struct dentry *parent, const char *name){
     d->d_alias.prev = d->d_alias.next = NULL;
     d->d_hash.prev  = d->d_hash.next  = NULL;
     d->d_lru.prev   = d->d_lru.next   = NULL;
+    //挂进父目录的子链
+    if(parent){
+        uint64_t flags;
+        spin_lock_irqsave(&g_dc_lock, flags);
+        l_add_tail(&d->d_child, &parent->d_subdirs);
+        spin_unlock_irqrestore(&g_dc_lock, flags);
+    }
     g_st_alloc ++;
     return d;
 }
@@ -222,6 +229,7 @@ static void dc_shrink(void){
             l_del(&victim->d_hash);
             victim->d_flags &= ~DCACHE_NEW;
         }
+        if(victim->d_child.next)l_del(&victim->d_child);//从父目录的子链上摘下
         if(g_nr_dentry)g_nr_dentry --;
         uint32_t len = victim->d_name_len;
         struct inode *ino = victim->d_inode;

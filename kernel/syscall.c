@@ -112,7 +112,7 @@ static long sys_getdents64(long fd, long buf, long count, long a4, long a5, long
 //判断fd是否为控制台表项
 static inline _Bool fd_is_console(long fd){
 	if(!current_task || fd < 0 || fd >= MAX_FD)return false;
-	return current_task->files[fd].used && !current_task->files[fd].node && !current_task->files[fd].inode && !current_task->files[fd].pipe;
+	return current_task->files[fd].used && !current_task->files[fd].inode && !current_task->files[fd].pipe;
 }
 
 /*
@@ -313,7 +313,7 @@ static void fd_close_one(long fd){
 	}
 	current_task->files[fd].used = false;
 	current_task->files[fd].pipe = NULL;
-	current_task->files[fd].node = NULL;
+	current_task->files[fd].inode = NULL;
 }
 
 //复制文件描述符表项
@@ -337,7 +337,6 @@ static long fd_dup_to(long oldfd, long newfd){
 	fd_close_one(newfd);//目标已占用则先关闭
 	current_task->files[newfd] = current_task->files[oldfd];//复制描述符
 	FileGet(current_task->files[newfd].f);//引用计数增加
-	if(current_task->files[newfd].node)current_task->files[newfd].node->refs++;
 	if(current_task->files[newfd].pipe)pipeForkRef((struct pipe*)current_task->files[newfd].pipe,(current_task->files[newfd].flags & O_ACCMODE) == O_WRONLY);
 	return newfd;
 }
@@ -384,12 +383,12 @@ static long sys_pipe2(long fds, long flags, long a3, long a4, long a5, long a6){
 	if(rc != 0)return rc;
 	//初始化文件描述符
 	current_task->files[rfd].used = true;
-	current_task->files[rfd].node = NULL;
+	current_task->files[rfd].inode = NULL;
 	current_task->files[rfd].pipe = p;
 	current_task->files[rfd].f = NULL;
 	current_task->files[rfd].flags = O_RDONLY;
 	current_task->files[wfd].used = true;
-	current_task->files[wfd].node = NULL;
+	current_task->files[wfd].inode = NULL;
 	current_task->files[wfd].pipe = p;
 	current_task->files[wfd].f = NULL;
 	current_task->files[wfd].flags = O_WRONLY;
@@ -473,7 +472,7 @@ static long sys_ftruncate(long fd, long length, long a3, long a4, long a5, long 
 	if(length < 0)return -EINVAL;
 	if(!current_task || fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
 	//控制台/管道等无存储节点的 fd 不支持截断
-	if(!current_task->files[fd].node || current_task->files[fd].pipe)return -EINVAL;
+	if(!current_task->files[fd].inode || current_task->files[fd].pipe)return -EINVAL;
 	return FsTruncate(&current_task->files[fd], (uint64_t)length);
 }
 
@@ -546,8 +545,7 @@ static long sys_rmdir(long path, long b, long c, long a4, long a5, long a6){
 	if(!current_task)return -ENOENT;
 	char kpath[256];
 	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
-	int r = FsUnlink(kpath);
-	return (r < 0) ? ((r == -1) ? -ENOENT : r) : 0;
+	return FsUnlink(kpath,1);
 }
 
 /*
@@ -558,8 +556,7 @@ static long sys_unlink(long path, long b, long c, long a4, long a5, long a6){
 	if(!current_task)return -ENOENT;
 	char kpath[256];
 	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
-	int r = FsUnlink(kpath);
-	return (r < 0) ? ((r == -1) ? -ENOENT : r) : 0;
+	return FsUnlink(kpath,0);
 }
 
 /*
@@ -572,7 +569,7 @@ static long sys_rename(long oldpath, long newpath, long c, long a4, long a5, lon
 	char kold[256], knew[256];
 	if(strncpy_from_user(kold, (void*)oldpath, 256) < 0)return -EFAULT;
 	if(strncpy_from_user(knew, (void*)newpath, 256) < 0)return -EFAULT;
-	return FsRename(kold, knew) ? -ENOENT : 0;
+	return FsRename(kold, knew,0);
 }
 
 //从用户态拷路径到内核缓冲
@@ -582,12 +579,12 @@ static long at_read_path(long path, char *kbuf, int bufsz){
 	if(kbuf[0] == '\0')return -ENOENT;
 	return 0;
 }
-static long at_split(long dirfd, const char *kpath, fs_node_t **dir, char *name, int namesz){
+static long at_split(long dirfd, const char *kpath, struct dentry **dir, char *name, int namesz){
 	if((int)dirfd == AT_FDCWD || kpath[0] == '/')return -ENOSYS;
 	for(const char *p = kpath; *p; p++)if(*p == '/')return -ENOSYS;//多级相对名无法从fd精确拼接
 	if(!current_task || dirfd < 0 || dirfd >= MAX_FD || !current_task->files[dirfd].used)return -EBADF;
-	fs_node_t *d = current_task->files[dirfd].node;
-	if(!d || d->type != FT_DIR)return -ENOTDIR;
+	struct dentry *d = FsDirOfFd((int)dirfd);
+	if(!d)return -ENOTDIR;
 	int i = 0;
 	for(; kpath[i] && i < namesz - 1; i++)name[i] = kpath[i];
 	name[i] = '\0';
@@ -605,22 +602,14 @@ static long do_renameat(long olddirfd, long oldpath, long newdirfd, long newpath
 	if(pr)return pr;
 	pr = at_read_path(newpath, knew, 256);
 	if(pr)return pr;
-	fs_node_t *odir = NULL, *ndir = NULL;
+	struct dentry *odir = NULL,*ndir = NULL;
 	char oname[MAX_NAME], nname[MAX_NAME];
 	long r = at_split(olddirfd, kold, &odir, oname, MAX_NAME);
 	if(r < 0 && r != -ENOSYS)return r;
-	if(r == -ENOSYS){
-		odir = FsParentOf(kold, oname, MAX_NAME);
-		if(!odir)return -ENOENT;
-	}
-	r = at_split(newdirfd, knew, &ndir, nname, MAX_NAME);
-	if(r < 0 && r != -ENOSYS)return r;
-	if(r == -ENOSYS){
-		ndir = FsParentOf(knew, nname, MAX_NAME);
-		if(!ndir)return -ENOENT;
-	}
-	if((flags & RENAME_NOREPLACE) && FsExistsIn(ndir, nname) == 0)return -EEXIST;
-	return FsRenameIn(odir, oname, ndir, nname);
+	long r2 = at_split(newdirfd, knew, &ndir, nname, MAX_NAME);
+	if(r2 < 0 && r2 != -ENOSYS)return r2;
+	if(r == -ENOSYS || r2 == -ENOSYS)return FsRename(kold, knew, (int)flags);
+	return FsRenameAt(odir, oname, ndir, nname, (int)flags);
 }
 
 /*
@@ -640,12 +629,12 @@ static long sys_mkdirat(long dirfd, long path, long mode, long a4, long a5, long
 	char kpath[256];
 	long pr = at_read_path(path, kpath, 256);
 	if(pr)return pr;
-	fs_node_t *dir = NULL;
+	struct dentry *dir = NULL;
 	char name[MAX_NAME];
 	long r = at_split(dirfd, kpath, &dir, name, MAX_NAME);
 	if(r < 0 && r != -ENOSYS)return r;
 	if(r == -ENOSYS)return sys_mkdir(path, mode, 0, 0, 0, 0);
-	return FsMkdirIn(dir, name, (int)mode);
+	return FsMkdirAt(dir, name, (int)mode);
 }
 
 /*
@@ -657,7 +646,7 @@ static long sys_unlinkat(long dirfd, long path, long flags, long a4, long a5, lo
 	char kpath[256];
 	long pr = at_read_path(path, kpath, 256);
 	if(pr)return pr;
-	fs_node_t *dir = NULL;
+	struct dentry *dir = NULL;
 	char name[MAX_NAME];
 	long r = at_split(dirfd, kpath, &dir, name, MAX_NAME);
 	if(r < 0 && r != -ENOSYS)return r;
@@ -665,8 +654,7 @@ static long sys_unlinkat(long dirfd, long path, long flags, long a4, long a5, lo
 		if(flags & AT_REMOVEDIR)return sys_rmdir(path, 0, 0, 0, 0, 0);
 		return sys_unlink(path, 0, 0, 0, 0, 0);
 	}
-	int rr = FsUnlinkIn(dir, name);
-	return (rr < 0) ? ((rr == -1) ? -ENOENT : rr) : 0;
+	return FsUnlinkAt(dir,name,((flags & AT_REMOVEDIR) ? 1 : 0));
 }
 
 /*
@@ -692,22 +680,6 @@ static long sys_lseek(long fd, long off, long whence, long a4, long a5, long a6)
 	return r;
 }
 /*DeepSeek V4 Flash*/
-//填充 stat 结构
-static void fill_stat(stat_t *st, fs_node_t *node){
-	memset(st, 0, sizeof(*st));
-	st->st_dev = 1;
-	st->st_ino = node->ino;
-	st->st_nlink = 1;
-	st->st_mode = (node->type == FT_DIR) ? (S_IFDIR | 0755) : (S_IFREG | 0755);
-	st->st_size = (int64_t)node->size;
-	st->st_blksize = 512;
-	st->st_blocks = ((uint64_t)node->size + 511) / 512;
-	uint64_t now = rtc_get_epoch();
-	st->st_atime = (int64_t)(node->atime ? node->atime : now);
-	st->st_mtime = (int64_t)(node->mtime ? node->mtime : now);
-	st->st_ctime = (int64_t)(node->ctime ? node->ctime : now);
-}
-
 /*
  * int stat(const char *path, struct stat *buf)
  */
@@ -717,10 +689,9 @@ static long sys_newstat(long path, long buf, long a3, long a4, long a5, long a6)
 	if(!path || !buf)return -EFAULT;
 	char kpath[256];
 	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
-	fs_node_t *node = FsResolve(kpath);
-	if(!node)return -ENOENT;
 	stat_t st;
-	fill_stat(&st, node);
+	long r = FsStat(kpath,&st);
+	if(r)return r;
 	if(copy_to_user((void*)buf, &st, sizeof(st)))return -EFAULT;
 	return 0;
 }
@@ -734,7 +705,7 @@ static long sys_openat(long dirfd, long path, long flags, long mode, long a5, lo
 	char kpath[256];
 	long pr = at_read_path(path, kpath, 256);
 	if(pr)return pr;
-	fs_node_t *dir = NULL;
+	struct dentry *dir = NULL;
 	char name[MAX_NAME];
 	long r = at_split(dirfd, kpath, &dir, name, MAX_NAME);
 	if(r < 0 && r != -ENOSYS)return r;
@@ -746,7 +717,7 @@ static long sys_openat(long dirfd, long path, long flags, long mode, long a5, lo
 	}
 	if(fd >= MAX_FD)return -ENFILE;
 	fs_file_t *f = &current_task->files[fd];
-	int or = FsOpenIn(dir, name, (int)flags, f);
+	int or = FsOpenAt(dir,name,(int)flags,f);
 	if(or != 0)return or;
 	return fd;
 }
@@ -766,80 +737,17 @@ static long sys_newfstatat(long dirfd, long path, long buf, long flags, long a5,
 		return sys_newfstat(dirfd, buf, 0, 0, 0, 0);
 	}
 	if((int)dirfd != AT_FDCWD && kpath[0] != '/'){
-		if(dirfd < 0 || dirfd >= MAX_FD || !current_task->files[dirfd].used)return -EBADF;
-		fs_node_t *dir = current_task->files[dirfd].node;
-		if(!dir || dir->type != FT_DIR)return -ENOTDIR;
-		if(!dir->ops || !dir->ops->lookup)return -ENOSYS;
-		fs_node_t *child = dir->ops->lookup(dir, kpath);
-		if(!child)return -ENOENT;
+		struct dentry *dir = FsDirOfFd((int)dirfd);
+		if(!dir)return -ENOTDIR;
 		stat_t st;
-		fill_stat(&st, child);
+		long r = FsStatAt(dir,(char*)path,&st);
+		if(r != 0)return r;
 		if(copy_to_user((void*)buf, &st, sizeof(st)))return -EFAULT;
 		return 0;
 	}
 	return sys_newstat(path, buf, 0, 0, 0, 0);
 }
 
-//取fd对应的存储节点
-static fs_node_t *fd_node_of(long fd, long *err){
-	if(!current_task || fd < 0 || fd >= MAX_FD || !current_task->files[fd].used){
-		*err = -EBADF;
-		return NULL;
-	}
-	if(!current_task->files[fd].node){
-		*err = -EBADF;
-		return NULL;
-	}
-	return current_task->files[fd].node;
-}
-//解析dirfd+path
-static fs_node_t *resolve_at_node(long dirfd, long path, long flags, long *err){
-	*err = -ENOENT;
-	if(!path)return fd_node_of(dirfd, err);//如果path为NULL，目标就是dirfd自身
-	//复制path
-	char kpath[256];
-	if(strncpy_from_user(kpath, (void*)path, 256) < 0){
-		*err = -EFAULT;
-		return NULL;
-	}
-	//如果path为空字符串，目标就是dirfd自身
-	if(kpath[0] == '\0'){
-		if(!(flags & AT_EMPTY_PATH)){
-			*err = -ENOENT;
-			return NULL;
-		}
-		return fd_node_of(dirfd, err);
-	}
-	//如果dirfd不是AT_FDCWD且path不是绝对路径，则在dirfd目录下查找
-	if((int)dirfd != AT_FDCWD && kpath[0] != '/'){
-		if(!current_task || dirfd < 0 || dirfd >= MAX_FD || !current_task->files[dirfd].used){
-			*err = -EBADF;
-			return NULL;
-		}
-		fs_node_t *dir = current_task->files[dirfd].node;
-		if(!dir || dir->type != FT_DIR){
-			*err = -ENOTDIR;
-			return NULL;
-		}
-		if(!dir->ops || !dir->ops->lookup){
-			*err = -ENOSYS;
-			return NULL;
-		}
-		fs_node_t *child = dir->ops->lookup(dir, kpath);
-		if(!child){
-			*err = -ENOENT;
-			return NULL;
-		}
-		return child;
-	}
-	//否则直接解析绝对路径
-	fs_node_t *node = FsResolve(kpath);
-	if(!node){
-		*err = -ENOENT;
-		return NULL;
-	}
-	return node;
-}
 //把fd的stat信息填进内核stat_t
 static long stat_of_fd(long fd, stat_t *st){
 	if(!current_task)return -EBADF;
@@ -872,8 +780,7 @@ static long stat_of_fd(long fd, stat_t *st){
 		st->st_ctime = (int64_t)now;
 		return 0;
 	}
-	fill_stat(st, current_task->files[fd].node);
-	return 0;
+	return FsStatFile(&current_task->files[fd],st);
 }
 
 /*
@@ -915,10 +822,17 @@ static long sys_statx(long dirfd, long path, long flags, long mask, long buf, lo
 		long r = stat_of_fd(dirfd, &st);
 		if(r)return r;
 	}else{
-		long e = 0;
-		fs_node_t *node = resolve_at_node(dirfd, path, flags, &e);
-		if(!node)return e;
-		fill_stat(&st, node);
+		char kpath[256];
+		if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
+		long r;
+		if((int)dirfd != AT_FDCWD && kpath[0] != '/'){
+			struct dentry *dir = FsDirOfFd((int)dirfd);
+			if(!dir)return -ENOTDIR;
+			r = FsStatAt(dir,kpath,&st);
+		}else{
+			r = FsStat(kpath,&st);
+		}
+		if(r)return r;
 	}
 	//填充statx
 	statx_t sx;
@@ -956,8 +870,7 @@ static long sys_access(long path, long mode, long a3, long a4, long a5, long a6)
 	if(!path)return -EFAULT;
 	char kpath[256];
 	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
-	if(!FsResolve(kpath))return -ENOENT;
-	return 0;
+	return FsAccess(kpath, 0);
 }
 
 /*
@@ -969,12 +882,12 @@ static long sys_faccessat(long dirfd, long path, long mode, long flags, long a5,
 	char kpath[256];
 	long pr = at_read_path(path, kpath, 256);
 	if(pr)return pr;
-	fs_node_t *dir = NULL;
+	struct dentry *dir = NULL;
 	char name[MAX_NAME];
 	long r = at_split(dirfd, kpath, &dir, name, MAX_NAME);
 	if(r < 0 && r != -ENOSYS)return r;
 	if(r == -ENOSYS)return sys_access(path, mode, 0, 0, 0, 0);
-	return FsExistsIn(dir, name);
+	return FsExistsAt(dir, name);
 }
 
 /*
@@ -1011,9 +924,10 @@ static long sys_chdir(long path, long a2, long a3, long a4, long a5, long a6){
 	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
 	char norm[512];
 	if(FsNormalizePath(kpath, norm, sizeof(norm)) != 0)return -ENOENT;
-	fs_node_t *node = FsResolve(kpath);
-	if(!node)return -ENOENT;
-	if(node->type != FT_DIR)return -ENOTDIR;
+	stat_t st;
+	long r = FsStat(kpath,&st);
+	if(r)return r;
+	if((st.st_mode & S_IFMT) != S_IFDIR)return -ENOTDIR;
 	int len = strlen(norm);
 	if(len > 255)len = 255;
 	memcpy(current_task->cwd, norm, (uint64_t)len);
@@ -1202,32 +1116,44 @@ static long sys_readv(long fd, long iov, long iovcnt, long a4, long a5, long a6)
 static long sys_utimensat(long dirfd, long path, long times, long flags, long a5, long a6){
 	(void)a5; (void)a6;
 	if(!current_task || !current_task->mm)return -ENOSYS;
-	long e = 0;
-	fs_node_t *node = resolve_at_node(dirfd, path, flags, &e);
-	if(!node)return e;
-	//解析 times[2](tv_nsec 可能是 UTIME_NOW/UTIME_OMIT 特殊值)
-	uint64_t now = rtc_get_epoch();
-	uint64_t atime = node->atime, mtime = node->mtime;
-	if(!times){
-		atime = now;
-		mtime = now;
-	}else{
+	int64_t now = (int64_t)rtc_get_epoch();
+	int64_t at = now, mt = now;
+	if(times){
 		timespec_t ts[2];
 		if(copy_from_user(ts, (void*)times, sizeof(ts)))return -EFAULT;
-		for(int i = 0; i < 2; i++){
-			uint64_t *dst = (i == 0) ? &atime : &mtime;
-			if(ts[i].tv_nsec == UTIME_OMIT)continue;
-			if(ts[i].tv_nsec == UTIME_NOW){ *dst = now; continue; }
+		for(int i = 0; i < 2; i ++){
+			if(ts[i].tv_nsec == UTIME_OMIT){
+				if(i == 0)at = -1; else mt = -1;
+				continue;
+			}
+			if(ts[i].tv_nsec == UTIME_NOW)continue;
 			if(ts[i].tv_nsec < 0 || ts[i].tv_nsec >= 1000000000L || ts[i].tv_sec < 0)return -EINVAL;
-			*dst = (uint64_t)ts[i].tv_sec;
+			if(i == 0)at = (int64_t)ts[i].tv_sec; else mt = (int64_t)ts[i].tv_sec;
 		}
 	}
-	node->atime = atime;
-	node->mtime = mtime;
-	node->ctime = now;
-	//回写到存储介质(FAT32 会更新目录项; ramfs 没有该操作, 仅更新内存节点)
-	if(node->ops && node->ops->set_times)node->ops->set_times(node);
-	return 0;
+	//path 为 NULL 或空串: 作用于 fd 自身(glibc 的 futimens 走这里)
+	_Bool self = false;
+	char kpath[256];
+	if(!path){
+		self = true;
+	}else{
+		if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
+		if(kpath[0] == '\0'){
+			if(!(flags & AT_EMPTY_PATH))return -ENOENT;
+			self = true;
+		}
+	}
+	if(self){
+		if(dirfd < 0 || dirfd >= MAX_FD || !current_task->files[dirfd].used)return -EBADF;
+		return FsUtimeFd(&current_task->files[dirfd], at, mt, now);
+	}
+	//dirfd + 单级相对名
+	if((int)dirfd != AT_FDCWD && kpath[0] != '/'){
+		struct dentry *dir = FsDirOfFd((int)dirfd);
+		if(!dir)return -ENOTDIR;
+		return FsUtimeAt(dir, kpath, at, mt, now);
+	}
+	return FsUtime(kpath, at, mt, now);
 }
 
 /*

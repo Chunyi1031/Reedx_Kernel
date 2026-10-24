@@ -34,13 +34,16 @@ static struct inode *fat_wrap(struct inode *dir, fs_node_t *n){
             Iput(i);
             return NULL;
         }
-        fi->node    = n;
-        i->i_mode   = fat_mode_of(n);
-        i->i_size   = n->size;
-        i->i_nlink  = (n->type == FT_DIR) ? 2 : 1;
-        i->i_op     = dir->i_op;
-        i->i_fop    = dir->i_fop;
-        i->i_state &= ~I_NEW;
+        fi->node     = n;
+        i->i_mode    = fat_mode_of(n);
+        i->i_size    = n->size;
+        i->i_nlink   = (n->type == FT_DIR) ? 2 : 1;
+        i->i_op      = dir->i_op;
+        i->i_fop     = dir->i_fop;
+        i->i_atime_s = (int64_t)n->atime;
+        i->i_mtime_s = (int64_t)n->mtime;
+        i->i_ctime_s = (int64_t)n->ctime;
+        i->i_state  &= ~I_NEW;
     }
     return i;
 }
@@ -143,6 +146,13 @@ static int fat_vfs_setattr(struct dentry *dentry, void *iattr){
         i->i_size      = ia->ia_size;
     }
     if(ia->ia_valid & ATTR_MODE)i->i_mode = (uint16_t)((i->i_mode & S_IFMT) | (ia->ia_mode & 0777));
+    //同步到旧节点并回写目录项
+    if(ia->ia_valid & (ATTR_ATIME | ATTR_MTIME | ATTR_CTIME)){
+        if(ia->ia_valid & ATTR_ATIME){ i->i_atime_s = ia->ia_atime; fi->node->atime = (uint64_t)ia->ia_atime; }
+        if(ia->ia_valid & ATTR_MTIME){ i->i_mtime_s = ia->ia_mtime; fi->node->mtime = (uint64_t)ia->ia_mtime; }
+        if(ia->ia_valid & ATTR_CTIME){ i->i_ctime_s = ia->ia_ctime; fi->node->ctime = (uint64_t)ia->ia_ctime; }
+        if(fi->node->ops && fi->node->ops->set_times)fi->node->ops->set_times(fi->node);
+    }
     return 0;
 }
 
@@ -192,7 +202,9 @@ static int64_t fat_vfs_write(struct file *f, const char *buf, uint64_t len, uint
     uint64_t n = fi->node->ops->write(fi->node, *pos, buf, len);
     *pos += n;
     fi->node->size = (*pos > fi->node->size) ? *pos : fi->node->size;
-    f->f_inode->i_size = fi->node->size;
+    f->f_inode->i_size    = fi->node->size;
+    f->f_inode->i_mtime_s = (int64_t)fi->node->mtime;
+    f->f_inode->i_ctime_s = (int64_t)fi->node->ctime;
     return (int64_t)n;
 }
 
@@ -235,13 +247,6 @@ uint32_t FatVfsInodeSize(void){
 
 const struct super_operations *FatVfsSuperOps(void){ return &g_fat_sop; }
 
-//FAT inode 对应的旧节点(非 FAT 的 inode 返回 NULL)
-fs_node_t *FatVfsNode(struct inode *inode){
-    if(!inode || inode->i_op != &g_fat_iops)return NULL;
-    fat_vfs_inode_t *fi = FI(inode);
-    return fi ? fi->node : NULL;
-}
-
 //建立 FAT32 的根 inode 与根 dentry
 struct dentry *FatVfsFillSuper(struct super_block *sb){
     if(!sb)return NULL;
@@ -251,13 +256,16 @@ struct dentry *FatVfsFillSuper(struct super_block *sb){
     if(!root)return NULL;
     fat_vfs_inode_t *fi = FI(root);
     if(!fi){ Iput(root); return NULL; }
-    fi->node      = rn;
-    root->i_mode  = fat_mode_of(rn);
-    root->i_size  = rn->size;
-    root->i_nlink = 2;
-    root->i_op    = &g_fat_iops;
-    root->i_fop   = &g_fat_fops;
-    root->i_state &= ~I_NEW;
+    fi->node        = rn;
+    root->i_mode    = fat_mode_of(rn);
+    root->i_size    = rn->size;
+    root->i_nlink   = 2;
+    root->i_op      = &g_fat_iops;
+    root->i_fop     = &g_fat_fops;
+    root->i_atime_s = (int64_t)rn->atime;
+    root->i_mtime_s = (int64_t)rn->mtime;
+    root->i_ctime_s = (int64_t)rn->ctime;
+    root->i_state  &= ~I_NEW;
 
     struct dentry *d = d_alloc(NULL, "/");
     if(!d){ Iput(root); return NULL; }
