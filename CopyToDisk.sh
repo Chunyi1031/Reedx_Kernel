@@ -32,7 +32,20 @@ echo "挂载到: $MOUNT_POINT"
 
 # 复制内核
 echo "更新内核..."
-cp "$KERNEL" "$MOUNT_POINT/SYS/KERNEL.ELF"
+if ! cp "$KERNEL" "$MOUNT_POINT/SYS/KERNEL.ELF"; then
+    echo "错误：写入内核失败(镜像可能已损坏或变成只读)"
+    udisksctl unmount -b "$LOOP"
+    udisksctl loop-delete -b "$LOOP"
+    exit 1
+fi
+sync
+# 回读校验, 防止"cp 成功但内容没落盘"
+if ! cmp -s "$KERNEL" "$MOUNT_POINT/SYS/KERNEL.ELF"; then
+    echo "错误：写入后校验不一致"
+    udisksctl unmount -b "$LOOP"
+    udisksctl loop-delete -b "$LOOP"
+    exit 1
+fi
 
 # 卸载
 echo "卸载..."

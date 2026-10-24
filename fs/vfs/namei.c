@@ -145,3 +145,41 @@ int path_lookup_parent(const char *path, const struct path *root, struct path *o
     }
     return 0;
 }
+
+/*
+ * 把 dentry 还原成绝对路径(跨挂载点时会接上挂载点所在的目录)
+ * 返回字符串长度(不含结尾 NUL), 缓冲不够返回 -ERANGE
+ */
+int d_path(const struct path *p, char *buf, int size){
+    if(!p || !p->dentry || !buf || size <= 0)return -EINVAL;
+    const char *names[64];
+    int n = 0;
+    struct dentry *d = p->dentry;
+    const struct vfsmount *m = p->mnt;
+    for(;;){
+        while(d && d->d_parent && n < 64){
+            names[n ++] = d->d_name;
+            d = d->d_parent;
+        }
+        //已经在某个 fs 的根上: 沿挂载链接到父文件系统
+        if(!m || !m->mnt_mountpoint)break;
+        d = m->mnt_mountpoint;
+        m = m->mnt_parent;
+    }
+    if(n == 0){//就是根
+        if(size < 2)return -ERANGE;
+        buf[0] = '/';
+        buf[1] = 0;
+        return 1;
+    }
+    int pos = 0;
+    for(int i = n - 1;i >= 0;i --){
+        int len = (int)strlen(names[i]);
+        if(pos + 1 + len >= size)return -ERANGE;
+        buf[pos ++] = '/';
+        memcpy(buf + pos, names[i], (size_t)len);
+        pos += len;
+    }
+    buf[pos] = 0;
+    return pos;
+}

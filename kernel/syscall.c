@@ -448,7 +448,7 @@ static long sys_mkdir(long path, long mode, long unused, long a4, long a5, long 
 	if(!current_task)return -ENOENT;
 	char kpath[256];
 	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
-	return FsMkdir(kpath, (int)mode) ? -ENOENT : 0;
+	return FsMkdir(kpath, (int)mode);
 }
 
 /*
@@ -907,9 +907,11 @@ static long sys_getcwd(long buf, long size, long a3, long a4, long a5, long a6){
 	(void)a3; (void)a4; (void)a5; (void)a6;
 	if(!current_task)return -EFAULT;
 	if(!buf || size <= 0)return -EFAULT;
-	int len = strlen(current_task->cwd);
+	char kbuf[512];
+	int len = FsGetcwd(kbuf, sizeof(kbuf));
+	if(len < 0)return len;
 	if((uint64_t)len + 1 > (uint64_t)size)return -ERANGE;
-	if(copy_to_user((void*)buf, current_task->cwd, (uint64_t)len + 1))return -EFAULT;
+	if(copy_to_user((void*)buf, kbuf, (uint64_t)len + 1))return -EFAULT;
 	return (long)len + 1;//返回写入长度(含NUL)
 }
 
@@ -922,17 +924,7 @@ static long sys_chdir(long path, long a2, long a3, long a4, long a5, long a6){
 	if(!path)return -EFAULT;
 	char kpath[256];
 	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
-	char norm[512];
-	if(FsNormalizePath(kpath, norm, sizeof(norm)) != 0)return -ENOENT;
-	stat_t st;
-	long r = FsStat(kpath,&st);
-	if(r)return r;
-	if((st.st_mode & S_IFMT) != S_IFDIR)return -ENOTDIR;
-	int len = strlen(norm);
-	if(len > 255)len = 255;
-	memcpy(current_task->cwd, norm, (uint64_t)len);
-	current_task->cwd[len] = 0;
-	return 0;
+	return FsChdir(kpath);
 }
 /*DeepSeek V4 Flash-END*/
 /*DeepSeek V4 Pro*/
@@ -1828,7 +1820,10 @@ long syscall_dispatch(long num, long a1, long a2, long a3, long a5, long a6){
 	if(num < 0 || num >= SYSCALL_TABLE_SIZE)return -ENOSYS;//检查调用号
     //获取处理函数
 	syscall_fn fn = syscall_table[num];
-	if(!fn)return -ENOSYS;
+	if(!fn){
+		printk(PRINTK_DEBUG"syscall %ld not implemented", num);
+		return -ENOSYS;
+	}
 	long a4 = *(long*)(user_kernel_stack_top - 128 + 40);
 	long ret = fn(a1, a2, a3, a4, a5, a6);//调用处理函数
 	SignalDeliverUser(ret);//返回用户前投递待处理信号

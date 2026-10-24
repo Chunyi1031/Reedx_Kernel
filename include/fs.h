@@ -92,9 +92,10 @@ typedef struct fs_file{
 } fs_file_t;
 
 void FsInit(struct disk_info *disk);//初始化文件系统
-int  FsNormalizePath(const char *path, char *out, int outsz);//规范化路径, 输出绝对规范路径
 
 //路径/目录项接口
+int FsChdir(const char *path);//切换工作目录
+int FsGetcwd(char *buf, int size);//取当前工作目录的绝对路径,返回字符串长度
 struct dentry *FsDirOfFd(int fd);//fd对应的目录dentry
 int FsOpen(const char *path, int flags, fs_file_t *out);//打开文件
 int FsOpenAt(struct dentry *dir, const char *name, int flags, fs_file_t *out);//在目录dentry下打开

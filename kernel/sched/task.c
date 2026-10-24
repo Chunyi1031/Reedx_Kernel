@@ -274,6 +274,11 @@ void TaskKill(task_struct* t){
     if(list_has_node(&t->wait_node))list_del(&t->wait_node);
     if(t->kernel_stack)Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)t->kernel_stack),t->stack_size / 4096);
     if(t->mm){ mmput(t->mm); t->mm = NULL; }//释放用户地址空间
+    //还回工作目录
+    if(t->fs_cwd.dentry){
+        dput(t->fs_cwd.dentry);
+        t->fs_cwd.dentry = NULL;
+    }
     SignalFree(t);//释放信号动作表
     memset(t,0,TASK_STRUCT_PAGES * 4096);
     Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)t),TASK_STRUCT_PAGES);

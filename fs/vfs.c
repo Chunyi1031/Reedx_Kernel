@@ -20,56 +20,40 @@ const struct path *VfsRoot(void){
     return g_vfs_root.dentry ? &g_vfs_root : NULL;
 }
 
-//规范化路径(相对路径按当前工作目录补全, 处理 . 与 ..)
-static int path_normalize(const char *path, char *out, int outsz){
-    if(!path) return -1;
-    char abs[512];
-    const char *src;
-    if(path[0] == '/'){
-        src = path;
-    }else{
-        const char *cwd = (current_task && current_task->cwd[0]) ? current_task->cwd : "/";
-        int cl = strlen(cwd);
-        int pl = strlen(path);
-        if(cl + 1 + pl >= (int)sizeof(abs)) return -1;
-        memcpy(abs, cwd, cl);
-        int off = cl;
-        if(off == 0 || abs[off - 1] != '/') abs[off++] = '/';
-        memcpy(abs + off, path, pl + 1);
-        src = abs;
-    }
-    //跳过"."、".."弹一级、去重斜杠
-    char stack[512];
-    int top = 0;
-    const char *p = src;
-    while(*p){
-        while(*p == '/')p++;
-        if(!*p) break;
-        char comp[MAX_NAME];
-        int i = 0;
-        while(*p && *p != '/' && i < MAX_NAME - 1)comp[i++] = *p++;
-        comp[i] = 0;
-        if(i == 1 && comp[0] == '.') continue;//"."跳过
-        if(i == 2 && comp[0] == '.' && comp[1] == '.'){//".."弹上一级
-            while(top > 0 && stack[top - 1] != '/') top--;
-            if(top > 0) top--;
-            if(top == 0) stack[top++] = '/';
-            continue;
-        }
-        if(top == 0 || stack[top - 1] != '/'){
-            if(top < (int)sizeof(stack) - 1)stack[top++] = '/';
-        }
-        for(int k = 0; k < i && top < (int)sizeof(stack) - 1; k++)stack[top++] = comp[k];
-    }
-    if(top == 0) stack[top++] = '/';
-    if(top >= outsz) return -1;
-    memcpy(out, stack, top);
-    out[top] = 0;
-    return 0;
+//当前工作目录(任务没设置过就是根)
+static const struct path *cwd_path(void){
+    if(current_task && current_task->fs_cwd.dentry)return &current_task->fs_cwd;
+    return VfsRoot();
 }
 
-int FsNormalizePath(const char *path, char *out, int outsz){
-    return path_normalize(path, out, outsz);
+//解析起点: 绝对路径从根走, 相对路径从 cwd 走
+static const struct path *lookup_root(const char *path){
+    if(path && path[0] == '/')return VfsRoot();
+    const struct path *c = cwd_path();
+    return c ? c : VfsRoot();
+}
+
+//切换工作目录
+int FsChdir(const char *path){
+    if(!current_task || !path)return -ENOENT;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    struct path p;
+    int r = path_lookup(path, lookup_root(path), LOOKUP_DIRECTORY, &p);
+    if(r == 0){
+        struct dentry *old = current_task->fs_cwd.dentry;
+        current_task->fs_cwd = p;//path_lookup 返回的引用直接归 cwd 所有
+        if(old)dput(old);
+    }
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
+//取当前工作目录的绝对路径(返回字符串长度, 不含结尾 NUL)
+int FsGetcwd(char *buf, int size){
+    const struct path *c = cwd_path();
+    if(!c || !c->dentry)return -ENOENT;
+    return d_path(c, buf, size);
 }
 
 /*==================== 目录项查找/创建/删除 ====================*/
@@ -195,12 +179,12 @@ static int open_dentry(struct dentry *d, struct vfsmount *mnt, int flags, fs_fil
     return file_bind(out, d, mnt, flags);
 }
 
-//规范化后的路径 → 创建出 dentry
-static int path_create(const char *norm, int isdir, uint16_t mode, struct dentry **out){
-    const struct path *root = VfsRoot();
+static int path_create(const char *path, int isdir, uint16_t mode, struct dentry **out){
+    const struct path *root = lookup_root(path);
+    if(!root)return -ENOENT;
     struct path pdir;
     char name[NAMELEN_MAX + 1];
-    int r = path_lookup_parent(norm, root, &pdir, name, sizeof(name));
+    int r = path_lookup_parent(path, root, &pdir, name, sizeof(name));
     if(r)return r;
     r = dir_create(pdir.dentry, name, isdir, mode, out);
     dput(pdir.dentry);
@@ -208,25 +192,23 @@ static int path_create(const char *norm, int isdir, uint16_t mode, struct dentry
 }
 
 int FsOpen(const char *path, int flags, fs_file_t *out){
-    const struct path *root = VfsRoot();
-    if(!out || !root)return -ENOENT;
+    const struct path *root = lookup_root(path);
+    if(!out || !root || !path)return -ENOENT;
     if((flags & O_TMPFILE) == O_TMPFILE)return -EOPNOTSUPP;
-    char norm[PATHLEN_MAX];
-    if(path_normalize(path, norm, sizeof(norm)))return -ENAMETOOLONG;
     uint64_t lk;
     spin_lock_irqsave(&g_fs_lock, lk);
     struct path p;
-    int r = path_lookup(norm, root, (flags & O_DIRECTORY) ? LOOKUP_DIRECTORY : 0, &p);
+    int r = path_lookup(path, root, (flags & O_DIRECTORY) ? LOOKUP_DIRECTORY : 0, &p);
     if(r == 0){
         if((flags & O_CREAT) && (flags & O_EXCL)){//已经存在
             dput(p.dentry);
             r = -EEXIST;
         }
     }else if(r == -ENOENT && (flags & O_CREAT)){
-        r = path_create(norm, 0, 0644, &p.dentry);
+        r = path_create(path, 0, 0644, &p.dentry);
         if(r == -EEXIST){//别的任务抢先建好了
             if(flags & O_EXCL)goto done;
-            r = path_lookup(norm, root, 0, &p);
+            r = path_lookup(path, root, 0, &p);
         }
         p.mnt = root->mnt;
     }
@@ -351,11 +333,9 @@ int FsTruncate(fs_file_t *f, uint64_t len){
 
 //按路径解析出 dentry(带引用)
 static int lookup_path(const char *path, struct path *out){
-    const struct path *root = VfsRoot();
+    const struct path *root = lookup_root(path);
     if(!root || !path || !out)return -ENOENT;
-    char norm[PATHLEN_MAX];
-    if(path_normalize(path, norm, sizeof(norm)))return -ENAMETOOLONG;
-    return path_lookup(norm, root, 0, out);
+    return path_lookup(path, root, 0, out);
 }
 
 int FsTruncatePath(const char *path, uint64_t len){
@@ -463,13 +443,10 @@ finish:
 
 /*==================== 目录项增删(路径版) ====================*/
 int FsMkdir(const char *path, int mode){
-    const struct path *root = VfsRoot();
-    if(!root)return -ENOENT;
-    char norm[PATHLEN_MAX];
-    if(path_normalize(path, norm, sizeof(norm)))return -ENAMETOOLONG;
+    if(!lookup_root(path))return -ENOENT;
     uint64_t lk;
     spin_lock_irqsave(&g_fs_lock, lk);
-    int r = path_create(norm, 1, (uint16_t)mode, NULL);
+    int r = path_create(path, 1, (uint16_t)mode, NULL);
     spin_unlock_irqrestore(&g_fs_lock, lk);
     return r;
 }
@@ -483,15 +460,13 @@ int FsMkdirAt(struct dentry *dir, const char *name, int mode){
 }
 
 int FsUnlink(const char *path, int isdir){
-    const struct path *root = VfsRoot();
+    const struct path *root = lookup_root(path);
     if(!root)return -ENOENT;
-    char norm[PATHLEN_MAX];
-    if(path_normalize(path, norm, sizeof(norm)))return -ENAMETOOLONG;
     uint64_t lk;
     spin_lock_irqsave(&g_fs_lock, lk);
     struct path pdir;
     char name[NAMELEN_MAX + 1];
-    int r = path_lookup_parent(norm, root, &pdir, name, sizeof(name));
+    int r = path_lookup_parent(path, root, &pdir, name, sizeof(name));
     if(r == 0){
         r = dir_remove(pdir.dentry, name, isdir);
         dput(pdir.dentry);
@@ -509,19 +484,18 @@ int FsUnlinkAt(struct dentry *dir, const char *name, int isdir){
 }
 
 int FsRename(const char *oldpath, const char *newpath, int flags){
-    const struct path *root = VfsRoot();
-    if(!root || !oldpath || !newpath)return -EINVAL;
-    char onorm[PATHLEN_MAX], nnorm[PATHLEN_MAX];
-    if(path_normalize(oldpath, onorm, sizeof(onorm)))return -ENAMETOOLONG;
-    if(path_normalize(newpath, nnorm, sizeof(nnorm)))return -ENAMETOOLONG;
-    if(strcmp(onorm, nnorm) == 0)return 0;
+    if(!oldpath || !newpath)return -EINVAL;
+    const struct path *oroot = lookup_root(oldpath);
+    const struct path *nroot = lookup_root(newpath);
+    if(!oroot || !nroot)return -EINVAL;
+    if(strcmp(oldpath, newpath) == 0)return 0;
     uint64_t lk;
     spin_lock_irqsave(&g_fs_lock, lk);
     struct path opdir, npdir;
     char oname[NAMELEN_MAX + 1], nname[NAMELEN_MAX + 1];
-    int r = path_lookup_parent(onorm, root, &opdir, oname, sizeof(oname));
+    int r = path_lookup_parent(oldpath, oroot, &opdir, oname, sizeof(oname));
     if(r)goto done;
-    r = path_lookup_parent(nnorm, root, &npdir, nname, sizeof(nname));
+    r = path_lookup_parent(newpath, nroot, &npdir, nname, sizeof(nname));
     if(r){ dput(opdir.dentry); goto done; }
     r = dir_rename(opdir.dentry, oname, npdir.dentry, nname, flags);
     dput(npdir.dentry);

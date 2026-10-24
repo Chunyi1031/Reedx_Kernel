@@ -110,6 +110,8 @@ typedef struct fat32_fs {
     uint32_t bpc;         //每簇字节数
     uint32_t total_clusters;//数据区总簇数
     uint32_t alloc_hint;  //空闲簇扫描起点
+    uint32_t fsinfo_sector;//FSInfo扇区号
+    int32_t  free_count;  //FSInfo里记录的空闲簇数
     uint8_t  *cluster_buf;//簇缓冲(虚拟地址)
 } fat32_fs_t;
 
@@ -253,6 +255,8 @@ static uint32_t fat_dir_id(fs_node_t *dir){
 /*DeepSeek-V4.1-Flash-END*/
 
 //读磁盘扇区
+static void fat_fsinfo_add(int32_t delta);//更新FSInfo空闲簇数
+
 static int fat_read_sectors(uint32_t lba, void *buf, uint32_t count){
     if(!g_fat.bdev) return -1;
     if(lba < g_fat.part_lba) return -1;
@@ -358,16 +362,33 @@ static uint32_t fat_alloc_cluster(uint32_t prev_clu){
     if(prev_clu >= 2 && prev_clu < FAT_CLUSTER_EOF){
         if(fat_set_entry(prev_clu, clu)) return 0;
     }
+    fat_fsinfo_add(-1);
     return clu;
+}
+
+//更新 FSInfo 里的空闲簇数(delta 为负表示分配了簇)
+static void fat_fsinfo_add(int32_t delta){
+    if(!g_fat.fsinfo_sector || g_fat.free_count < 0)return;
+    int32_t v = g_fat.free_count + delta;
+    if(v < 0)v = 0;
+    if((uint32_t)v > g_fat.total_clusters)v = (int32_t)g_fat.total_clusters;
+    g_fat.free_count = v;
+    uint8_t sec[512];
+    if(fat_read_sectors(g_fat.part_lba + g_fat.fsinfo_sector, sec, 1))return;
+    *(uint32_t*)(sec + 488) = (uint32_t)v;
+    fat_write_sectors(g_fat.part_lba + g_fat.fsinfo_sector, sec, 1);
 }
 
 //释放整条簇链
 static void fat_free_chain(uint32_t clu){
+    int32_t freed = 0;
     while(clu >= 2 && clu < FAT_CLUSTER_EOF){
         uint32_t nxt = fat_get_entry(clu);
         fat_set_entry(clu, FAT_CLUSTER_FREE);
+        freed ++;
         clu = nxt;
     }
+    if(freed)fat_fsinfo_add(freed);
 }
 
 //把节点的起始簇/大小/修改时间同步回磁盘目录项
@@ -1253,6 +1274,21 @@ int fat32_mount(struct disk_info *disk){
     g_fat.bpc = (uint32_t)g_fat.spc * g_fat.bps;
     g_fat.total_clusters = (bpb->total_sectors32 - g_fat.rsvd -(uint32_t)g_fat.nfats * g_fat.fat_sz) / g_fat.spc;
     g_fat.alloc_hint = 2;
+    //读入FSInfo
+    g_fat.fsinfo_sector = bpb->fsinfo_sector;
+    g_fat.free_count = -1;
+    if(g_fat.fsinfo_sector && g_fat.fsinfo_sector < g_fat.rsvd){
+        uint8_t fi[512];
+        if(fat_read_sectors(g_fat.part_lba + g_fat.fsinfo_sector, fi, 1) == 0){
+            uint32_t lead = *(uint32_t*)(fi + 0);
+            uint32_t stru = *(uint32_t*)(fi + 484);
+            uint32_t trai = *(uint32_t*)(fi + 508);
+            uint32_t freev = *(uint32_t*)(fi + 488);
+            if(lead == 0x41615252 && stru == 0x61417272 && trai == 0xAA550000 &&
+               freev != 0xFFFFFFFF && freev <= g_fat.total_clusters)
+                g_fat.free_count = (int32_t)freev;
+        }
+    }
     //分配簇缓冲
     g_fat.cluster_buf = (uint8_t*)PHYS_TO_VIRT((uintptr_t)Pmm_Malloc((int)((g_fat.bpc + 4095) / 4096)));
     if(!g_fat.cluster_buf)return 4;
