@@ -135,6 +135,8 @@ void d_add(struct dentry *dentry, struct inode *inode){
     dc_init();
     uint64_t flags;
     int added = 0;
+    int rebind = 0;
+    struct inode *old = NULL;
     spin_lock_irqsave(&g_dc_lock, flags);
     if(!(dentry->d_flags & DCACHE_NEW)){
         dentry->d_inode = inode;
@@ -144,10 +146,16 @@ void d_add(struct dentry *dentry, struct inode *inode){
         g_nr_dentry ++;
         added = 1;
     }else if(dentry->d_inode != inode){
+        //负缓存转正(或换了 inode): 旧的归还引用, 新绑定的要占一份
+        old = dentry->d_inode;
         dentry->d_inode = inode;
+        if(inode)dentry->d_flags &= ~DCACHE_NEGATIVE;
+        else     dentry->d_flags |=  DCACHE_NEGATIVE;
+        rebind = 1;
     }
     spin_unlock_irqrestore(&g_dc_lock, flags);
-    if(added && inode)inode->i_count ++;
+    if((added || rebind) && inode)inode->i_count ++;
+    if(old && old != inode)Iput(old);
 }
 
 //名字失效: 从哈希里摘掉(内容仍被引用着, 等 dput 回收)

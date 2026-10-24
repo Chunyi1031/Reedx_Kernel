@@ -112,7 +112,7 @@ static long sys_getdents64(long fd, long buf, long count, long a4, long a5, long
 //判断fd是否为控制台表项
 static inline _Bool fd_is_console(long fd){
 	if(!current_task || fd < 0 || fd >= MAX_FD)return false;
-	return current_task->files[fd].used && !current_task->files[fd].node && !current_task->files[fd].pipe;
+	return current_task->files[fd].used && !current_task->files[fd].node && !current_task->files[fd].inode && !current_task->files[fd].pipe;
 }
 
 /*

@@ -42,6 +42,8 @@ typedef struct linux_dirent64 {
 
 typedef struct fs_node fs_node_t;
 struct file;
+struct inode;
+struct vfsmount;
 struct super_block;
 struct dentry;
 struct disk_info;//磁盘信息
@@ -78,12 +80,15 @@ struct fs_node{
 
 //打开文件描述
 typedef struct fs_file{
-    struct file *f;     //共享的打开文件描述
-    fs_node_t *node;    //文件节点
-    void      *pipe;    //管道对象
-    int        flags;   //打开标志
-    _Bool      used;    //是否使用
-    _Bool      tty_mark;//控制台fd是否已查询终端
+    struct file     *f;     //共享的打开文件描述
+    struct inode    *inode; //新VFS的inode
+    struct dentry   *dentry;//新VFS的目录项
+    struct vfsmount *mnt;   //解析时经过的挂载点
+    fs_node_t       *node;  //旧节点
+    void            *pipe;  //管道对象
+    int              flags; //打开标志
+    _Bool            used;  //是否使用
+    _Bool            tty_mark;//控制台fd是否已查询终端
 } fs_file_t;
 
 void FsInit(struct disk_info *disk);//初始化文件系统
@@ -116,7 +121,10 @@ fs_node_t *fat32_root(void);//FAT32根目录节点
 uint32_t FatVfsInodeSize(void);
 const struct super_operations *FatVfsSuperOps(void);
 struct dentry *FatVfsFillSuper(struct super_block *sb);
+fs_node_t *FatVfsNode(struct inode *inode);//FAT inode 对应的旧节点
 //RamFS
-fs_node_t *ramfs_init(void);//初始化ramfs
+uint32_t Ramfs2InodeSize(void);
+const struct super_operations *Ramfs2SuperOps(void);
+struct dentry *Ramfs2FillSuper(struct super_block *sb);
 
 #endif

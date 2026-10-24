@@ -55,6 +55,17 @@ struct path {
 #define MAY_WRITE 0x02             // 需要写权限(w)
 #define MAY_READ  0x04             // 需要读权限(r)
 
+//setattr 用到的字段
+#define ATTR_MODE 0x0001           // ia_mode 有效
+#define ATTR_SIZE 0x0002           // ia_size 有效
+
+//属性修改参数
+struct iattr {
+    uint32_t ia_valid;             //哪些字段有效(ATTR_*)
+    uint16_t ia_mode;              //新权限位
+    uint64_t ia_size;              //新文件长度
+};
+
 //path_lookup()的行为开关
 #define LOOKUP_FOLLOW     0x0001   // 末段是符号链接时, 跟进去(open 的默认行为)
 #define LOOKUP_DIRECTORY  0x0002   // 末段必须是目录, 否则 -ENOTDIR

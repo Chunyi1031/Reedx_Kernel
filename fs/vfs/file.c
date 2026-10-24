@@ -57,6 +57,12 @@ void FilePut(struct file *f){
     if(dead && g_nr_files)g_nr_files --;
     spin_unlock_irqrestore(&g_file_lock, flags);
     if(!dead)return;
+    //最后一个引用消失，归还打开时占用的目录项
+    if(f->f_path.dentry){
+        struct dentry *d = f->f_path.dentry;
+        f->f_path.dentry = NULL;
+        dput(d);
+    }
     file_init();
     if(g_file_cache)KslabFree(g_file_cache, f);
 }

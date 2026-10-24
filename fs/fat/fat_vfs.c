@@ -105,6 +105,47 @@ static int fat_vfs_rmdir(struct inode *dir, struct dentry *dentry){
     return r;
 }
 
+static int fat_vfs_rename(struct inode *od, struct dentry *o, struct inode *nd, struct dentry *n){
+    fat_vfs_inode_t *oi = od ? FI(od) : NULL;
+    fat_vfs_inode_t *ni = nd ? FI(nd) : NULL;
+    if(!oi || !oi->node || !oi->node->ops->rename)return -EROFS;
+    if(!ni || !ni->node)return -ENOTDIR;
+    //目标已存在则先删掉(与旧接口行为一致)
+    if(n->d_inode){
+        if(!ni->node->ops->unlink)return -EROFS;
+        int rr = ni->node->ops->unlink(ni->node, n->d_name);
+        if(rr)return rr;
+        d_invalidate(n);
+    }
+    int r = oi->node->ops->rename(oi->node, o->d_name, ni->node, n->d_name);
+    if(r)return r;
+    d_invalidate(o);//旧名字失效
+    //把新名字绑到移动后的节点上
+    if(ni->node->ops->lookup){
+        fs_node_t *nn = ni->node->ops->lookup(ni->node, n->d_name);
+        if(nn)fat_bind(nd, n, nn);
+    }
+    return 0;
+}
+
+static int fat_vfs_setattr(struct dentry *dentry, void *iattr){
+    struct iattr *ia = (struct iattr*)iattr;
+    if(!dentry || !dentry->d_inode || !ia)return -EINVAL;
+    struct inode *i = dentry->d_inode;
+    fat_vfs_inode_t *fi = FI(i);
+    if(!fi || !fi->node)return -ENOENT;
+    if(ia->ia_valid & ATTR_SIZE){
+        if((i->i_mode & S_IFMT) == S_IFDIR)return -EISDIR;
+        if(!fi->node->ops->truncate)return -EROFS;
+        int r = fi->node->ops->truncate(fi->node, ia->ia_size);
+        if(r)return r;
+        fi->node->size = ia->ia_size;
+        i->i_size      = ia->ia_size;
+    }
+    if(ia->ia_valid & ATTR_MODE)i->i_mode = (uint16_t)((i->i_mode & S_IFMT) | (ia->ia_mode & 0777));
+    return 0;
+}
+
 static int fat_vfs_getattr(const struct path *path, struct stat *st){
     if(!path || !path->dentry || !path->dentry->d_inode)return -ENOENT;
     struct inode *i = path->dentry->d_inode;
@@ -131,7 +172,9 @@ static const struct inode_operations g_fat_iops = {
     .mkdir   = fat_vfs_mkdir,
     .unlink  = fat_vfs_unlink,
     .rmdir   = fat_vfs_rmdir,
+    .rename  = fat_vfs_rename,
     .getattr = fat_vfs_getattr,
+    .setattr = fat_vfs_setattr,
 };
 
 //==================== 文件操作 ====================
@@ -191,6 +234,13 @@ uint32_t FatVfsInodeSize(void){
 }
 
 const struct super_operations *FatVfsSuperOps(void){ return &g_fat_sop; }
+
+//FAT inode 对应的旧节点(非 FAT 的 inode 返回 NULL)
+fs_node_t *FatVfsNode(struct inode *inode){
+    if(!inode || inode->i_op != &g_fat_iops)return NULL;
+    fat_vfs_inode_t *fi = FI(inode);
+    return fi ? fi->node : NULL;
+}
 
 //建立 FAT32 的根 inode 与根 dentry
 struct dentry *FatVfsFillSuper(struct super_block *sb){
