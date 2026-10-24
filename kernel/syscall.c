@@ -617,6 +617,23 @@ static long at_split(long dirfd, const char *kpath, struct dentry **dir, char *n
 	return 0;
 }
 
+static long at_full_path(long dirfd, const char *kpath, char *out, int outsz){
+	if((int)dirfd == AT_FDCWD || kpath[0] == '/')return -ENOSYS;
+	if(!current_task || dirfd < 0 || dirfd >= MAX_FD || !current_task->files[dirfd].used)return -EBADF;
+	struct dentry *d = FsDirOfFd((int)dirfd);
+	if(!d)return -ENOTDIR;
+	struct path p;
+	p.dentry = d;
+	p.mnt = NULL;
+	int n = d_path(&p, out, outsz);
+	if(n < 0)return n;
+	int len = (int)strlen(kpath);
+	if(n + 1 + len >= outsz)return -ERANGE;
+	if(!(n == 1 && out[0] == '/'))out[n ++] = '/';
+	memcpy(out + n, kpath, (size_t)len + 1);
+	return 0;
+}
+
 /*
  * renameat/renameat2共用实现
  */
@@ -706,6 +723,23 @@ static long sys_lseek(long fd, long off, long whence, long a4, long a5, long a6)
 }
 /*DeepSeek V4 Flash*/
 /*
+ * int lstat(const char *path, struct stat *buf)
+ * 不跟随末段符号链接,给出链接自身的信息
+ */
+static long sys_lstat(long path, long buf, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task || !current_task->mm)return -ENOSYS;
+	if(!path || !buf)return -EFAULT;
+	char kpath[256];
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
+	stat_t st;
+	long r = FsLstat(kpath,&st);
+	if(r)return r;
+	if(copy_to_user((void*)buf, &st, sizeof(st)))return -EFAULT;
+	return 0;
+}
+
+/*
  * int stat(const char *path, struct stat *buf)
  */
 static long sys_newstat(long path, long buf, long a3, long a4, long a5, long a6){
@@ -760,6 +794,14 @@ static long sys_newfstatat(long dirfd, long path, long buf, long flags, long a5,
 	if(kpath[0] == '\0'){
 		if(!(flags & AT_EMPTY_PATH))return -ENOENT;
 		return sys_newfstat(dirfd, buf, 0, 0, 0, 0);
+	}
+	//不跟随末段符号链接
+	if((flags & AT_SYMLINK_NOFOLLOW) && (int)dirfd == AT_FDCWD){
+		stat_t st;
+		long r = FsLstat(kpath, &st);
+		if(r)return r;
+		if(copy_to_user((void*)buf, &st, sizeof(st)))return -EFAULT;
+		return 0;
 	}
 	if((int)dirfd != AT_FDCWD && kpath[0] != '/'){
 		struct dentry *dir = FsDirOfFd((int)dirfd);
@@ -854,6 +896,8 @@ static long sys_statx(long dirfd, long path, long flags, long mask, long buf, lo
 			struct dentry *dir = FsDirOfFd((int)dirfd);
 			if(!dir)return -ENOTDIR;
 			r = FsStatAt(dir,kpath,&st);
+		}else if(flags & AT_SYMLINK_NOFOLLOW){
+			r = FsLstat(kpath,&st);
 		}else{
 			r = FsStat(kpath,&st);
 		}
@@ -917,11 +961,74 @@ static long sys_faccessat(long dirfd, long path, long mode, long flags, long a5,
 
 /*
  * ssize_t readlink(const char *path, char *buf, size_t bufsiz)
- * 无符号链接支持, 一律-EINVAL
+ * 读取符号链接
  */
 static long sys_readlink(long path, long buf, long bufsiz, long a4, long a5, long a6){
-	(void)path; (void)buf; (void)bufsiz; (void)a4; (void)a5; (void)a6;
-	return -EINVAL;
+	(void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EINVAL;
+	if(!path || !buf || bufsiz <= 0)return -EINVAL;
+	if(bufsiz > 4096)bufsiz = 4096;//限制最大读取长度
+	//复制路径到内核
+	char kpath[256];
+	if(strncpy_from_user(kpath,(void*)path,256) < 0)return -EFAULT;
+	char kbuf[4096];
+	long r = FsReadlink(kpath,kbuf,(int)bufsiz);//执行读取符号链接
+	if(r < 0)return r;
+	if(copy_to_user((void*)buf,kbuf,(uint64_t)r))return -EFAULT;//复制到用户空间
+	return r;
+}
+
+/*
+ * int link(const char *oldpath, const char *newpath)
+ * 硬链接
+ */
+static long sys_link(long oldpath, long newpath, long a3, long a4, long a5, long a6){
+	(void)oldpath; (void)newpath; (void)a3; (void)a4; (void)a5; (void)a6;
+	return -EPERM;
+}
+
+/*
+ * int linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, int flags)
+ * 硬链接
+ */
+static long sys_linkat(long olddirfd, long oldpath, long newdirfd, long newpath, long flags, long a6){
+	(void)olddirfd; (void)oldpath; (void)newdirfd; (void)newpath; (void)flags; (void)a6;
+	return -EPERM;
+}
+
+/*
+ * int symlink(const char *target, const char *linkpath)
+ */
+static long sys_symlink(long target, long linkpath, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	if(!target || !linkpath)return -EFAULT;
+	char ktarget[256], kpath[256];
+	if(strncpy_from_user(ktarget,(void*)target,256) < 0)return -EFAULT;
+	if(strncpy_from_user(kpath,(void*)linkpath,256) < 0)return -EFAULT;
+	return FsSymlink(ktarget,kpath);
+}
+
+/*
+ * int symlinkat(const char *target, int newdirfd, const char *linkpath)
+ * 在newdirfd指定的目录下建符号链接
+ */
+static long sys_symlinkat(long target, long newdirfd, long linkpath, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	if(!target || !linkpath)return -EFAULT;
+	char ktarget[256], kpath[256];
+	if(strncpy_from_user(ktarget,(void*)target,256) < 0)return -EFAULT;
+	if(strncpy_from_user(kpath,(void*)linkpath,256) < 0)return -EFAULT;
+	//先从 fd 里取出目录, 取不到就按纯路径解析
+	struct dentry *dir = NULL;
+	char name[MAX_NAME];
+	long r = at_split((int)newdirfd, kpath, &dir, name, MAX_NAME);
+	if(r == -ENOSYS)return FsSymlink(ktarget,kpath);
+	if(r < 0)return r;
+	r = FsSymlinkAt(dir, name, ktarget);
+	dput(dir);
+	return r;
 }
 
 /*
@@ -1230,11 +1337,27 @@ static long sys_getrandom(long buf, long len, long flags, long a4, long a5, long
 
 /*
  * ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t bufsiz)
- * 无/proc, 一律-ENOENT
+ * 读符号链接目标
  */
 static long sys_readlinkat(long dirfd, long path, long buf, long bufsiz, long a5, long a6){
-	(void)dirfd; (void)path; (void)buf; (void)bufsiz; (void)a5; (void)a6;
-	return -ENOENT;
+	(void)a5; (void)a6;
+	if(!current_task)return -EINVAL;
+	if(!path || !buf || bufsiz <= 0)return -EINVAL;
+	if(bufsiz > 4096)bufsiz = 4096;//限制最大读取长度
+	char kpath[256];
+	long pr = at_read_path(path, kpath, 256);
+	if(pr)return pr;
+	//把fd+相对名拼成绝对路径
+	char full[512];
+	const char *use = kpath;
+	long r = at_full_path((int)dirfd, kpath, full, sizeof(full));
+	if(r == 0)use = full;
+	else if(r != -ENOSYS)return r;
+	char kbuf[4096];
+	r = FsReadlink(use, kbuf, (int)bufsiz);
+	if(r < 0)return r;
+	if(copy_to_user((void*)buf, kbuf, (uint64_t)r))return -EFAULT;//复制到用户空间
+	return r;
 }
 
 /*
@@ -2094,6 +2217,7 @@ void InitSyscall(void){
 	syscall_table[SYS_OPEN]       = sys_open;
 	syscall_table[SYS_CLOSE]      = sys_close;
 	syscall_table[SYS_STAT]       = sys_newstat;
+	syscall_table[SYS_LSTAT]      = sys_lstat;
 	syscall_table[SYS_FSTAT]      = sys_newfstat;
 	syscall_table[SYS_OPENAT]     = sys_openat;
 	syscall_table[SYS_NEWFSTATAT] = sys_newfstatat;
@@ -2101,6 +2225,10 @@ void InitSyscall(void){
 	syscall_table[SYS_ACCESS]     = sys_access;
 	syscall_table[SYS_FACCESSAT]  = sys_faccessat;
 	syscall_table[SYS_READLINK]   = sys_readlink;
+	syscall_table[SYS_LINK]       = sys_link;
+	syscall_table[SYS_SYMLINK]    = sys_symlink;
+	syscall_table[SYS_LINKAT]     = sys_linkat;
+	syscall_table[SYS_SYMLINKAT]  = sys_symlinkat;
 	syscall_table[SYS_GETCWD]     = sys_getcwd;
 	syscall_table[SYS_CHDIR]      = sys_chdir;
 	syscall_table[SYS_IOCTL]      = sys_ioctl;

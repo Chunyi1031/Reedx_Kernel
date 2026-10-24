@@ -20,7 +20,15 @@ typedef struct fat_vfs_inode {
 #define FI(inode) ((fat_vfs_inode_t*)(inode)->i_private)
 
 static uint16_t fat_mode_of(fs_node_t *n){
-    return (n->type == FT_DIR) ? (uint16_t)(S_IFDIR | 0755) : (uint16_t)(S_IFREG | 0755);
+    return (n->type == FT_DIR) ? (uint16_t)(S_IFDIR | 0755) : (uint16_t)(S_IFREG | 0754);
+}
+
+//FAT使用固定权限位
+static uint16_t fat_mode_policy(struct inode *ino){
+    fat_vfs_inode_t *fi = ino ? FI(ino) : NULL;
+    fs_node_t *n = fi ? fi->node : NULL;
+    if(n && n->type == FT_DIR)return (uint16_t)(S_IFDIR | 0755);
+    return (uint16_t)(S_IFREG | 0754);
 }
 
 //把旧节点包成 inode(已存在则复用)
@@ -273,5 +281,6 @@ struct dentry *FatVfsFillSuper(struct super_block *sb){
     Iput(root);
     sb->s_root = d;
     sb->s_root_inode = root;
+    sb->s_mode_policy = fat_mode_policy;
     return d;
 }

@@ -125,8 +125,7 @@ static int dir_rename(struct dentry *odir, const char *oname, struct dentry *ndi
     return r;
 }
 
-/*==================== 打开/关闭 ====================*/
-//打开标志与 inode 类型是否匹配
+//打开标志与inode类型是否匹配
 static int open_check(struct inode *ino, int flags){
     uint16_t type = (uint16_t)(ino->i_mode & S_IFMT);
     if((flags & O_DIRECTORY) && type != S_IFDIR)return -ENOTDIR;
@@ -392,7 +391,7 @@ static int dent_emit(void *ctx, const char *name, int namelen, uint64_t ino, int
     d->d_ino    = ino;
     d->d_off    = (int64_t)(2 + c->seen);
     d->d_reclen = (uint16_t)reclen;
-    d->d_type   = (uint8_t)((type == S_IFDIR) ? DT_DIR : ((type == S_IFREG) ? DT_REG : DT_UNKNOWN));
+    d->d_type   = (uint8_t)((type == S_IFDIR) ? DT_DIR : ((type == S_IFREG) ? DT_REG : ((type == S_IFLNK) ? DT_LNK : DT_UNKNOWN)));
     memcpy(d->d_name, name, (size_t)namelen);
     d->d_name[namelen] = 0;
     c->written += reclen;
@@ -513,6 +512,86 @@ int FsRenameAt(struct dentry *odir, const char *oname, struct dentry *ndir, cons
     return r;
 }
 
+//在dir目录下建一个名为name指向target的符号链接
+static int symlink_locked(struct dentry *dir, const char *name, const char *target){
+    struct inode *din = dir->d_inode;
+    if(!din || (din->i_mode & S_IFMT) != S_IFDIR)return -ENOTDIR;
+    struct dentry *d = dir_lookup(dir, name);
+    if(!d)return -ENOMEM;
+    int r;
+    if(d->d_inode){
+        r = -EEXIST;
+    }else if(!din->i_op || !din->i_op->symlink){
+        r = -EROFS;
+    }else{
+        r = din->i_op->symlink(din, d, target);
+    }
+    dput(d);
+    return r;
+}
+
+//在linkpath处建一个指向target的符号链接
+int FsSymlink(const char *target, const char *linkpath){
+    if(!target || !linkpath)return -EINVAL;
+    //解析起点
+    const struct path *root = lookup_root(linkpath);
+    if(!root)return -ENOENT;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    int r;
+    //解析出父目录与末段名，再在父目录里建链接
+    struct path pdir;
+    char name[NAMELEN_MAX + 1];
+    r = path_lookup_parent(linkpath,root,&pdir,name,sizeof(name));
+    if(r == 0){
+        r = symlink_locked(pdir.dentry, name, target);
+        dput(pdir.dentry);
+    }
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
+//在dir目录下建名为name的符号链接
+int FsSymlinkAt(struct dentry *dir, const char *name, const char *target){
+    if(!dir || !name || !target)return -EINVAL;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    int r = symlink_locked(dir, name, target);
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
+//读出符号链接的目标，返回目标长度
+int FsReadlink(const char *path, char *buf, int size){
+    if(!path || !buf || size <= 0)return -EINVAL;
+    //解析起点
+    const struct path *root = lookup_root(path);
+    if(!root)return -ENOENT;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    //解析符号链接路径
+    struct path p;
+    int r = path_lookup(path,root,LOOKUP_NOFOLLOW,&p);
+    if(r == 0){
+        struct inode *inode = p.dentry->d_inode;
+        const char *target = NULL;
+        if((inode->i_mode & S_IFMT) != S_IFLNK)r = -EINVAL;//不是符号链接
+        else if(!inode->i_op || !inode->i_op->get_link)r = -EINVAL;
+        else r = inode->i_op->get_link(p.dentry, inode, &target);//按inode取出符号链接目标
+        if(r == 0){
+            //把目标拷贝到输出缓冲区
+            int len = (int)strlen(target);
+            if(len >= size)len = size - 1;
+            memcpy(buf, target, (size_t)len);
+            buf[len] = 0;
+            r = len;
+        }
+        dput(p.dentry);
+    }
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
 //把type类型的文件系统挂到target目录上
 int FsMount(const char *type, const char *target){
     if(!type || !target)return -EINVAL;
@@ -569,7 +648,7 @@ static void inode_to_stat(struct inode *i, struct stat *st){
     st->st_dev      = 1;
     st->st_ino      = i->i_ino;
     st->st_nlink    = i->i_nlink ? i->i_nlink : 1;
-    st->st_mode     = i->i_mode;
+    st->st_mode     = (i->i_sb && i->i_sb->s_mode_policy) ? i->i_sb->s_mode_policy(i) : i->i_mode;
     st->st_uid      = i->i_uid;
     st->st_gid      = i->i_gid;
     st->st_rdev     = i->i_rdev;
@@ -590,6 +669,23 @@ int FsStat(const char *path, struct stat *st){
     spin_lock_irqsave(&g_fs_lock, lk);
     struct path p;
     int r = lookup_path(path, &p);
+    if(r == 0){
+        inode_to_stat(p.dentry->d_inode, st);
+        dput(p.dentry);
+    }
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
+//不跟随末段符号链接的stat(lstat)
+int FsLstat(const char *path, struct stat *st){
+    if(!path)return -EINVAL;
+    const struct path *root = lookup_root(path);
+    if(!root)return -ENOENT;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    struct path p;
+    int r = path_lookup(path, root, LOOKUP_NOFOLLOW, &p);
     if(r == 0){
         inode_to_stat(p.dentry->d_inode, st);
         dput(p.dentry);
@@ -700,11 +796,8 @@ int FsExistsAt(struct dentry *dir, const char *name){
     return r;
 }
 
-/*==================== 初始化 ====================*/
 //把一个超级块挂成 VFS 根
-static int mount_root(const char *type, uint64_t magic, uint32_t inode_size,
-                      const struct super_operations *sop,
-                      struct dentry *(*fill)(struct super_block *sb)){
+static int mount_root(const char *type, uint64_t magic, uint32_t inode_size, const struct super_operations *sop, struct dentry *(*fill)(struct super_block *sb)){
     struct super_block *sb = SuperAlloc(type, magic, inode_size, sop);
     if(!sb)return -ENOMEM;
     struct dentry *root = fill(sb);
@@ -720,9 +813,7 @@ void FsInit(struct disk_info *disk){
     FsVfsInit();
     BCacheInit(BC_MAX_PAGES);//块缓存初始化
     PageCacheInit();//初始化文件页缓存
-    //优先挂载 FAT32, 失败则退回内存文件系统
-    if(disk && (fat32_mount(disk) == 0) &&
-       mount_root("vfat", 0x4D44, FatVfsInodeSize(), FatVfsSuperOps(), FatVfsFillSuper) == 0)
-        return;
-    mount_root("ramfs", 0x01021994, Ramfs2InodeSize(), Ramfs2SuperOps(), Ramfs2FillSuper);
+    //挂载FAT32,失败则退回内存文件系统
+    if(!(disk && (fat32_mount(disk) == 0) && mount_root("vfat", 0x4D44,FatVfsInodeSize(),FatVfsSuperOps(),FatVfsFillSuper) == 0))mount_root("ramfs", 0x01021994, Ramfs2InodeSize(), Ramfs2SuperOps(), Ramfs2FillSuper);
+    // FsMount("tmpfs", "/mnt");
 }

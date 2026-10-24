@@ -109,6 +109,7 @@ struct super_block {
     struct bdev       *s_bdev;         // 底层块设备; tmpfs 为 NULL
     uint64_t           s_flags;        // MS_* 挂载标志
     uint64_t           s_ino_next;     // 匿名 inode 分配器(tmpfs 这类没有真实 inode 号的 FS 用)
+    uint16_t         (*s_mode_policy)(struct inode *ino);//本FS的权限位策略
     struct list_node   s_inodes;       // 本 sb 所有 inode 的链(卸载时遍历刷盘)
     spinlock_t         s_lock;         // 只保护本 sb 的 inode 链, 不是全局锁
 };

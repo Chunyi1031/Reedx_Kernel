@@ -105,7 +105,11 @@ int FsUnlink(const char *path, int isdir);//删除文件/目录
 int FsUnlinkAt(struct dentry *dir, const char *name, int isdir);//在目录dentry下删除
 int FsRename(const char *oldpath, const char *newpath, int flags);//改名/移动
 int FsRenameAt(struct dentry *odir, const char *oname, struct dentry *ndir, const char *nname, int flags);//在目录dentry下改名/移动
-int FsStat(const char *path, struct stat *st);//按路径取属性
+int FsSymlink(const char *target, const char *linkpath);//建符号链接
+int FsSymlinkAt(struct dentry *dir, const char *name, const char *target);//在dir目录下建符号链接
+int FsReadlink(const char *path, char *buf, int size);//读符号链接目标,返回长度
+int FsStat(const char *path, struct stat *st);//按路径取属性(跟随符号链接)
+int FsLstat(const char *path, struct stat *st);//按路径取属性(不跟随符号链接)
 int FsStatAt(struct dentry *dir, const char *name, struct stat *st);//在目录dentry下取属性
 int FsStatFile(fs_file_t *f, struct stat *st);//按已打开文件取属性
 int FsUtime(const char *path, int64_t atime, int64_t mtime, int64_t ctime);//按路径改时间

@@ -18,6 +18,7 @@
 #define SYS_CLOSE           3
 #define SYS_STAT            4
 #define SYS_FSTAT           5
+#define SYS_LSTAT           6
 #define SYS_POLL            7
 #define SYS_LSEEK           8
 #define SYS_MMAP            9
@@ -59,7 +60,9 @@
 #define SYS_RENAME          82
 #define SYS_MKDIR           83
 #define SYS_RMDIR           84
+#define SYS_LINK            86
 #define SYS_UNLINK          87
+#define SYS_SYMLINK         88
 #define SYS_READLINK        89
 #define SYS_GETTIMEOFDAY    96
 #define SYS_GETUID          102
@@ -96,6 +99,8 @@
 #define SYS_UNLINKAT        263
 #define SYS_NEWFSTATAT      262
 #define SYS_RENAMEAT        264
+#define SYS_LINKAT          265
+#define SYS_SYMLINKAT       266
 #define SYS_READLINKAT      267
 #define SYS_FCHMODAT        268
 #define SYS_FACCESSAT       269

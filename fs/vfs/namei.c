@@ -28,8 +28,11 @@ static int next_component(const char **pp, char *name, int max){
 }
 
 /*由DeepSeek V4.1 Flash*/
+#define SYMLINK_MAX_HOP  8    //一条路径里最多连续展开几层符号链接
+#define SYMLINK_PATH_MAX 256  //展开后的路径缓冲(受内核栈大小限制)
+
 //逐段解析
-static int walk(const char *path, const struct path *root, int to_parent,struct path *out, char *last_name, int namesz){
+static int walk(const char *path, const struct path *root, int to_parent,struct path *out, char *last_name, int namesz, unsigned flags, int depth){
     if(!path || !root || !root->mnt || !root->dentry)return -EINVAL;
     struct vfsmount *mnt = root->mnt;
     struct dentry   *cur = dget(root->dentry);
@@ -96,6 +99,39 @@ static int walk(const char *path, const struct path *root, int to_parent,struct 
             cur->d_inode->i_op->lookup(cur->d_inode, next, 0);
         }
         if(!next->d_inode){ dput(next); dput(cur); return -ENOENT; }
+        //符号链接,读出目标拼上剩余路径,从链接所在目录重新解析
+        if((next->d_inode->i_mode & S_IFMT) == S_IFLNK){
+            const char *rest = p;
+            while(*rest == '/')rest ++;
+            if(*rest == 0 && (flags & LOOKUP_NOFOLLOW)){//末段明确要求不跟随, 返回链接本身
+                dput(cur);
+                cur = next;
+                break;
+            }
+            if(depth >= SYMLINK_MAX_HOP){ dput(next); dput(cur); return -ELOOP; }
+            if(!next->d_inode->i_op || !next->d_inode->i_op->get_link){
+                dput(next); dput(cur); return -EINVAL;
+            }
+            const char *target = NULL;
+            int lr = next->d_inode->i_op->get_link(next, next->d_inode, &target);
+            if(lr || !target){ dput(next); dput(cur); return lr ? lr : -EINVAL; }
+            //拼出新路径 = 链接目标 + "/" + 尚未解析的部分
+            char npath[SYMLINK_PATH_MAX];
+            int tl = (int)strlen(target);
+            int rl = (int)strlen(rest);
+            if(tl + 1 + rl + 1 > SYMLINK_PATH_MAX){ dput(next); dput(cur); return -ENAMETOOLONG; }
+            memcpy(npath, target, (size_t)tl);
+            if(rl){ npath[tl] = '/'; memcpy(npath + tl + 1, rest, (size_t)rl); npath[tl + 1 + rl] = 0; }
+            else  npath[tl] = 0;
+            //绝对目标从 root 解析, 相对目标从链接所在目录解析
+            struct path nroot;
+            if(target[0] == '/'){ nroot.mnt = root->mnt;    nroot.dentry = dget(root->dentry); }
+            else                { nroot.mnt = mnt;          nroot.dentry = cur; }
+            dput(next);
+            int nr = walk(npath, &nroot, to_parent, out, last_name, namesz, flags, depth + 1);
+            dput(nroot.dentry);
+            return nr;
+        }
         dput(cur);
         cur = next;
     }
@@ -112,7 +148,7 @@ int path_lookup(const char *path, const struct path *root, unsigned flags, struc
     out->dentry = NULL;
     out->mnt = NULL;
     //解析路径
-    int ec = walk(path,root,0,out,NULL,0);
+    int ec = walk(path,root,0,out,NULL,0,flags,0);
     if(ec != 0)return ec;
     //负缓存
     if(!out->dentry->d_inode){
@@ -143,7 +179,7 @@ int path_lookup_parent(const char *path, const struct path *root, struct path *o
     out->mnt = NULL;
     out->dentry = NULL;
     //解析路径到父目录
-    int ec = walk(path, root, 1, out, name, namesz);
+    int ec = walk(path, root, 1, out, name, namesz, LOOKUP_FOLLOW, 0);
     if(ec)return ec;
     //父目录必须存在且是目录
     if(!out->dentry->d_inode || ((out->dentry->d_inode->i_mode & S_IFMT) != S_IFDIR)){

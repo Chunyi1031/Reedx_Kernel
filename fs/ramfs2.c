@@ -91,14 +91,14 @@ static int ramfs_iterate(struct file *f, void *ctx, dir_emit_t emit){
     ramfs_inode_info_t *ri = RAMFS_INFO(dir);
     if(!ri)return -ENOTDIR;
     struct list_node *n;
-    int64_t off = 2;   //"." 和 ".." 由上层负责
-    emit(ctx, ".",  1, dir->i_ino, S_IFDIR, 0);
-    emit(ctx, "..", 2, dir->i_ino, S_IFDIR, 1);
+    int64_t off = 0;
     for(n = ri->children.next;n != &ri->children;n = n->next){
         struct dentry *d = alias_dentry(n);
         if(!d->d_inode)continue;
-        emit(ctx, d->d_name, (int)d->d_name_len, d->d_inode->i_ino,
-             (d->d_inode->i_mode & S_IFMT) == S_IFDIR ? S_IFDIR : S_IFREG, off ++);
+        int type = S_IFREG;
+        if((d->d_inode->i_mode & S_IFMT) == S_IFDIR)type = S_IFDIR;
+        else if((d->d_inode->i_mode & S_IFMT) == S_IFLNK)type = S_IFLNK;
+        emit(ctx, d->d_name, (int)d->d_name_len, d->d_inode->i_ino, type, off ++);
     }
     return 0;
 }
@@ -132,7 +132,7 @@ static struct inode *ramfs_new_inode(struct inode *dir, uint16_t mode){
     inode->i_nlink = 1;
     inode->i_op    = dir->i_op;
     inode->i_fop   = &g_ramfs_fops;
-    inode->i_state &= ~I_NEW;   //内容全在内存里, 不需要从磁盘读
+    inode->i_state &= ~I_NEW;
     ramfs_inode_info_t *ri = RAMFS_INFO(inode);
     if(ri){
         ri->data = NULL;
@@ -235,12 +235,46 @@ static int ramfs_setattr(struct dentry *dentry, void *iattr){
     return 0;
 }
 
+//建符号链接
+static int ramfs_symlink(struct inode *dir, struct dentry *dentry, const char *target){
+    if(!dir || !dentry || !target)return -EINVAL;
+    int len = (int)strlen(target);
+    if(len == 0 || len >= NAMELEN_MAX + 1)return -ENAMETOOLONG;
+    //创建符号链接inode
+    struct inode *inode = ramfs_new_inode(dir, (uint16_t)(S_IFLNK | 0777));
+    if(!inode)return -ENOMEM;
+    //为符号链接分配空间
+    ramfs_inode_info_t *ri = RAMFS_INFO(inode);
+    if(!ri || ramfs_reserve(ri,(uint64_t)len + 1)){
+        Iput(inode);
+        return -ENOMEM;
+    }
+    memcpy(ri->data, target, (size_t)len + 1);//拷贝符号链接目标
+    inode->i_size = (uint64_t)len;//符号链接的大小是目标字符串长度
+    inode->i_fop  = NULL;//符号链接不支持读写
+    ramfs_link_child(dir, dentry);//挂到目录的children链上
+    d_add(dentry, inode);
+    Iput(inode);
+    return 0;
+}
+
+//读出符号链接的目标
+static int ramfs_get_link(struct dentry *dentry, struct inode *inode, const char **target){
+    (void)dentry;
+    ramfs_inode_info_t *ri = inode ? RAMFS_INFO(inode) : NULL;
+    if(!ri || !ri->data)return -EINVAL;
+    *target = (const char*)ri->data;
+    return 0;
+}
+
 static const struct inode_operations g_ramfs_iops = {
     .lookup   = ramfs_lookup,
     .create   = ramfs_create,
     .mkdir    = ramfs_mkdir,
     .unlink   = ramfs_unlink,
     .rmdir    = ramfs_rmdir,
+    .symlink  = ramfs_symlink,
+    .get_link = ramfs_get_link,
     .getattr  = ramfs_getattr,
     .setattr  = ramfs_setattr,
 };
