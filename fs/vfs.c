@@ -611,6 +611,25 @@ int FsMount(const char *type, const char *target){
     return r;
 }
 
+//把第一个ext2分区挂到target目录上
+int FsMountExt2(const char *target){
+    if(!target)return -EINVAL;
+    const struct path *root = lookup_root(target);
+    if(!root)return -ENOENT;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    //解析目标路径拿到挂载点dentry
+    struct path p;
+    int r = path_lookup(target, root, LOOKUP_DIRECTORY, &p);
+    //在该目录上建立 ext2 超级块并挂上去
+    if(r == 0){
+        r = Ext2MountAt(p.mnt, p.dentry);
+        dput(p.dentry);
+    }
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
 //卸载挂在target目录上的文件系统
 int FsUmount(const char *target){
     if(!target)return -EINVAL;
@@ -815,5 +834,10 @@ void FsInit(struct disk_info *disk){
     PageCacheInit();//初始化文件页缓存
     //挂载FAT32,失败则退回内存文件系统
     if(!(disk && (fat32_mount(disk) == 0) && mount_root("vfat", 0x4D44,FatVfsInodeSize(),FatVfsSuperOps(),FatVfsFillSuper) == 0))mount_root("ramfs", 0x01021994, Ramfs2InodeSize(), Ramfs2SuperOps(), Ramfs2FillSuper);
-    // FsMount("tmpfs", "/mnt");
+    FsMkdir("/mnt", 0755);
+    //根上的 FAT32 不支持符号链接, 在 /tmp 挂一个 tmpfs 用来跑这类操作
+    FsMkdir("/tmp", 0755);
+    FsMount("tmpfs", "/tmp");
+    //有 ext2 分区就挂到 /mnt, 没有就退回内存文件系统
+    if(FsMountExt2("/mnt") != 0)FsMount("tmpfs", "/mnt");
 }

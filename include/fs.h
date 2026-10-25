@@ -48,6 +48,7 @@ struct super_block;
 struct dentry;
 struct stat;
 struct disk_info;//磁盘信息
+struct bdev;//块设备
 
 //节点操作集
 typedef struct fs_node_ops{
@@ -117,6 +118,7 @@ int FsUtimeAt(struct dentry *dir, const char *name, int64_t atime, int64_t mtime
 int FsUtimeFd(fs_file_t *f, int64_t atime, int64_t mtime, int64_t ctime);//按已打开文件改时间
 int FsAccess(const char *path, int mask);//存在性/权限检查
 int FsMount(const char *type, const char *target);//把type类型的文件系统挂到target目录上
+int FsMountExt2(const char *target);//把第一个ext2分区挂到target目录上
 int FsUmount(const char *target);//卸载挂在target目录上的文件系统
 int FsExistsAt(struct dentry *dir, const char *name);//存在性检查(0存在,-ENOENT不存在)
 
@@ -140,5 +142,11 @@ struct dentry *FatVfsFillSuper(struct super_block *sb);
 uint32_t Ramfs2InodeSize(void);
 const struct super_operations *Ramfs2SuperOps(void);
 struct dentry *Ramfs2FillSuper(struct super_block *sb);
-
+//ext2
+uint32_t Ext2InodeSize(void);//挂载
+const struct super_operations *Ext2SuperOps(void);
+struct dentry *Ext2FillSuper(struct super_block *sb);
+int Ext2ReadSuper(struct super_block *sb, struct bdev *bd);
+struct bdev *Ext2FindPartition(void);
+int Ext2MountAt(struct vfsmount *parent, struct dentry *mountpoint);
 #endif
