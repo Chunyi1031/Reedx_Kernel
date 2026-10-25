@@ -28,7 +28,8 @@ task_struct* CreateProcess(uintptr_t entry, mm_struct* mm, const char* name) {
     memset(stack,0,TASK_KERNEL_STACK_PAGES * 4096);
     cli();
     //初始化任务结构体
-    task->pid = AllocPid();
+    task->pid = PidTakeReserved();
+    if(task->pid <= 0)task->pid = AllocPid();
     task->tgid = task->pid;
     task->state = TASK_READY;
     waitq_init(&task->child_wq);

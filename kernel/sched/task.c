@@ -34,8 +34,23 @@ task_struct* init_task = NULL;//首个用户程序(init)任务
 uint64_t user_kernel_stack_top = 0;//当前用户任务的内核栈顶
 //PID分配器
 static pid_t next_pid = 1;
+static pid_t reserved_pid = 0;//预留给init的号, 其它任务不能拿
 pid_t AllocPid(void){
-    return next_pid++;
+    //碰到预留号就跳过
+    if(reserved_pid && next_pid == reserved_pid)next_pid ++;
+    return next_pid ++;
+}
+
+//预留一个PID
+void PidReserve(pid_t pid){
+    if(pid > 0)reserved_pid = pid;
+}
+
+//取走预留的PID,没有预留就返回0
+pid_t PidTakeReserved(void){
+    pid_t p = reserved_pid;
+    reserved_pid = 0;
+    return p;
 }
 
 //在head后面插入节点（头插法）
@@ -119,7 +134,12 @@ void TaskInit(){
     //将内核任务设为当前任务
     current_task = kernel_task;
     current_task->state = TASK_RUNNING;
+    PidReserve(1);//预留1号给init
     idle_task = CreateKernelThread(idle_thread,4096,"Idle Task");//创建IDLE任务
+    if(idle_task){
+        idle_task->pid  = 0;
+        idle_task->tgid = 0;
+    }
 }
 
 void TaskListAdd(task_struct* t){

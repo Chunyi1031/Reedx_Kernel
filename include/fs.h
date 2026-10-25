@@ -148,5 +148,6 @@ const struct super_operations *Ext2SuperOps(void);
 struct dentry *Ext2FillSuper(struct super_block *sb);
 int Ext2ReadSuper(struct super_block *sb, struct bdev *bd);
 struct bdev *Ext2FindPartition(void);
+struct super_block *Ext2NewSuper(struct bdev *bd, struct dentry **root_out);
 int Ext2MountAt(struct vfsmount *parent, struct dentry *mountpoint);
 #endif

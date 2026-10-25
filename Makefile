@@ -202,29 +202,52 @@ clean:
 	$(call cmd,clean)
 
 # ========== 磁盘镜像与部署 ==========
-MNT_DIR     := ./mnt
-SYSTEM_DISK := ./System.img
-SYSTEM_DISK_SIZE := 256
+MNT_DIR          := ./mnt
+SYSTEM_DISK      := ./System.img
+SYSTEM_DISK_SIZE := 400          #整盘大小(MiB)
+ESP_SIZE_MIB     := 96           #ESP 大小, 剩下的全部给 ext2
+ESP_TMP          := $(build-dir)/esp.img
+EXT2_TMP         := $(build-dir)/ext2.img
+
+# GPT 布局(512 字节扇区): p1 = ESP(FAT32) 从 1MiB 开始, p2 = ext2 接着排到盘尾
+DISK_SECTORS     := $(shell expr $(SYSTEM_DISK_SIZE) \* 2048)
+ESP_START        := 2048
+ESP_COUNT        := $(shell expr $(ESP_SIZE_MIB) \* 2048)
+EXT2_START       := $(shell expr $(ESP_START) + $(ESP_COUNT))
+EXT2_COUNT       := $(shell expr $(DISK_SECTORS) - 33 - $(EXT2_START))
+EXT2_END         := $(shell expr $(EXT2_START) + $(EXT2_COUNT) - 1)
 
 .PHONY: disk
 disk:
-	dd if=/dev/zero of=$(SYSTEM_DISK) bs=1M count=$(SYSTEM_DISK_SIZE)
-	sudo parted $(SYSTEM_DISK) mklabel gpt
-	sudo parted $(SYSTEM_DISK) mkpart primary fat32 1MiB 201MiB
-	sudo parted $(SYSTEM_DISK) set 1 esp on
-	sudo parted $(SYSTEM_DISK) print
-	@echo "Disk: $(SYSTEM_DISK) Size: $(SYSTEM_DISK_SIZE)MB"
-	@echo "Formatting..."
-	sudo losetup -Pf $(SYSTEM_DISK)
-	@LOOP_DEV=$$(sudo losetup -j $(SYSTEM_DISK) | cut -d: -f1); \
-	sudo mkfs.fat -F 32 $${LOOP_DEV}p1; \
-	sudo losetup -d $$LOOP_DEV
-	sudo mount -o loop,offset=1048576 $(SYSTEM_DISK) $(MNT_DIR)
-	sudo mkdir -p $(MNT_DIR)/EFI/BOOT
-	sudo mkdir $(MNT_DIR)/SYS
-	sudo cp data/BOOTX64.EFI $(MNT_DIR)/EFI/BOOT/BOOTX64.EFI
-	sudo cp data/BOOTCFG.TXT $(MNT_DIR)/EFI/BOOT/BOOTCFG.TXT
-	sudo umount $(MNT_DIR)
+	@echo "  DISK    $(SYSTEM_DISK) (${SYSTEM_DISK_SIZE}MiB: FAT32 ESP ${ESP_SIZE_MIB}MiB + ext2)"
+	@mkdir -p $(build-dir)
+	@if [ -f $(SYSTEM_DISK) ]; then cp -f $(SYSTEM_DISK) $(SYSTEM_DISK).bak; \
+		echo "  已备份旧镜像 -> $(SYSTEM_DISK).bak"; fi
+	dd if=/dev/zero of=$(SYSTEM_DISK) bs=1M count=$(SYSTEM_DISK_SIZE) status=none
+	sgdisk -Z $(SYSTEM_DISK) >/dev/null
+	sgdisk -n 1:$(ESP_START):$(shell expr $(ESP_START) + $(ESP_COUNT) - 1) \
+	       -t 1:ef00 -c 1:ESP $(SYSTEM_DISK) >/dev/null
+	sgdisk -n 2:$(EXT2_START):$(EXT2_END) \
+	       -t 2:8300 -c 2:REEDXEXT2 $(SYSTEM_DISK) >/dev/null
+	@echo "  ESP     LBA $(ESP_START)+$(ESP_COUNT) -> FAT32"
+	dd if=$(SYSTEM_DISK) of=$(ESP_TMP) bs=512 skip=$(ESP_START) count=$(ESP_COUNT) status=none
+	mkfs.fat -F 32 -n ESP $(ESP_TMP)
+	@set -e; L=$$(udisksctl loop-setup -f $(ESP_TMP)|grep -oP '/dev/loop\d+'); \
+	udisksctl mount -b $$L >/dev/null; \
+	MP=$$(grep "^$$L" /proc/mounts|awk '{print $$2}'); \
+	mkdir -p $$MP/EFI/BOOT $$MP/SYS; \
+	cp data/BOOTX64.EFI data/BOOTCFG.TXT $$MP/EFI/BOOT/; \
+	sync; \
+	udisksctl unmount -b $$L >/dev/null; \
+	udisksctl loop-delete -b $$L >/dev/null
+	dd if=$(ESP_TMP) of=$(SYSTEM_DISK) bs=512 seek=$(ESP_START) conv=notrunc status=none
+	@echo "  EXT2    LBA $(EXT2_START)+$(EXT2_COUNT) -> ext2"
+	dd if=$(SYSTEM_DISK) of=$(EXT2_TMP) bs=512 skip=$(EXT2_START) count=$(EXT2_COUNT) status=none
+	mke2fs -q -t ext2 -b 1024 -I 128 -L REEDXEXT2 -F $(EXT2_TMP)
+	dd if=$(EXT2_TMP) of=$(SYSTEM_DISK) bs=512 seek=$(EXT2_START) conv=notrunc status=none
+	@rm -f $(ESP_TMP) $(EXT2_TMP)
+	sgdisk -p $(SYSTEM_DISK)
+	@echo "  完成: $(SYSTEM_DISK) (内核还没放进去, 用 make system)"
 
 .PHONY: system
 system: kernel.elf
@@ -259,7 +282,7 @@ help:
 	@echo '  all          - 构建kernel.elf (默认)'
 	@echo '  clean        - 删除build/和kernel.elf'
 	@echo '  config       - 由Kconfig生成include/config/auto.conf'
-	@echo '  disk         - 创建启动盘镜像'
+	@echo '  disk         - 重建启动盘(400MB: FAT32 ESP + ext2, 只放引导程序)'
 	@echo '  system       - 复制kernel.elf内核到镜像'
 	@echo '  run          - 编译并在QEMU中运行'
 	@echo '  run-debug    - 编译并在QEMU中调试'

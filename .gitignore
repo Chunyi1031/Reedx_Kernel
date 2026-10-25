@@ -8,7 +8,7 @@ kernel.elf
 OVMF.fd
 qemu.log
 app/
-scripts/mkfont.py
 docs/
 scripts/mk-testdisk.sh
 tests/
+*.py

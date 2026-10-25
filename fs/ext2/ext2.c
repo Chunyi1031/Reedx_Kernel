@@ -15,15 +15,18 @@
 #include <mm/kslab.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
+#include <rtc.h>
 
 #define EXT2_MAGIC       0xEF53u
 #define EXT2_ROOT_INO    2u
 
 #define EXT2_INCOMPAT_FILETYPE 0x0002u
+#define EXT2_COMPAT_DIR_INDEX  0x0020u
 
 #define EXT2_NIDIRECT    12      //i_block 前 12 个是直接块
 #define EXT2_BLOCKS      15      //i_block 总共 15 个块号
 #define EXT2_LINK_MAX    256     //符号链接目标的最大缓存长度
+#define EXT2_READ_RUN    128     //一次连续读最多合并多少个块
 
 //磁盘上的超级块(只用到前 136 字节, 但结构必须撑满 1024)
 typedef struct __attribute__((packed)) ext2_super {
@@ -110,6 +113,13 @@ _Static_assert(sizeof(ext2_group_desc_t) == 32,   "ext2 group desc must be 32 by
 _Static_assert(sizeof(ext2_dinode_t)     == 128,  "ext2 inode must be 128 bytes");
 _Static_assert(sizeof(ext2_dir_entry_t)  == 8,    "ext2 dirent must be 8 bytes");
 
+//一块位图的缓存(全局只用两块: 块位图 / inode 位图)
+typedef struct ext2_bmp {
+    uint8_t *buf;      //块内容
+    uint32_t blk;      //缓存的是哪个块(0=没有)
+    _Bool    dirty;    //改过待回写
+} ext2_bmp_t;
+
 //文件系统私有数据
 typedef struct ext2_sb_info {
     bdev_t  *bdev;              //ext2 所在的分区块设备
@@ -119,11 +129,25 @@ typedef struct ext2_sb_info {
     uint32_t inodes_per_group;
     uint32_t blocks_per_group;
     uint32_t first_data_block;  //第一个数据块号(1K 块时为 1)
+    uint32_t first_ino;         //第一个可分配的 inode 号
+    uint32_t free_blocks_count;
+    uint32_t free_inodes_count;
     uint32_t nr_groups;
     uint32_t desc_blk;          //块组描述符表起始块号
+    uint32_t compat;            //compat 特性字
     uint32_t incompat;          //incompat 特性字
-    uint8_t *meta_buf;          //间接块/元数据临时缓冲
-    uint8_t *dir_buf;           //目录块扫描缓冲
+    uint32_t blocks_count;      //总块数
+    uint32_t inodes_count;      //总 inode 数
+    uint8_t *meta_buf;          //间接块临时缓冲
+    uint32_t meta_blk;          //meta_buf 里现在缓存的是哪个块(0=没有)
+    uint8_t *blk_buf;           //目录块扫描与局部块写入共用
+    ext2_bmp_t bbmp;            //块位图缓存
+    ext2_bmp_t ibmp;            //inode 位图缓存
+    uint8_t *itab_buf;          //inode 表块缓存
+    uint32_t itab_blk;          //itab_buf 里是哪个块(0=没有)
+    ext2_group_desc_t *gdt;     //块组描述符表的常驻副本
+    _Bool gdt_dirty;            //gdt 有改动待回写
+    _Bool sb_dirty;             //超级块空闲计数有改动待回写
 } ext2_sb_info_t;
 
 #define EX2SB(sb)  ((ext2_sb_info_t*)(sb)->s_fs_info)
@@ -150,8 +174,26 @@ static int ext2_read_block(ext2_sb_info_t *s, uint32_t blk, void *buf){
     return 0;
 }
 
-//读第 group 个块组描述符
+//取间接块: 同一块只用读一次, 顺序读文件时省掉大量重复 I/O
+static uint8_t *ext2_meta(ext2_sb_info_t *s, uint32_t blk){
+    if(!blk)return NULL;
+    if(s->meta_blk == blk)return s->meta_buf;
+    if(ext2_read_block(s, blk, s->meta_buf))return NULL;
+    s->meta_blk = blk;
+    return s->meta_buf;
+}
+
+//记下 meta_buf 现在装的是哪个块(写完回磁盘后调用)
+static void ext2_meta_set(ext2_sb_info_t *s, uint32_t blk){
+    s->meta_blk = blk;
+}
+
+//读第 group 个块组描述符(走内存副本)
 static int ext2_read_group_desc(ext2_sb_info_t *s, uint32_t group, ext2_group_desc_t *out){
+    if(s->gdt && group < s->nr_groups){
+        *out = s->gdt[group];
+        return 0;
+    }
     uint64_t off = (uint64_t)s->desc_blk * s->block_size + (uint64_t)group * sizeof(*out);
     if(bdev_read(s->bdev, off, out, sizeof(*out)))return -EIO;
     return 0;
@@ -166,8 +208,16 @@ static int ext2_read_dinode(ext2_sb_info_t *s, uint32_t ino, ext2_dinode_t *out)
     ext2_group_desc_t gd;
     int r = ext2_read_group_desc(s, group, &gd);
     if(r)return r;
-    uint64_t off = (uint64_t)gd.bg_inode_table * s->block_size + (uint64_t)index * s->inode_size;
-    if(bdev_read(s->bdev, off, out, sizeof(*out)))return -EIO;
+    //inode 表按块缓存: 同一目录里的 inode 往往连续, 能省掉大量重复读
+    uint64_t byte = (uint64_t)index * s->inode_size;
+    uint32_t blk  = (uint32_t)(gd.bg_inode_table + byte / s->block_size);
+    uint32_t off  = (uint32_t)(byte % s->block_size);
+    if(off + sizeof(*out) > s->block_size)return -EIO;
+    if(s->itab_blk != blk){
+        if(ext2_read_block(s, blk, s->itab_buf))return -EIO;
+        s->itab_blk = blk;
+    }
+    memcpy(out, s->itab_buf + off, sizeof(*out));
     return 0;
 }
 
@@ -178,19 +228,18 @@ static uint32_t ext2_bmap(ext2_sb_info_t *s, ext2_inode_info_t *ii, uint32_t blk
     blkno -= EXT2_NIDIRECT;
     //一级间接
     if(blkno < ptrs){
-        if(ext2_read_block(s, ii->i_block[12], s->meta_buf))return 0;
-        return ((uint32_t*)s->meta_buf)[blkno];
+        uint8_t *m = ext2_meta(s, ii->i_block[12]);
+        return m ? ((uint32_t*)m)[blkno] : 0;
     }
     blkno -= ptrs;
     //二级间接
     if(blkno < ptrs * ptrs){
-        if(ext2_read_block(s, ii->i_block[13], s->meta_buf))return 0;
-        uint32_t lvl1 = blkno / ptrs;
-        uint32_t lvl2 = blkno % ptrs;
-        uint32_t blk = ((uint32_t*)s->meta_buf)[lvl1];
+        uint8_t *m = ext2_meta(s, ii->i_block[13]);
+        if(!m)return 0;
+        uint32_t blk = ((uint32_t*)m)[blkno / ptrs];
         if(!blk)return 0;
-        if(ext2_read_block(s, blk, s->meta_buf))return 0;
-        return ((uint32_t*)s->meta_buf)[lvl2];
+        m = ext2_meta(s, blk);
+        return m ? ((uint32_t*)m)[blkno % ptrs] : 0;
     }
     return 0;//不支持三级间接
 }
@@ -264,11 +313,11 @@ static int ext2_dirent_type(uint8_t ft){
     }
 }
 
-//把目录的第 n 个逻辑块读进 dir_buf
+//把目录的第 n 个逻辑块读进 blk_buf
 static int ext2_read_dir_block(ext2_sb_info_t *s, struct inode *dir, uint32_t n){
     uint32_t blk = ext2_bmap(s, EX2I(dir), n);
     if(!blk)return -EIO;
-    return ext2_read_block(s, blk, s->dir_buf);
+    return ext2_read_block(s, blk, s->blk_buf);
 }
 
 //目录占几个块
@@ -299,7 +348,7 @@ static uint32_t ext2_find_entry(ext2_sb_info_t *s, struct inode *dir,
     uint32_t nb = ext2_dir_nblocks(s, dir);
     for(uint32_t n = 0;n < nb;n ++){
         if(ext2_read_dir_block(s, dir, n))return 0;
-        uint32_t ino = ext2_scan_entry(s, s->dir_buf, name, namelen);
+        uint32_t ino = ext2_scan_entry(s, s->blk_buf, name, namelen);
         if(ino)return ino;
     }
     return 0;
@@ -337,7 +386,7 @@ static int ext2_iterate(struct file *f, void *ctx,
         if(ext2_read_dir_block(s, dir, n))return -EIO;
         uint32_t pos = 0;
         while(pos + sizeof(ext2_dir_entry_t) <= s->block_size){
-            const uint8_t *e = s->dir_buf + pos;
+            const uint8_t *e = s->blk_buf + pos;
             const ext2_dir_entry_t *de = (const ext2_dir_entry_t*)e;
             if(de->rec_len < sizeof(ext2_dir_entry_t) ||
                pos + de->rec_len > s->block_size)break;
@@ -368,7 +417,25 @@ static int64_t ext2_read(struct file *f, char *buf, uint64_t len, uint64_t *pos)
     while(left){
         uint32_t blkno = (uint32_t)(off / s->block_size);
         uint32_t inblk = (uint32_t)(off % s->block_size);
-        uint32_t n     = s->block_size - inblk;
+        //整块对齐时把物理上连续的块合成一次读, 大文件顺序读能少发上百倍命令
+        if(inblk == 0){
+            uint32_t first = ext2_bmap(s, ii, blkno);
+            if(first){
+                uint32_t maxb = (uint32_t)((left + s->block_size - 1) / s->block_size);
+                uint32_t run  = 1;
+                while(run < maxb && run < EXT2_READ_RUN &&
+                      ext2_bmap(s, ii, blkno + run) == first + run)run ++;
+                uint32_t bytes = run * s->block_size;
+                if((uint64_t)bytes > left)bytes = (uint32_t)left;
+                if(bdev_read(s->bdev, (uint64_t)first * s->block_size, buf, bytes))
+                    return -EIO;
+                buf  += bytes;
+                off  += bytes;
+                left -= bytes;
+                continue;
+            }
+        }
+        uint32_t n = s->block_size - inblk;
         if((uint64_t)n > left)n = (uint32_t)left;
         uint32_t blk = ext2_bmap(s, ii, blkno);
         if(!blk){
@@ -394,14 +461,790 @@ static int ext2_get_link(struct dentry *dentry, struct inode *inode, const char 
     return 0;
 }
 
+//==================== 元数据回写 ====================
+
+//写一个文件系统块
+static int ext2_write_block(ext2_sb_info_t *s, uint32_t blk, const void *buf){
+    if(!blk)return -EIO;
+    if(bdev_write(s->bdev, (uint64_t)blk * s->block_size, buf, s->block_size))return -EIO;
+    return 0;
+}
+
+//回写块组描述符(只改内存副本, 真正落盘交给 ext2_commit)
+static int ext2_write_group_desc(ext2_sb_info_t *s, uint32_t group, const ext2_group_desc_t *gd){
+    if(s->gdt && group < s->nr_groups){
+        s->gdt[group] = *gd;
+        s->gdt_dirty = true;
+        return 0;
+    }
+    uint64_t off = (uint64_t)s->desc_blk * s->block_size + (uint64_t)group * sizeof(*gd);
+    if(bdev_write(s->bdev, off, gd, sizeof(*gd)))return -EIO;
+    return 0;
+}
+
+//把攒下的元数据(位图 + 块组描述符 + 超级块计数)一次性写回
+static void ext2_commit(ext2_sb_info_t *s){
+    if(!s)return;
+    //位图先落盘: 它记录的是"哪些块被占了", 迟写只会多占不会丢数据
+    if(s->bbmp.dirty && s->bbmp.blk){
+        if(ext2_write_block(s, s->bbmp.blk, s->bbmp.buf) == 0)s->bbmp.dirty = false;
+    }
+    if(s->ibmp.dirty && s->ibmp.blk){
+        if(ext2_write_block(s, s->ibmp.blk, s->ibmp.buf) == 0)s->ibmp.dirty = false;
+    }
+    if(s->sb_dirty){
+        ext2_super_t sb;
+        if(bdev_read(s->bdev, 1024, &sb, sizeof(sb)) == 0){
+            sb.s_free_blocks_count = s->free_blocks_count;
+            sb.s_free_inodes_count = s->free_inodes_count;
+            if(bdev_write(s->bdev, 1024, &sb, sizeof(sb)) == 0)s->sb_dirty = false;
+        }
+    }
+    if(s->gdt_dirty && s->gdt){
+        uint32_t bytes = s->nr_groups * (uint32_t)sizeof(ext2_group_desc_t);
+        if(bdev_write(s->bdev, (uint64_t)s->desc_blk * s->block_size, s->gdt, bytes) == 0)
+            s->gdt_dirty = false;
+    }
+}
+
+//回写超级块里的空闲计数(延迟到 ext2_commit 统一做)
+static int ext2_sync_super(ext2_sb_info_t *s){
+    s->sb_dirty = true;
+    return 0;
+}
+
+//inode 表里 ino 对应的字节偏移
+static uint64_t ext2_inode_offset(ext2_sb_info_t *s, uint32_t ino, ext2_group_desc_t *gd_out){
+    uint32_t group = (ino - 1) / s->inodes_per_group;
+    uint32_t index = (ino - 1) % s->inodes_per_group;
+    ext2_group_desc_t gd;
+    if(ext2_read_group_desc(s, group, &gd))return 0;
+    if(gd_out)*gd_out = gd;
+    return (uint64_t)gd.bg_inode_table * s->block_size + (uint64_t)index * s->inode_size;
+}
+
+//把 VFS inode 组装成磁盘结构写回去
+static int ext2_write_dinode(struct inode *inode){
+    if(!inode || !inode->i_sb)return -EINVAL;
+    ext2_sb_info_t *s = EX2SB(inode->i_sb);
+    ext2_inode_info_t *ii = EX2I(inode);
+    uint32_t ino = (uint32_t)inode->i_ino;
+    if(!ii || !ino)return -EINVAL;
+    uint64_t off = ext2_inode_offset(s, ino, NULL);
+    if(!off)return -EIO;
+    //先读出磁盘上原来的 inode, 只改我们维护的字段
+    ext2_dinode_t di;
+    if(bdev_read(s->bdev, off, &di, sizeof(di)))return -EIO;
+    di.i_mode        = inode->i_mode;
+    di.i_uid         = (uint16_t)inode->i_uid;
+    di.i_gid         = (uint16_t)inode->i_gid;
+    di.i_size        = (uint32_t)inode->i_size;
+    di.i_links_count = (uint16_t)inode->i_nlink;
+    di.i_blocks      = (uint32_t)inode->i_blocks;
+    di.i_atime       = (uint32_t)inode->i_atime_s;
+    di.i_mtime       = (uint32_t)inode->i_mtime_s;
+    di.i_ctime       = (uint32_t)inode->i_ctime_s;
+    for(int k = 0;k < EXT2_BLOCKS;k ++)di.i_block[k] = ii->i_block[k];
+    if(bdev_write(s->bdev, off, &di, sizeof(di)))return -EIO;
+    s->itab_blk = 0;//inode 表块改过了, 缓存作废
+    return 0;
+}
+
+//==================== 位图与块分配 ====================
+
+//在位图块里找第一个 0 位并置位, 成功返回位号
+static int ext2_bitmap_alloc(ext2_sb_info_t *s, ext2_bmp_t *bmp, uint32_t bitmap_blk,
+                             uint32_t max_bits, uint32_t *out){
+    if(!bitmap_blk || !max_bits)return -EIO;
+    if(bmp->blk != bitmap_blk){
+        if(ext2_read_block(s, bitmap_blk, bmp->buf))return -EIO;
+        bmp->blk   = bitmap_blk;
+        bmp->dirty = false;
+    }
+    for(uint32_t i = 0;i < max_bits;i ++){
+        if(!(bmp->buf[i >> 3] & (uint8_t)(1u << (i & 7)))){
+            bmp->buf[i >> 3] |= (uint8_t)(1u << (i & 7));
+            bmp->dirty = true;
+            *out = i;
+            return 0;
+        }
+    }
+    return -ENOSPC;
+}
+
+//把位图里某一位清 0
+static int ext2_bitmap_free(ext2_sb_info_t *s, ext2_bmp_t *bmp, uint32_t bitmap_blk, uint32_t bit){
+    if(!bitmap_blk)return -EIO;
+    if(bmp->blk != bitmap_blk){
+        if(ext2_read_block(s, bitmap_blk, bmp->buf))return -EIO;
+        bmp->blk   = bitmap_blk;
+        bmp->dirty = false;
+    }
+    bmp->buf[bit >> 3] &= (uint8_t)~(1u << (bit & 7));
+    bmp->dirty = true;
+    return 0;
+}
+
+//分配一个数据块, 从 goal 所在块组开始找; zero=1 时先把块清零
+static uint32_t ext2_alloc_block(ext2_sb_info_t *s, uint32_t goal, int zero){
+    if(!s->free_blocks_count)return 0;
+    uint32_t start = 0;
+    if(goal > s->first_data_block)
+        start = (goal - s->first_data_block) / s->blocks_per_group;
+    if(start >= s->nr_groups)start = 0;
+    for(uint32_t i = 0;i < s->nr_groups;i ++){
+        uint32_t group = (start + i) % s->nr_groups;
+        ext2_group_desc_t gd;
+        if(ext2_read_group_desc(s, group, &gd) || !gd.bg_free_blocks_count)continue;
+        //最后一块组可能不满, 位图里超出总块数的位不能用
+        uint32_t base = s->first_data_block + group * s->blocks_per_group;
+        uint32_t maxb = s->blocks_count - base;
+        if(maxb > s->blocks_per_group)maxb = s->blocks_per_group;
+        uint32_t bit;
+        if(ext2_bitmap_alloc(s, &s->bbmp, gd.bg_block_bitmap, maxb, &bit))continue;
+        //同步组描述符与超级块的空闲计数
+        gd.bg_free_blocks_count --;
+        ext2_write_group_desc(s, group, &gd);
+        s->free_blocks_count --;
+        ext2_sync_super(s);
+        uint32_t blk = base + bit;
+        //需要清零时把新块写一遍 0, 避免把别的文件的旧数据漏出去
+        if(zero){
+            memset(s->blk_buf, 0, s->block_size);
+            if(ext2_write_block(s, blk, s->blk_buf))return 0;
+        }
+        return blk;
+    }
+    return 0;
+}
+
+//释放一个数据块
+static int ext2_free_block(ext2_sb_info_t *s, uint32_t blk){
+    if(blk <= s->first_data_block)return 0;//0 号块与引导块不归位图管
+    uint32_t rel = blk - s->first_data_block;
+    uint32_t group = rel / s->blocks_per_group;
+    uint32_t bit   = rel % s->blocks_per_group;
+    if(group >= s->nr_groups)return -EINVAL;
+    ext2_group_desc_t gd;
+    if(ext2_read_group_desc(s, group, &gd))return -EIO;
+    if(ext2_bitmap_free(s, &s->bbmp, gd.bg_block_bitmap, bit))return -EIO;
+    gd.bg_free_blocks_count ++;
+    ext2_write_group_desc(s, group, &gd);
+    s->free_blocks_count ++;
+    ext2_sync_super(s);
+    return 0;
+}
+
+//分配一个 inode, 并把 inode 表里的那一项初始化好
+static uint32_t ext2_alloc_inode(struct super_block *sb, uint16_t mode, int isdir){
+    ext2_sb_info_t *s = EX2SB(sb);
+    if(!s->free_inodes_count)return 0;
+    for(uint32_t group = 0;group < s->nr_groups;group ++){
+        ext2_group_desc_t gd;
+        if(ext2_read_group_desc(s, group, &gd) || !gd.bg_free_inodes_count)continue;
+        //最后一个块组可能不满, 超出 inode 总数的位不能用
+        uint32_t maxb = s->inodes_count - group * s->inodes_per_group;
+        if(maxb > s->inodes_per_group)maxb = s->inodes_per_group;
+        uint32_t bit;
+        if(ext2_bitmap_alloc(s, &s->ibmp, gd.bg_inode_bitmap, maxb, &bit))continue;
+        uint32_t ino = group * s->inodes_per_group + bit + 1;
+        gd.bg_free_inodes_count --;
+        if(isdir)gd.bg_used_dirs_count ++;
+        ext2_write_group_desc(s, group, &gd);
+        s->free_inodes_count --;
+        ext2_sync_super(s);
+        //在 inode 表里写一个空 inode
+        ext2_dinode_t di;
+        memset(&di, 0, sizeof(di));
+        uint64_t now = rtc_get_epoch();
+        di.i_mode        = mode;
+        di.i_links_count = 1;
+        di.i_size        = 0;
+        di.i_atime       = (uint32_t)now;
+        di.i_mtime       = (uint32_t)now;
+        di.i_ctime       = (uint32_t)now;
+        uint64_t off = ext2_inode_offset(s, ino, NULL);
+        if(!off || bdev_write(s->bdev, off, &di, sizeof(di)))return 0;
+        return ino;
+    }
+    return 0;
+}
+
+//释放一个 inode(位图清位 + 组计数)
+static int ext2_free_inode(struct inode *inode){
+    ext2_sb_info_t *s = EX2SB(inode->i_sb);
+    uint32_t ino = (uint32_t)inode->i_ino;
+    if(!ino)return -EINVAL;
+    uint32_t group = (ino - 1) / s->inodes_per_group;
+    uint32_t bit   = (ino - 1) % s->inodes_per_group;
+    ext2_group_desc_t gd;
+    if(ext2_read_group_desc(s, group, &gd))return -EIO;
+    //先把 inode 清成"已删除"的样子, fsck 靠 dtime 判断它确实是被删的
+    uint64_t off = ext2_inode_offset(s, ino, NULL);
+    if(off){
+        ext2_dinode_t di;
+        if(bdev_read(s->bdev, off, &di, sizeof(di)) == 0){
+            di.i_dtime       = (uint32_t)rtc_get_epoch();
+            di.i_links_count = 0;
+            di.i_size        = 0;
+            di.i_blocks      = 0;
+            for(int k = 0;k < EXT2_BLOCKS;k ++)di.i_block[k] = 0;
+            bdev_write(s->bdev, off, &di, sizeof(di));
+        }
+    }
+    if(ext2_bitmap_free(s, &s->ibmp, gd.bg_inode_bitmap, bit))return -EIO;
+    gd.bg_free_inodes_count ++;
+    if((inode->i_mode & S_IFMT) == S_IFDIR && gd.bg_used_dirs_count)gd.bg_used_dirs_count --;
+    ext2_write_group_desc(s, group, &gd);
+    s->free_inodes_count ++;
+    ext2_sync_super(s);
+    return 0;
+}
+
+//把逻辑块号映射成磁盘块号, 缺块就分配; zero 控制新块是否要先清零
+static uint32_t ext2_bmap_alloc(struct inode *inode, uint32_t blkno, int zero){
+    ext2_sb_info_t *s = EX2SB(inode->i_sb);
+    ext2_inode_info_t *ii = EX2I(inode);
+    uint32_t ptrs = s->ptrs;
+    uint32_t per  = s->block_size / 512;//一个数据块算几块 512 字节
+    if(blkno < EXT2_NIDIRECT){
+        if(!ii->i_block[blkno]){
+            uint32_t blk = ext2_alloc_block(s, ii->i_block[0] ? ii->i_block[blkno - 1] + 1 : 0, zero);
+            if(!blk)return 0;
+            ii->i_block[blkno] = blk;
+            inode->i_blocks += per;
+        }
+        return ii->i_block[blkno];
+    }
+    blkno -= EXT2_NIDIRECT;
+    //一级间接
+    if(blkno < ptrs){
+        if(!ii->i_block[12]){
+            uint32_t blk = ext2_alloc_block(s, 0, 1);//间接块必须先清零
+            if(!blk)return 0;
+            ii->i_block[12] = blk;
+            inode->i_blocks += per;
+        }
+        if(ext2_read_block(s, ii->i_block[12], s->meta_buf))return 0;
+        uint32_t *ib = (uint32_t*)s->meta_buf;
+        if(!ib[blkno]){
+            uint32_t blk = ext2_alloc_block(s, 0, zero);
+            if(!blk)return 0;
+            ib[blkno] = blk;
+            if(ext2_write_block(s, ii->i_block[12], s->meta_buf))return 0;
+            ext2_meta_set(s, ii->i_block[12]);
+            inode->i_blocks += per;
+        }
+        return ib[blkno];
+    }
+    blkno -= ptrs;
+    //二级间接
+    if(blkno < ptrs * ptrs){
+        if(!ii->i_block[13]){
+            uint32_t blk = ext2_alloc_block(s, 0, 1);//间接块必须先清零
+            if(!blk)return 0;
+            ii->i_block[13] = blk;
+            inode->i_blocks += per;
+        }
+        if(ext2_read_block(s, ii->i_block[13], s->meta_buf))return 0;
+        uint32_t *l1 = (uint32_t*)s->meta_buf;
+        uint32_t i1 = blkno / ptrs, i2 = blkno % ptrs;
+        if(!l1[i1]){
+            uint32_t blk = ext2_alloc_block(s, 0, 1);//中间层间接块也要清零
+            if(!blk)return 0;
+            l1[i1] = blk;
+            if(ext2_write_block(s, ii->i_block[13], s->meta_buf))return 0;
+            ext2_meta_set(s, ii->i_block[13]);
+            inode->i_blocks += per;
+        }
+        uint32_t mid = l1[i1];
+        if(ext2_read_block(s, mid, s->meta_buf))return 0;
+        uint32_t *l2 = (uint32_t*)s->meta_buf;
+        if(!l2[i2]){
+            uint32_t blk = ext2_alloc_block(s, 0, zero);
+            if(!blk)return 0;
+            l2[i2] = blk;
+            if(ext2_write_block(s, mid, s->meta_buf))return 0;
+            ext2_meta_set(s, mid);
+            inode->i_blocks += per;
+        }
+        return l2[i2];
+    }
+    return 0;//不支持三级间接
+}
+
+//==================== 目录项增删 ====================
+
+//目录项实际占用长度(4 字节对齐)
+static uint32_t ext2_dirent_len(uint32_t namelen){
+    return (8 + namelen + 3) & ~3u;
+}
+
+//在一块目录数据里插入条目, 放不下返回 -ENOSPC
+static int ext2_block_add_entry(ext2_sb_info_t *s, uint8_t *blk, const char *name,
+                                uint32_t namelen, uint32_t ino, uint8_t ftype){
+    uint32_t need = ext2_dirent_len(namelen);
+    uint32_t pos  = 0;
+    while(pos + sizeof(ext2_dir_entry_t) <= s->block_size){
+        ext2_dir_entry_t *de = (ext2_dir_entry_t*)(blk + pos);
+        if(de->rec_len < sizeof(ext2_dir_entry_t) ||
+           pos + de->rec_len > s->block_size)return -EIO;
+        uint32_t used = de->inode ? ext2_dirent_len(ext2_dirent_namelen(s, blk + pos)) : 0;
+        uint32_t room = de->rec_len - used;
+        if(room >= need){
+            if(de->inode){
+                //已有条目: 把剩余空间拆成新条目
+                de->rec_len = (uint16_t)used;
+                ext2_dir_entry_t *nd = (ext2_dir_entry_t*)(blk + pos + used);
+                nd->inode     = ino;
+                nd->rec_len   = (uint16_t)room;
+                nd->name_len  = (uint8_t)namelen;
+                nd->file_type = ftype;
+                memcpy((uint8_t*)nd + sizeof(*nd), name, namelen);
+            }else{
+                //整个空闲槽都归新条目
+                de->inode     = ino;
+                de->name_len  = (uint8_t)namelen;
+                de->file_type = ftype;
+                memcpy((uint8_t*)de + sizeof(*de), name, namelen);
+            }
+            return 0;
+        }
+        pos += de->rec_len;
+    }
+    return -ENOSPC;
+}
+
+//往目录里加一个条目, 必要时给目录追加一块
+static int ext2_add_entry(struct inode *dir, const char *name, uint32_t namelen,
+                          uint32_t ino, uint8_t ftype){
+    ext2_sb_info_t *s = EX2SB(dir->i_sb);
+    if(!namelen || namelen > NAMELEN_MAX)return -ENAMETOOLONG;
+    uint32_t nb = ext2_dir_nblocks(s, dir);
+    //已经有多个块且允许目录索引时, 0 号块前面挂着 dx_root, 不能往里插
+    _Bool indexed = (s->compat & EXT2_COMPAT_DIR_INDEX) && nb > 1;
+    for(uint32_t n = indexed ? 1 : 0;n < nb;n ++){
+        if(ext2_read_dir_block(s, dir, n))return -EIO;
+        if(ext2_block_add_entry(s, s->blk_buf, name, namelen, ino, ftype) == 0){
+            uint32_t blk = ext2_bmap(s, EX2I(dir), n);
+            int r = ext2_write_block(s, blk, s->blk_buf);
+            if(r)return r;
+            return ext2_write_dinode(dir);
+        }
+    }
+    //都放不下: 给目录追加一块
+    uint32_t blkno = ext2_bmap_alloc(dir, nb, 0);//整块会被目录项填满
+    if(!blkno)return -ENOSPC;
+    memset(s->blk_buf, 0, s->block_size);
+    ext2_dir_entry_t *de = (ext2_dir_entry_t*)s->blk_buf;
+    de->inode     = ino;
+    de->rec_len   = (uint16_t)s->block_size;
+    de->name_len  = (uint8_t)namelen;
+    de->file_type = ftype;
+    memcpy(s->blk_buf + sizeof(*de), name, namelen);
+    int r = ext2_write_block(s, blkno, s->blk_buf);
+    if(r)return r;
+    dir->i_size += s->block_size;
+    return ext2_write_dinode(dir);
+}
+
+//从目录里删掉一个条目, 把空间并进前一个条目
+static int ext2_remove_entry(struct inode *dir, const char *name, uint32_t namelen){
+    ext2_sb_info_t *s = EX2SB(dir->i_sb);
+    uint32_t nb = ext2_dir_nblocks(s, dir);
+    for(uint32_t n = 0;n < nb;n ++){
+        if(ext2_read_dir_block(s, dir, n))return -EIO;
+        uint32_t pos = 0, prev_pos = 0;
+        _Bool have_prev = false;
+        while(pos + sizeof(ext2_dir_entry_t) <= s->block_size){
+            ext2_dir_entry_t *de = (ext2_dir_entry_t*)(s->blk_buf + pos);
+            if(de->rec_len < sizeof(ext2_dir_entry_t) ||
+               pos + de->rec_len > s->block_size)break;
+            uint32_t nlen = ext2_dirent_namelen(s, s->blk_buf + pos);
+            if(de->inode && nlen == namelen &&
+               memcmp(s->blk_buf + pos + sizeof(*de), name, nlen) == 0){
+                //删掉: 有前一项就并进去, 否则把这槽标成空闲
+                if(have_prev){
+                    ext2_dir_entry_t *pv = (ext2_dir_entry_t*)(s->blk_buf + prev_pos);
+                    pv->rec_len = (uint16_t)(pv->rec_len + de->rec_len);
+                }else{
+                    de->inode = 0;
+                }
+                uint32_t blk = ext2_bmap(s, EX2I(dir), n);
+                return ext2_write_block(s, blk, s->blk_buf);
+            }
+            prev_pos = pos;
+            have_prev = (de->inode != 0);
+            pos += de->rec_len;
+        }
+    }
+    return -ENOENT;
+}
+
+//==================== 写文件 ====================
+
+//释放 [from, to) 这段逻辑块, 顺手回收空掉的间接块
+static void ext2_release_range(struct inode *inode, uint32_t from, uint32_t to){
+    ext2_sb_info_t *s = EX2SB(inode->i_sb);
+    ext2_inode_info_t *ii = EX2I(inode);
+    uint32_t ptrs = s->ptrs;
+    uint32_t per  = s->block_size / 512;
+    //直接块
+    for(uint32_t i = from;i < to && i < EXT2_NIDIRECT;i ++){
+        if(ii->i_block[i]){
+            ext2_free_block(s, ii->i_block[i]);
+            ii->i_block[i] = 0;
+            if(inode->i_blocks >= per)inode->i_blocks -= per;
+        }
+    }
+    if(to <= EXT2_NIDIRECT)return;
+    //一级间接
+    uint32_t lo = from > EXT2_NIDIRECT ? from - EXT2_NIDIRECT : 0;
+    uint32_t hi = to - EXT2_NIDIRECT;
+    if(hi > ptrs)hi = ptrs;
+    if(ii->i_block[12] && lo < hi){
+        if(ext2_read_block(s, ii->i_block[12], s->meta_buf) == 0){
+            uint32_t *ib = (uint32_t*)s->meta_buf;
+            _Bool all_free = true;
+            for(uint32_t j = 0;j < ptrs;j ++){
+                if(j >= lo && j < hi && ib[j]){
+                    ext2_free_block(s, ib[j]);
+                    ib[j] = 0;
+                    if(inode->i_blocks >= per)inode->i_blocks -= per;
+                }
+                if(ib[j])all_free = false;
+            }
+            if(all_free){
+                ext2_free_block(s, ii->i_block[12]);
+                ii->i_block[12] = 0;
+                s->meta_blk = 0;
+                if(inode->i_blocks >= per)inode->i_blocks -= per;
+            }else{
+                ext2_write_block(s, ii->i_block[12], s->meta_buf);
+            }
+        }
+    }
+    if(to <= EXT2_NIDIRECT + ptrs)return;
+    //二级间接
+    lo = from > EXT2_NIDIRECT + ptrs ? from - EXT2_NIDIRECT - ptrs : 0;
+    hi = to - EXT2_NIDIRECT - ptrs;
+    if(hi > ptrs * ptrs)hi = ptrs * ptrs;
+    if(!ii->i_block[13] || lo >= hi)return;
+    if(ext2_read_block(s, ii->i_block[13], s->meta_buf))return;
+    uint32_t *l1 = (uint32_t*)s->meta_buf;
+    _Bool l1_empty = true;
+    for(uint32_t a = 0;a < ptrs;a ++){
+        if(!l1[a])continue;
+        uint32_t mid = l1[a];
+        uint32_t mid_lo = a * ptrs, mid_hi = mid_lo + ptrs;
+        _Bool touched = (mid_hi > lo && mid_lo < hi);
+        if(!touched){
+            l1_empty = false;
+            continue;
+        }
+        if(ext2_read_block(s, mid, s->meta_buf))return;
+        uint32_t *l2 = (uint32_t*)s->meta_buf;
+        _Bool all_free = true;
+        for(uint32_t b = 0;b < ptrs;b ++){
+            uint32_t logical = mid_lo + b;
+            if(logical >= lo && logical < hi && l2[b]){
+                ext2_free_block(s, l2[b]);
+                l2[b] = 0;
+                if(inode->i_blocks >= per)inode->i_blocks -= per;
+            }
+            if(l2[b])all_free = false;
+        }
+        if(all_free){
+            ext2_free_block(s, mid);
+            if(inode->i_blocks >= per)inode->i_blocks -= per;
+            //重新读回一级表再改
+            if(ext2_read_block(s, ii->i_block[13], s->meta_buf))return;
+            l1 = (uint32_t*)s->meta_buf;
+            l1[a] = 0;
+            if(ext2_write_block(s, ii->i_block[13], s->meta_buf))return;
+            ext2_meta_set(s, ii->i_block[13]);
+        }else{
+            l1_empty = false;
+            //写回二级块后 meta_buf 内容被换掉, 这里只需保证一级表最终写回
+            if(ext2_write_block(s, mid, s->meta_buf))return;
+            if(ext2_read_block(s, ii->i_block[13], s->meta_buf))return;
+            l1 = (uint32_t*)s->meta_buf;
+        }
+    }
+    if(l1_empty){
+        ext2_free_block(s, ii->i_block[13]);
+        ii->i_block[13] = 0;
+        s->meta_blk = 0;
+        if(inode->i_blocks >= per)inode->i_blocks -= per;
+    }
+}
+
+//文件写入
+static int64_t ext2_write(struct file *f, const char *buf, uint64_t len, uint64_t *pos){
+    if(!f || !f->f_inode || !buf || !pos)return -EINVAL;
+    struct inode *inode = f->f_inode;
+    if((inode->i_mode & S_IFMT) == S_IFDIR)return -EISDIR;
+    ext2_sb_info_t *s = EX2SB(inode->i_sb);
+    uint64_t off   = *pos;
+    uint64_t start = off;
+    uint64_t left  = len;
+    while(left){
+        uint32_t blkno = (uint32_t)(off / s->block_size);
+        uint32_t inblk = (uint32_t)(off % s->block_size);
+        uint32_t n     = s->block_size - inblk;
+        if((uint64_t)n > left)n = (uint32_t)left;
+        //整块要被完整覆盖时, 分配时就不用先把新块清零
+        int whole = (inblk == 0 && n == s->block_size);
+        uint32_t blk = ext2_bmap_alloc(inode, blkno, whole ? 0 : 1);
+        if(!blk){
+            if(off > inode->i_size)inode->i_size = off;
+            ext2_write_dinode(inode);
+            return (int64_t)(off - start);
+        }
+        if(whole){
+            //整块覆盖, 直接写进去
+            if(bdev_write(s->bdev, (uint64_t)blk * s->block_size, buf, n))return -EIO;
+        }else{
+            //只改一块里的部分: 先读出来再写回
+            if(ext2_read_block(s, blk, s->blk_buf))return -EIO;
+            memcpy(s->blk_buf + inblk, buf, n);
+            if(ext2_write_block(s, blk, s->blk_buf))return -EIO;
+        }
+        buf  += n;
+        off  += n;
+        left -= n;
+    }
+    //更新大小与时间戳并回写 inode
+    if(off > inode->i_size)inode->i_size = off;
+    inode->i_mtime_s = inode->i_ctime_s = (int64_t)rtc_get_epoch();
+    ext2_write_dinode(inode);
+    ext2_commit(s);
+    *pos = off;
+    return (int64_t)(off - start);
+}
+
+//==================== 属性修改 ====================
+
+//按大小截断
+static int ext2_truncate(struct inode *inode, uint64_t newsize){
+    ext2_sb_info_t *s = EX2SB(inode->i_sb);
+    if(newsize >= inode->i_size){
+        inode->i_size = newsize;//变大只是改大小, 块写入时再分配
+        return ext2_write_dinode(inode);
+    }
+    uint32_t keep = (uint32_t)((newsize + s->block_size - 1) / s->block_size);
+    ext2_release_range(inode, keep, 0xFFFFFFFFu);
+    inode->i_size = newsize;
+    return ext2_write_dinode(inode);
+}
+
+static int ext2_setattr(struct dentry *dentry, void *iattr){
+    if(!dentry || !dentry->d_inode || !iattr)return -EINVAL;
+    struct inode *inode = dentry->d_inode;
+    struct iattr *ia = (struct iattr*)iattr;
+    if((ia->ia_valid & ATTR_SIZE) && (inode->i_mode & S_IFMT) == S_IFDIR)return -EISDIR;
+    if(ia->ia_valid & ATTR_SIZE){
+        int r = ext2_truncate(inode, ia->ia_size);
+        if(r)return r;
+    }
+    if(ia->ia_valid & ATTR_MODE)
+        inode->i_mode = (uint16_t)((inode->i_mode & S_IFMT) | (ia->ia_mode & 07777));
+    if(ia->ia_valid & ATTR_ATIME){ inode->i_atime_s = ia->ia_atime; inode->i_atime_ns = 0; }
+    if(ia->ia_valid & ATTR_MTIME){ inode->i_mtime_s = ia->ia_mtime; inode->i_mtime_ns = 0; }
+    if(ia->ia_valid & ATTR_CTIME){ inode->i_ctime_s = ia->ia_ctime; inode->i_ctime_ns = 0; }
+    int r = ext2_write_dinode(inode);
+    ext2_commit(EX2SB(inode->i_sb));
+    return r;
+}
+
+//==================== 创建与删除 ====================
+
+//create/mkdir 共用: 分配 inode, 目录再补上空块和 "." ".."
+static int ext2_new_node(struct inode *dir, struct dentry *dentry, uint16_t mode, int isdir){
+    ext2_sb_info_t *s = EX2SB(dir->i_sb);
+    uint16_t full = (uint16_t)((isdir ? S_IFDIR : S_IFREG) | (mode & 07777));
+    uint32_t ino = ext2_alloc_inode(dir->i_sb, full, isdir);
+    if(!ino)return -ENOSPC;
+    uint32_t parent_ino = (uint32_t)dir->i_ino;
+    if(isdir){
+        //新目录的第一块里放 "." 和 ".."
+        uint32_t blk = ext2_alloc_block(s, 0, 0);
+        if(!blk)return -ENOSPC;
+        memset(s->blk_buf, 0, s->block_size);
+        ext2_dir_entry_t *dot = (ext2_dir_entry_t*)s->blk_buf;
+        dot->inode = ino;
+        dot->rec_len = 12;
+        dot->name_len = 1;
+        dot->file_type = 2;
+        s->blk_buf[sizeof(*dot)] = '.';
+        ext2_dir_entry_t *dotdot = (ext2_dir_entry_t*)(s->blk_buf + 12);
+        dotdot->inode = parent_ino;
+        dotdot->rec_len = (uint16_t)(s->block_size - 12);
+        dotdot->name_len = 2;
+        dotdot->file_type = 2;
+        s->blk_buf[12 + sizeof(*dotdot)] = '.';
+        s->blk_buf[12 + sizeof(*dotdot) + 1] = '.';
+        if(ext2_write_block(s, blk, s->blk_buf))return -EIO;
+        //把这一块记到新 inode 上
+        ext2_group_desc_t gd;
+        uint64_t off = ext2_inode_offset(s, ino, &gd);
+        ext2_dinode_t di;
+        if(!off || bdev_read(s->bdev, off, &di, sizeof(di)))return -EIO;
+        di.i_block[0] = blk;
+        di.i_size     = s->block_size;
+        di.i_blocks   = s->block_size / 512;
+        di.i_links_count = 2;//"." 与父目录各算一个
+        if(bdev_write(s->bdev, off, &di, sizeof(di)))return -EIO;
+    }
+    //在父目录里登记名字
+    int r = ext2_add_entry(dir, dentry->d_name, dentry->d_name_len, ino, isdir ? 2 : 1);
+    if(r)return r;
+    if(isdir){
+        dir->i_nlink ++;
+        dir->i_mtime_s = dir->i_ctime_s = (int64_t)rtc_get_epoch();
+        ext2_write_dinode(dir);
+    }
+    //读回新 inode 挂到 dentry 上
+    struct inode *inode = ext2_iget(dir->i_sb, ino);
+    if(!inode)return -EIO;
+    d_add(dentry, inode);
+    Iput(inode);
+    ext2_commit(s);
+    return 0;
+}
+
+static int ext2_create(struct inode *dir, struct dentry *dentry, uint16_t mode){
+    return ext2_new_node(dir, dentry, mode, 0);
+}
+
+static int ext2_mkdir(struct inode *dir, struct dentry *dentry, uint16_t mode){
+    return ext2_new_node(dir, dentry, mode, 1);
+}
+
+//建符号链接
+static int ext2_symlink(struct inode *dir, struct dentry *dentry, const char *target){
+    if(!dir || !dentry || !target)return -EINVAL;
+    ext2_sb_info_t *s = EX2SB(dir->i_sb);
+    int len = (int)strlen(target);
+    if(len == 0 || len >= EXT2_LINK_MAX)return -ENAMETOOLONG;
+    uint32_t ino = ext2_alloc_inode(dir->i_sb, (uint16_t)(S_IFLNK | 0777), 0);
+    if(!ino)return -ENOSPC;
+    uint64_t off = ext2_inode_offset(s, ino, NULL);
+    ext2_dinode_t di;
+    if(!off || bdev_read(s->bdev, off, &di, sizeof(di)))return -EIO;
+    di.i_size        = (uint32_t)len;
+    di.i_links_count = 1;
+    if(len <= 60){
+        //快速符号链接: 目标放进 i_block, 不占数据块
+        memset(di.i_block, 0, sizeof(di.i_block));
+        memcpy(di.i_block, target, (size_t)len);
+        di.i_blocks = 0;
+    }else{
+        //长目标: 单独给一个块来存
+        uint32_t blk = ext2_alloc_block(s, 0, 0);
+        if(!blk)return -ENOSPC;
+        memset(s->blk_buf, 0, s->block_size);
+        memcpy(s->blk_buf, target, (size_t)len);
+        if(ext2_write_block(s, blk, s->blk_buf))return -EIO;
+        di.i_block[0] = blk;
+        di.i_blocks   = s->block_size / 512;
+    }
+    if(bdev_write(s->bdev, off, &di, sizeof(di)))return -EIO;
+    //在父目录里登记名字(file_type = 7 表示符号链接)
+    int r = ext2_add_entry(dir, dentry->d_name, dentry->d_name_len, ino, 7);
+    if(r)return r;
+    struct inode *inode = ext2_iget(dir->i_sb, ino);
+    if(!inode)return -EIO;
+    d_add(dentry, inode);
+    Iput(inode);
+    ext2_commit(s);
+    return 0;
+}
+
+//删除一个文件所在的 inode: 链接数归零就释放块和 inode
+static int ext2_drop_inode(struct inode *inode){
+    if(inode->i_nlink > 1){
+        inode->i_nlink --;
+        return ext2_write_dinode(inode);
+    }
+    ext2_release_range(inode, 0, 0xFFFFFFFFu);
+    inode->i_nlink = 0;
+    inode->i_size  = 0;
+    inode->i_ctime_s = (int64_t)rtc_get_epoch();
+    ext2_write_dinode(inode);
+    return ext2_free_inode(inode);
+}
+
+static int ext2_unlink(struct inode *dir, struct dentry *dentry){
+    if(!dentry || !dentry->d_inode)return -ENOENT;
+    struct inode *inode = dentry->d_inode;
+    if((inode->i_mode & S_IFMT) == S_IFDIR)return -EISDIR;
+    int r = ext2_remove_entry(dir, dentry->d_name, dentry->d_name_len);
+    if(r)return r;
+    dir->i_mtime_s = dir->i_ctime_s = (int64_t)rtc_get_epoch();
+    ext2_write_dinode(dir);
+    r = ext2_drop_inode(inode);
+    d_invalidate(dentry);
+    ext2_commit(EX2SB(dir->i_sb));
+    return r;
+}
+
+//目录是否只剩 "." 和 ".."
+static int ext2_dir_empty(struct inode *dir){
+    ext2_sb_info_t *s = EX2SB(dir->i_sb);
+    uint32_t nb = ext2_dir_nblocks(s, dir);
+    for(uint32_t n = 0;n < nb;n ++){
+        if(ext2_read_dir_block(s, dir, n))return 0;
+        uint32_t pos = 0;
+        while(pos + sizeof(ext2_dir_entry_t) <= s->block_size){
+            ext2_dir_entry_t *de = (ext2_dir_entry_t*)(s->blk_buf + pos);
+            if(de->rec_len < sizeof(ext2_dir_entry_t) ||
+               pos + de->rec_len > s->block_size)break;
+            uint32_t nlen = ext2_dirent_namelen(s, s->blk_buf + pos);
+            const char *nm = (const char*)(s->blk_buf + pos + sizeof(*de));
+            if(de->inode && nlen &&
+               !(nlen == 1 && nm[0] == '.') &&
+               !(nlen == 2 && nm[0] == '.' && nm[1] == '.'))return 0;
+            pos += de->rec_len;
+        }
+    }
+    return 1;
+}
+
+static int ext2_rmdir(struct inode *dir, struct dentry *dentry){
+    if(!dentry || !dentry->d_inode)return -ENOENT;
+    struct inode *inode = dentry->d_inode;
+    if((inode->i_mode & S_IFMT) != S_IFDIR)return -ENOTDIR;
+    if(!ext2_dir_empty(inode))return -ENOTEMPTY;
+    int r = ext2_remove_entry(dir, dentry->d_name, dentry->d_name_len);
+    if(r)return r;
+    if(dir->i_nlink > 2)dir->i_nlink --;
+    dir->i_mtime_s = dir->i_ctime_s = (int64_t)rtc_get_epoch();
+    ext2_write_dinode(dir);
+    inode->i_nlink = 0;
+    ext2_release_range(inode, 0, 0xFFFFFFFFu);
+    ext2_write_dinode(inode);
+    ext2_free_inode(inode);
+    d_invalidate(dentry);
+    ext2_commit(EX2SB(dir->i_sb));
+    return 0;
+}
+
 //操作表
 static struct inode_operations g_ext2_iops = {
     .lookup   = ext2_lookup,
+    .create   = ext2_create,
+    .mkdir    = ext2_mkdir,
+    .symlink  = ext2_symlink,
+    .unlink   = ext2_unlink,
+    .rmdir    = ext2_rmdir,
     .get_link = ext2_get_link,
+    .setattr  = ext2_setattr,
 };
 
 static const struct file_operations g_ext2_file_fops = {
-    .read = ext2_read,
+    .read  = ext2_read,
+    .write = ext2_write,
 };
 
 static const struct file_operations g_ext2_dir_fops = {
@@ -409,11 +1252,19 @@ static const struct file_operations g_ext2_dir_fops = {
 };
 
 static void ext2_evict_inode(struct inode *inode){
-    (void)inode;//只读阶段没有需要释放的私有资源
+    (void)inode;//没有需要在这里释放的私有资源
+}
+
+//卸载/同步时把攒下的元数据刷盘
+static int ext2_sync_fs(struct super_block *sb, int wait){
+    (void)wait;
+    ext2_commit(EX2SB(sb));
+    return 0;
 }
 
 static const struct super_operations g_ext2_sop = {
     .evict_inode = ext2_evict_inode,
+    .sync_fs     = ext2_sync_fs,
 };
 
 //挂载
@@ -455,6 +1306,18 @@ int Ext2ReadSuper(struct super_block *sb, bdev_t *bd){
     s->blocks_per_group = es->s_blocks_per_group;
     s->first_data_block = es->s_first_data_block;
     s->incompat         = es->s_feature_incompat;
+    s->compat           = es->s_feature_compat;
+    s->blocks_count     = es->s_blocks_count;
+    s->inodes_count     = es->s_inodes_count;
+    s->first_ino        = es->s_rev_level ? es->s_first_ino : 11;
+    s->free_blocks_count = es->s_free_blocks_count;
+    s->free_inodes_count = es->s_free_inodes_count;
+    //写路径要靠这 1 字节的 name_len/file_type, 老镜像不支持
+    if(!(s->incompat & EXT2_INCOMPAT_FILETYPE)){
+        Pmm_Free(pa, 1);
+        KslabFree(g_ext2_info_cache, s);
+        return -ENODEV;
+    }
     if(!s->inode_size)s->inode_size = 128;
     if(s->block_size < 1024 || s->block_size > 4096 ||
        !s->inodes_per_group || !s->blocks_per_group){
@@ -470,14 +1333,37 @@ int Ext2ReadSuper(struct super_block *sb, bdev_t *bd){
     //两个块缓冲: 一个给间接块/inode, 一个给目录扫描, 避免嵌套覆盖
     void *pm = Pmm_Malloc(1);
     void *pd = Pmm_Malloc(1);
-    if(!pm || !pd){
+    void *pb = Pmm_Malloc(1);
+    void *pi = Pmm_Malloc(1);
+    void *pt = Pmm_Malloc(1);
+    if(!pm || !pd || !pb || !pi || !pt){
         if(pm)Pmm_Free(pm, 1);
         if(pd)Pmm_Free(pd, 1);
+        if(pb)Pmm_Free(pb, 1);
+        if(pi)Pmm_Free(pi, 1);
+        if(pt)Pmm_Free(pt, 1);
         KslabFree(g_ext2_info_cache, s);
         return -ENOMEM;
     }
     s->meta_buf = (uint8_t*)PHYS_TO_VIRT((uintptr_t)pm);
-    s->dir_buf  = (uint8_t*)PHYS_TO_VIRT((uintptr_t)pd);
+    s->blk_buf  = (uint8_t*)PHYS_TO_VIRT((uintptr_t)pd);
+    s->bbmp.buf = (uint8_t*)PHYS_TO_VIRT((uintptr_t)pb);
+    s->ibmp.buf = (uint8_t*)PHYS_TO_VIRT((uintptr_t)pi);
+    s->itab_buf = (uint8_t*)PHYS_TO_VIRT((uintptr_t)pt);
+    //块组描述符表很小, 直接整体读进内存, 之后查组信息不用再发 I/O
+    uint32_t gdt_bytes = s->nr_groups * (uint32_t)sizeof(ext2_group_desc_t);
+    uint32_t gdt_pages = (gdt_bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+    void *pg = Pmm_Malloc((int)gdt_pages);
+    if(!pg){
+        KslabFree(g_ext2_info_cache, s);
+        return -ENOMEM;
+    }
+    s->gdt = (ext2_group_desc_t*)PHYS_TO_VIRT((uintptr_t)pg);
+    if(bdev_read(bd, (uint64_t)s->desc_blk * s->block_size, s->gdt, gdt_bytes)){
+        s->gdt = NULL;
+        KslabFree(g_ext2_info_cache, s);
+        return -EIO;
+    }
     sb->s_fs_info   = s;
     sb->s_bdev      = bd;
     sb->s_blocksize = s->block_size;
@@ -526,36 +1412,50 @@ bdev_t *Ext2FindPartition(void){
 }
 
 /**
+ * 新建一个 ext2 超级块并建好根目录
+ * @param bd       ext2 所在的分区块设备
+ * @param root_out 成功时写入根 dentry
+ * @return 超级块, 失败返回 NULL
+ */
+struct super_block *Ext2NewSuper(struct bdev *bd, struct dentry **root_out){
+    if(!bd)return NULL;
+    if(!g_ext2_info_cache){
+        g_ext2_info_cache = KslabCreate("ext2_sb", sizeof(ext2_sb_info_t));
+        if(!g_ext2_info_cache)return NULL;
+    }
+    struct super_block *sb = SuperAlloc("ext2", EXT2_MAGIC, Ext2InodeSize(), Ext2SuperOps());
+    if(!sb)return NULL;
+    //先把超级块读出来并建好根目录, 失败了就当没挂过
+    if(Ext2ReadSuper(sb, (bdev_t*)bd)){
+        SuperFree(sb);
+        return NULL;
+    }
+    struct dentry *root = Ext2FillSuper(sb);
+    if(!root){
+        SuperFree(sb);
+        return NULL;
+    }
+    if(root_out)*root_out = root;
+    return sb;
+}
+
+/**
  * 把找到的 ext2 分区挂到 parent 的 mountpoint 上
  * @return 0 成功
  */
 int Ext2MountAt(struct vfsmount *parent, struct dentry *mountpoint){
     bdev_t *bd = Ext2FindPartition();
     if(!bd)return -ENODEV;
-    if(!g_ext2_info_cache){
-        g_ext2_info_cache = KslabCreate("ext2_sb", sizeof(ext2_sb_info_t));
-        if(!g_ext2_info_cache)return -ENOMEM;
-    }
-    struct super_block *sb = SuperAlloc("ext2", EXT2_MAGIC, Ext2InodeSize(), Ext2SuperOps());
+    struct dentry *root = NULL;
+    struct super_block *sb = Ext2NewSuper(bd, &root);
     if(!sb)return -ENOMEM;
-    //先把超级块读出来并建好根目录, 失败了就当没挂过
-    int r = Ext2ReadSuper(sb, bd);
-    if(r){
-        SuperFree(sb);
-        return r;
-    }
-    struct dentry *root = Ext2FillSuper(sb);
-    if(!root){
-        SuperFree(sb);
-        return -ENOMEM;
-    }
     //挂成一棵独立挂载树, 再接到 mountpoint 下面
     struct vfsmount *m = VfsKernMount(sb, root, 0);
     if(!m){
         SuperFree(sb);
         return -ENOMEM;
     }
-    r = VfsAttachMount(parent, mountpoint, m);
+    int r = VfsAttachMount(parent, mountpoint, m);
     if(r)VfsDetachMount(m);
     return r;
 }

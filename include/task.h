@@ -115,6 +115,8 @@ void timeout_wake_check(void);//检查并唤醒超时任务
 
 void TaskInit();//初始化多任务环境
 pid_t AllocPid(void);//分配新的PID
+void  PidReserve(pid_t pid);//预留一个PID
+pid_t PidTakeReserved(void);//取走预留的PID,没有返回0
 void user_trampoline(void);//从内核栈iretq回ring3
 void TaskListAdd(task_struct* t);//将任务加入任务链表
 void TaskListRemove(task_struct* t);//将任务从任务链表中移除

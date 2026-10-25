@@ -9,6 +9,7 @@
 #include <syscalls.h>
 #include <task.h>
 #include <rtc.h>
+#include <print.h>
 #include <mm/pagecache.h>
 #include <drives/bcache.h>
 #include <vfs.h>
@@ -77,11 +78,11 @@ static int dir_create(struct dentry *dir, const char *name, int isdir, uint16_t 
     int (*fn)(struct inode*, struct dentry*, uint16_t) = NULL;
     if(din->i_op)fn = isdir ? din->i_op->mkdir : din->i_op->create;
     if(!fn)return -EROFS;
-    struct dentry *d = d_lookup(dir, name);
-    if(d && d->d_inode){ dput(d); return -EEXIST; }
-    if(!d){
-        d = d_alloc(dir, name);
-        if(!d)return -ENOMEM;
+    struct dentry *d = dir_lookup(dir, name);
+    if(!d)return -ENOMEM;
+    if(d->d_inode){
+        dput(d);
+        return -EEXIST;
     }
     int r = fn(din, d, mode);
     if(r){ dput(d); return r; }
@@ -828,16 +829,30 @@ static int mount_root(const char *type, uint64_t magic, uint32_t inode_size, con
     return 0;
 }
 
+//把第一个ext2分区挂成VFS根
+static int mount_root_ext2(void){
+    struct bdev *bd = Ext2FindPartition();
+    if(!bd)return -ENODEV;
+    struct dentry *root = NULL;
+    struct super_block *sb = Ext2NewSuper(bd, &root);
+    if(!sb)return -ENOMEM;
+    struct vfsmount *mnt = VfsKernMount(sb, root, 0);
+    if(!mnt)return -ENOMEM;
+    g_vfs_root.mnt    = mnt;
+    g_vfs_root.dentry = root;
+    return 0;
+}
+
 void FsInit(struct disk_info *disk){
     FsVfsInit();
     BCacheInit(BC_MAX_PAGES);//块缓存初始化
     PageCacheInit();//初始化文件页缓存
-    //挂载FAT32,失败则退回内存文件系统
-    if(!(disk && (fat32_mount(disk) == 0) && mount_root("vfat", 0x4D44,FatVfsInodeSize(),FatVfsSuperOps(),FatVfsFillSuper) == 0))mount_root("ramfs", 0x01021994, Ramfs2InodeSize(), Ramfs2SuperOps(), Ramfs2FillSuper);
-    FsMkdir("/mnt", 0755);
-    //根上的 FAT32 不支持符号链接, 在 /tmp 挂一个 tmpfs 用来跑这类操作
+    _Bool ext2_root = (mount_root_ext2() == 0);//先尝试挂载ext2
+    //其次尝试FAT32,最后RamFS
+    if(!ext2_root && !(disk && (fat32_mount(disk) == 0) && mount_root("vfat", 0x4D44,FatVfsInodeSize(),FatVfsSuperOps(),FatVfsFillSuper) == 0)){
+        mount_root("ramfs", 0x01021994, Ramfs2InodeSize(), Ramfs2SuperOps(), Ramfs2FillSuper);
+    }
+    //挂载tmpfs
     FsMkdir("/tmp", 0755);
     FsMount("tmpfs", "/tmp");
-    //有 ext2 分区就挂到 /mnt, 没有就退回内存文件系统
-    if(FsMountExt2("/mnt") != 0)FsMount("tmpfs", "/mnt");
 }
