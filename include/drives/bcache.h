@@ -13,7 +13,7 @@
 #include <drives/blkdev.h>
 
 #define BC_PAGE_SIZE   4096     //页大小
-#define BC_MAX_PAGES   1024     //描述符池大小(=4MB缓存上限)
+#define BC_MAX_PAGES   4096     //描述符池大小(=16MB缓存上限)
 #define BC_HASH_BUCKETS 256     //哈希桶数
 
 //页状态位

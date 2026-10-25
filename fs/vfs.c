@@ -111,6 +111,7 @@ static int dir_rename(struct dentry *odir, const char *oname, struct dentry *ndi
     if(!odir || !ndir || !odir->d_inode || !ndir->d_inode)return -ENOTDIR;
     struct inode *oi = odir->d_inode;
     struct inode *ni = ndir->d_inode;
+    if(oi->i_sb != ni->i_sb)return -EXDEV;
     if(!oi->i_op || !oi->i_op->rename)return -EROFS;
     if(!nname || !*nname)return -ENOENT;
     struct dentry *od = dir_lookup(odir, oname);
