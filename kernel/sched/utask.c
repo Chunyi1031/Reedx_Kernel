@@ -38,6 +38,7 @@ task_struct* CreateProcess(uintptr_t entry, mm_struct* mm, const char* name) {
     task->stack_size = TASK_KERNEL_STACK_PAGES * 4096;
     strcpy(task->name, name);
     memset(&task->fs_cwd, 0, sizeof(task->fs_cwd));
+    CredCopy(&task->cred, &current_task->cred);//新进程继承创建者的身份
     //伪造首次切换的栈帧
     uint64_t stack_bottom = (uint64_t)stack + TASK_KERNEL_STACK_PAGES * 4096;
     uint64_t* f = (uint64_t*)(stack_bottom - 17 * 8);

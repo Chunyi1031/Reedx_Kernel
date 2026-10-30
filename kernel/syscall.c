@@ -552,13 +552,13 @@ static long sys_fchmodat(long dirfd, long path, long mode, long flags, long a5, 
 
 /*
  * mode_t umask(mode_t mask)
- * 返回旧掩码(glibc 靠返回值实现 umask())
+ * 返回旧掩码
  */
 static long sys_umask(long mask, long b, long c, long a4, long a5, long a6){
 	(void)b; (void)c; (void)a4; (void)a5; (void)a6;
-	static long old = 022;
-	long prev = old;
-	old = mask & 0777;
+	if(!current_task)return 0;
+	long prev = (long)current_task->cred.umask;
+	current_task->cred.umask = (uint32_t)mask & 0777;
 	return prev;
 }
 
@@ -1898,8 +1898,8 @@ static long sys_getpid(long a, long b, long c, long a4, long a5, long a6){
 }
 
 /*
- * pid_t getppid(void) / uid_t getuid/geteuid / gid_t getgid/getegid
- * 身份一律为root(0)
+ * pid_t getppid(void)
+ * 获取父进程ID
  */
 static long sys_getppid(long a, long b, long c, long a4, long a5, long a6){
 	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
@@ -1907,24 +1907,96 @@ static long sys_getppid(long a, long b, long c, long a4, long a5, long a6){
 	return (long)current_task->parent;
 }
 
+/*
+ * uid_t getuid(void)
+ * 获取真实用户ID
+ */
 static long sys_getuid(long a, long b, long c, long a4, long a5, long a6){
 	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
-	return 0;
+	if(!current_task)return 0;
+	return (long)current_task->cred.uid;
 }
 
+/*
+ * uid_t geteuid(void)
+ * 获取有效用户ID
+ */
 static long sys_geteuid(long a, long b, long c, long a4, long a5, long a6){
 	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
-	return 0;
+	if(!current_task)return 0;
+	return (long)current_task->cred.euid;
 }
 
+/*
+ * gid_t getgid(void)
+ * 获取真实组ID
+ */
 static long sys_getgid(long a, long b, long c, long a4, long a5, long a6){
 	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
-	return 0;
+	if(!current_task)return 0;
+	return (long)current_task->cred.gid;
 }
 
+/*
+ * gid_t getegid(void)
+ * 获取有效组ID
+ */
 static long sys_getegid(long a, long b, long c, long a4, long a5, long a6){
 	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
-	return 0;
+	if(!current_task)return 0;
+	return (long)current_task->cred.egid;
+}
+
+/*
+ * int setuid(uid_t uid) / int setgid(gid_t gid)
+ * 改身份
+ */
+static long sys_setuid(long uid, long b, long c, long a4, long a5, long a6){
+	(void)b; (void)c; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	return CredSetUid(&current_task->cred, (uint32_t)uid);
+}
+
+static long sys_setgid(long gid, long b, long c, long a4, long a5, long a6){
+	(void)b; (void)c; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	return CredSetGid(&current_task->cred, (uint32_t)gid);
+}
+
+/*
+ * int setreuid(uid_t ruid, uid_t euid)
+ */
+static long sys_setreuid(long ruid, long euid, long c, long a4, long a5, long a6){
+	(void)c; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	return CredSetReUid(&current_task->cred, (uint32_t)ruid, (uint32_t)euid);
+}
+
+/*
+ * int setregid(gid_t rgid, gid_t egid)
+ */
+static long sys_setregid(long rgid, long egid, long c, long a4, long a5, long a6){
+	(void)c; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	return CredSetReGid(&current_task->cred, (uint32_t)rgid, (uint32_t)egid);
+}
+
+/*
+ * int setresuid(uid_t ruid, uid_t euid, uid_t suid)
+ */
+static long sys_setresuid(long ruid, long euid, long suid, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	return CredSetResUid(&current_task->cred, (uint32_t)ruid, (uint32_t)euid, (uint32_t)suid);
+}
+
+/*
+ * int setresgid(gid_t rgid, gid_t egid, gid_t sgid)
+ */
+static long sys_setresgid(long rgid, long egid, long sgid, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	return CredSetResGid(&current_task->cred, (uint32_t)rgid, (uint32_t)egid, (uint32_t)sgid);
 }
 
 /*
@@ -2209,19 +2281,21 @@ static long sys_reboot(long magic,long magic2,long cmd,long arg,long a5,long a6)
 
 static long sys_getresuid(long r, long e, long s, long a4, long a5, long a6){
     (void)a4;(void)a5;(void)a6;
-    int32_t v = 0;
-    if(r && copy_to_user((void*)r, &v, 4))return -EFAULT;
-    if(e && copy_to_user((void*)e, &v, 4))return -EFAULT;
-    if(s && copy_to_user((void*)s, &v, 4))return -EFAULT;
+    if(!current_task)return -EPERM;
+    uint32_t ru = current_task->cred.uid, eu = current_task->cred.euid, su = current_task->cred.suid;
+    if(r && copy_to_user((void*)r, &ru, 4))return -EFAULT;
+    if(e && copy_to_user((void*)e, &eu, 4))return -EFAULT;
+    if(s && copy_to_user((void*)s, &su, 4))return -EFAULT;
     return 0;
 }
 
 static long sys_getresgid(long r, long e, long s, long a4, long a5, long a6){
     (void)a4;(void)a5;(void)a6;
-    int32_t v = 0;
-    if(r && copy_to_user((void*)r, &v, 4))return -EFAULT;
-    if(e && copy_to_user((void*)e, &v, 4))return -EFAULT;
-    if(s && copy_to_user((void*)s, &v, 4))return -EFAULT;
+    if(!current_task)return -EPERM;
+    uint32_t rg = current_task->cred.gid, eg = current_task->cred.egid, sg = current_task->cred.sgid;
+    if(r && copy_to_user((void*)r, &rg, 4))return -EFAULT;
+    if(e && copy_to_user((void*)e, &eg, 4))return -EFAULT;
+    if(s && copy_to_user((void*)s, &sg, 4))return -EFAULT;
     return 0;
 }
 
@@ -2290,6 +2364,12 @@ void InitSyscall(void){
 	syscall_table[SYS_GETEUID]    = sys_geteuid;
 	syscall_table[SYS_GETGID]     = sys_getgid;
 	syscall_table[SYS_GETEGID]    = sys_getegid;
+	syscall_table[SYS_SETUID]     = sys_setuid;
+	syscall_table[SYS_SETGID]     = sys_setgid;
+	syscall_table[SYS_SETREUID]   = sys_setreuid;
+	syscall_table[SYS_SETREGID]   = sys_setregid;
+	syscall_table[SYS_SETRESUID]  = sys_setresuid;
+	syscall_table[SYS_SETRESGID]  = sys_setresgid;
 	syscall_table[SYS_CLONE]      = sys_clone;
 	syscall_table[SYS_FORK]       = sys_fork;
 	syscall_table[SYS_VFORK]      = sys_vfork;

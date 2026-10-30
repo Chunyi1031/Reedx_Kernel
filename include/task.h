@@ -13,6 +13,7 @@
 #include <mm/vmm.h>
 #include <fs.h>
 #include <vfs.h>
+#include <cred.h>
 
 #define TASK_READY      0
 #define TASK_RUNNING    1
@@ -68,6 +69,7 @@ typedef struct task_struct {
     pid_t               vfork_parent;//等待本进程exec/退出的父进程pid
     int                 vfork_waiting;//父进程是否正在等待
     int                 sig_exit;   //被信号终止时的信号号
+    cred_t              cred;       //进程身份
     struct list_node    list;       //就绪链表节点
     struct list_node    wait_node;  //等待队列节点
     uint64_t            wake_up_ticks;//msleep超时tick

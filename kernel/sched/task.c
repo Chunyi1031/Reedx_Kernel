@@ -131,6 +131,7 @@ void TaskInit(){
     strcpy(kernel_task->name, "Reedx Kernel");
     kernel_task->kernel_stack = (void*)PHYS_TO_VIRT((uintptr_t)SYSTEM_BootParam->KernelStackAddress);
     kernel_task->stack_size = SYSTEM_BootParam->KernelStackSize;
+    CredRoot(&kernel_task->cred);//内核任务以root身份运行
     //将内核任务设为当前任务
     current_task = kernel_task;
     current_task->state = TASK_RUNNING;

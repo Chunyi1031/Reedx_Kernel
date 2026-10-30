@@ -35,6 +35,7 @@ task_struct* CreateKernelThread(void (*entry)(void),uint64_t stack_size,const ch
     task->kernel_stack = stack;
     task->stack_size = stack_size;
     strcpy(task->name, name);
+    CredRoot(&task->cred);//内核线程以root身份运行
     uint64_t stack_bottom = (uint64_t)stack + stack_size;//计算栈底（高地址）
     //预留18个槽位，并16字节对齐
     uint64_t stack_frame = ((stack_bottom - 18 * 8) & ~15ULL);

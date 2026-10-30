@@ -54,6 +54,9 @@
 #define SYS_FTRUNCATE       77
 #define SYS_CHMOD           90
 #define SYS_FCHMOD          91
+#define SYS_CHOWN           92
+#define SYS_FCHOWN          93
+#define SYS_LCHOWN          94
 #define SYS_UMASK           95
 #define SYS_GETCWD          79
 #define SYS_CHDIR           80
@@ -67,9 +70,15 @@
 #define SYS_GETTIMEOFDAY    96
 #define SYS_GETUID          102
 #define SYS_GETGID          104
+#define SYS_SETUID          105
+#define SYS_SETGID          106
 #define SYS_GETEUID         107
 #define SYS_GETEGID         108
 #define SYS_SETPGID         109
+#define SYS_SETREUID        113
+#define SYS_SETREGID        114
+#define SYS_SETRESUID       117
+#define SYS_SETRESGID       119
 #define SYS_GETPPID         110
 #define SYS_GETPGRP         111
 #define SYS_GETRESUID       118

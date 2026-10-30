@@ -92,6 +92,7 @@ pid_t do_fork_ex(uintptr_t child_stack, uint64_t tls){
 	child->stack_size = TASK_KERNEL_STACK_PAGES * 4096;
 	strcpy(child->name, parent->name);
 	child->fs_base = tls ? tls : parent->fs_base;//TLS的FS段基址
+	CredCopy(&child->cred, &parent->cred);//子进程继承父进程的身份
 	//继承当前工作目录
 	child->fs_cwd = parent->fs_cwd;
 	if(child->fs_cwd.dentry)dget(child->fs_cwd.dentry);
