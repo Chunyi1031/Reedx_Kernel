@@ -281,7 +281,21 @@ static uint32_t ext2_bmap(ext2_sb_info_t *s, ext2_inode_info_t *ii, uint32_t blk
         m = ext2_meta(s, blk);
         return m ? ((uint32_t*)m)[blkno % ptrs] : 0;
     }
-    return 0;//不支持三级间接
+    blkno -= ptrs * ptrs;
+    //三级间接
+    if(blkno < ptrs * ptrs * ptrs){
+        uint8_t *m = ext2_meta(s, ii->i_block[14]);
+        if(!m)return 0;
+        uint32_t blk = ((uint32_t*)m)[blkno / (ptrs * ptrs)];
+        if(!blk)return 0;
+        m = ext2_meta(s, blk);
+        if(!m)return 0;
+        blk = ((uint32_t*)m)[(blkno / ptrs) % ptrs];
+        if(!blk)return 0;
+        m = ext2_meta(s, blk);
+        return m ? ((uint32_t*)m)[blkno % ptrs] : 0;
+    }
+    return 0;
 }
 
 //==================== inode ====================
@@ -844,7 +858,53 @@ static uint32_t ext2_bmap_alloc(struct inode *inode, uint32_t blkno, int zero){
         }
         return l2[i2];
     }
-    return 0;//不支持三级间接
+    blkno -= ptrs * ptrs;
+    //三级间接
+    if(blkno < ptrs * ptrs * ptrs){
+        if(!ii->i_block[14]){
+            uint32_t blk = ext2_alloc_block(s, 0, 1);//间接块必须先清零
+            if(!blk)return 0;
+            ii->i_block[14] = blk;
+            inode->i_blocks += per;
+        }
+        if(ext2_read_block(s, ii->i_block[14], s->meta_buf))return 0;
+        uint32_t *l1 = (uint32_t*)s->meta_buf;
+        uint32_t i1 = blkno / (ptrs * ptrs);
+        if(!l1[i1]){
+            uint32_t blk = ext2_alloc_block(s, 0, 1);//中间层间接块也要清零
+            if(!blk)return 0;
+            l1[i1] = blk;
+            if(ext2_write_block(s, ii->i_block[14], s->meta_buf))return 0;
+            ext2_meta_set(s, ii->i_block[14]);
+            inode->i_blocks += per;
+        }
+        uint32_t mid1 = l1[i1];
+        if(ext2_read_block(s, mid1, s->meta_buf))return 0;
+        uint32_t *l2 = (uint32_t*)s->meta_buf;
+        uint32_t i2 = (blkno / ptrs) % ptrs;
+        if(!l2[i2]){
+            uint32_t blk = ext2_alloc_block(s, 0, 1);//再下一层间接块也要清零
+            if(!blk)return 0;
+            l2[i2] = blk;
+            if(ext2_write_block(s, mid1, s->meta_buf))return 0;
+            ext2_meta_set(s, mid1);
+            inode->i_blocks += per;
+        }
+        uint32_t mid2 = l2[i2];
+        if(ext2_read_block(s, mid2, s->meta_buf))return 0;
+        uint32_t *l3 = (uint32_t*)s->meta_buf;
+        uint32_t i3 = blkno % ptrs;
+        if(!l3[i3]){
+            uint32_t blk = ext2_alloc_block(s, 0, zero);
+            if(!blk)return 0;
+            l3[i3] = blk;
+            if(ext2_write_block(s, mid2, s->meta_buf))return 0;
+            ext2_meta_set(s, mid2);
+            inode->i_blocks += per;
+        }
+        return l3[i3];
+    }
+    return 0;
 }
 
 //==================== 目录项增删 ====================
@@ -1013,6 +1073,51 @@ static int ext2_set_dotdot(struct inode *dir, uint32_t parent){
 
 //==================== 写文件 ====================
 
+//释放一棵间接子树里 [lo, hi) 这一段叶子块, 返回整棵子树是否已经空了
+static _Bool ext2_release_tree(ext2_sb_info_t *s, struct inode *inode,
+                               uint32_t blk, uint32_t level, uint32_t lo, uint32_t hi){
+    uint32_t ptrs = s->ptrs;
+    uint32_t per  = s->block_size / 512;//一个块算几个 512 字节
+    if(ext2_read_block(s, blk, s->meta_buf))return false;
+    if(level == 1){//叶子层: 指针直接指向数据块
+        uint32_t *p = (uint32_t*)s->meta_buf;
+        _Bool all_free = true;
+        for(uint32_t i = 0;i < ptrs;i ++){
+            if(i >= lo && i < hi && p[i]){
+                ext2_free_block(s, p[i]);
+                p[i] = 0;
+                if(inode->i_blocks >= per)inode->i_blocks -= per;
+            }
+            if(p[i])all_free = false;//还有指针留着
+        }
+        if(!all_free)ext2_write_block(s, blk, s->meta_buf);//改动写回去
+        return all_free;
+    }
+    uint32_t span = 1;//每个孩子覆盖多少个叶子
+    for(uint32_t k = 1;k < level;k ++)span *= ptrs;
+    for(uint32_t a = 0;a < ptrs;a ++){
+        if(ext2_read_block(s, blk, s->meta_buf))return false;//每轮重读, 递归会用掉 meta_buf
+        uint32_t child = ((uint32_t*)s->meta_buf)[a];
+        if(!child)continue;
+        uint32_t clo = a * span, chi = clo + span;//这个孩子覆盖的范围
+        if(chi <= lo || clo >= hi)continue;//和要释放的范围没交集
+        uint32_t sub_lo = lo > clo ? lo - clo : 0;
+        uint32_t sub_hi = hi < chi ? hi - clo : span;
+        if(ext2_release_tree(s, inode, child, level - 1, sub_lo, sub_hi)){
+            ext2_free_block(s, child);//孩子空了就一起放掉
+            if(inode->i_blocks >= per)inode->i_blocks -= per;
+            if(ext2_read_block(s, blk, s->meta_buf))return false;//重读父块再清指针
+            ((uint32_t*)s->meta_buf)[a] = 0;
+            if(ext2_write_block(s, blk, s->meta_buf))return false;
+            ext2_meta_set(s, blk);
+        }
+    }
+    if(ext2_read_block(s, blk, s->meta_buf))return false;
+    uint32_t *p = (uint32_t*)s->meta_buf;
+    for(uint32_t a = 0;a < ptrs;a ++)if(p[a])return false;//还有孩子就是没空
+    return true;
+}
+
 //释放 [from, to) 这段逻辑块, 顺手回收空掉的间接块
 static void ext2_release_range(struct inode *inode, uint32_t from, uint32_t to){
     ext2_sb_info_t *s = EX2SB(inode->i_sb);
@@ -1029,85 +1134,46 @@ static void ext2_release_range(struct inode *inode, uint32_t from, uint32_t to){
             if(inode->i_blocks >= per)inode->i_blocks -= per;
         }
     }
-    if(to <= EXT2_NIDIRECT)return;
     //一级间接
-    uint32_t lo = from > EXT2_NIDIRECT ? from - EXT2_NIDIRECT : 0;
-    uint32_t hi = to - EXT2_NIDIRECT;
-    if(hi > ptrs)hi = ptrs;
-    if(ii->i_block[12] && lo < hi){
-        if(ext2_read_block(s, ii->i_block[12], s->meta_buf) == 0){
-            uint32_t *ib = (uint32_t*)s->meta_buf;
-            _Bool all_free = true;
-            for(uint32_t j = 0;j < ptrs;j ++){
-                if(j >= lo && j < hi && ib[j]){
-                    ext2_free_block(s, ib[j]);
-                    ib[j] = 0;
-                    if(inode->i_blocks >= per)inode->i_blocks -= per;
-                }
-                if(ib[j])all_free = false;
-            }
-            if(all_free){
-                ext2_free_block(s, ii->i_block[12]);
-                ii->i_block[12] = 0;
-                s->meta_blk = 0;
-                if(inode->i_blocks >= per)inode->i_blocks -= per;
-            }else{
-                ext2_write_block(s, ii->i_block[12], s->meta_buf);
-            }
-        }
-    }
-    if(to <= EXT2_NIDIRECT + ptrs)return;
-    //二级间接
-    lo = from > EXT2_NIDIRECT + ptrs ? from - EXT2_NIDIRECT - ptrs : 0;
-    hi = to - EXT2_NIDIRECT - ptrs;
-    if(hi > ptrs * ptrs)hi = ptrs * ptrs;
-    if(!ii->i_block[13] || lo >= hi)return;
-    if(ext2_read_block(s, ii->i_block[13], s->meta_buf))return;
-    uint32_t *l1 = (uint32_t*)s->meta_buf;
-    _Bool l1_empty = true;
-    for(uint32_t a = 0;a < ptrs;a ++){
-        if(!l1[a])continue;
-        uint32_t mid = l1[a];
-        uint32_t mid_lo = a * ptrs, mid_hi = mid_lo + ptrs;
-        _Bool touched = (mid_hi > lo && mid_lo < hi);
-        if(!touched){
-            l1_empty = false;
-            continue;
-        }
-        if(ext2_read_block(s, mid, s->meta_buf))return;
-        uint32_t *l2 = (uint32_t*)s->meta_buf;
-        _Bool all_free = true;
-        for(uint32_t b = 0;b < ptrs;b ++){
-            uint32_t logical = mid_lo + b;
-            if(logical >= lo && logical < hi && l2[b]){
-                ext2_free_block(s, l2[b]);
-                l2[b] = 0;
-                if(inode->i_blocks >= per)inode->i_blocks -= per;
-            }
-            if(l2[b])all_free = false;
-        }
-        if(all_free){
-            ext2_free_block(s, mid);
+    if(to > EXT2_NIDIRECT){
+        uint32_t lo = from > EXT2_NIDIRECT ? from - EXT2_NIDIRECT : 0;
+        uint32_t hi = to - EXT2_NIDIRECT;
+        if(hi > ptrs)hi = ptrs;
+        if(ii->i_block[12] && lo < hi &&
+           ext2_release_tree(s, inode, ii->i_block[12], 1, lo, hi)){
+            ext2_free_block(s, ii->i_block[12]);
+            ii->i_block[12] = 0;
+            s->meta_blk = 0;
             if(inode->i_blocks >= per)inode->i_blocks -= per;
-            //重新读回一级表再改
-            if(ext2_read_block(s, ii->i_block[13], s->meta_buf))return;
-            l1 = (uint32_t*)s->meta_buf;
-            l1[a] = 0;
-            if(ext2_write_block(s, ii->i_block[13], s->meta_buf))return;
-            ext2_meta_set(s, ii->i_block[13]);
-        }else{
-            l1_empty = false;
-            //写回二级块后 meta_buf 内容被换掉, 这里只需保证一级表最终写回
-            if(ext2_write_block(s, mid, s->meta_buf))return;
-            if(ext2_read_block(s, ii->i_block[13], s->meta_buf))return;
-            l1 = (uint32_t*)s->meta_buf;
         }
     }
-    if(l1_empty){
-        ext2_free_block(s, ii->i_block[13]);
-        ii->i_block[13] = 0;
-        s->meta_blk = 0;
-        if(inode->i_blocks >= per)inode->i_blocks -= per;
+    //二级间接
+    if(to > EXT2_NIDIRECT + ptrs){
+        uint32_t base = EXT2_NIDIRECT + ptrs;
+        uint32_t lo = from > base ? from - base : 0;
+        uint32_t hi = to - base;
+        if(hi > ptrs * ptrs)hi = ptrs * ptrs;
+        if(ii->i_block[13] && lo < hi &&
+           ext2_release_tree(s, inode, ii->i_block[13], 2, lo, hi)){
+            ext2_free_block(s, ii->i_block[13]);
+            ii->i_block[13] = 0;
+            s->meta_blk = 0;
+            if(inode->i_blocks >= per)inode->i_blocks -= per;
+        }
+    }
+    //三级间接
+    if(to > EXT2_NIDIRECT + ptrs + ptrs * ptrs){
+        uint32_t base = EXT2_NIDIRECT + ptrs + ptrs * ptrs;
+        uint32_t lo = from > base ? from - base : 0;
+        uint32_t hi = to - base;
+        if(hi > ptrs * ptrs * ptrs)hi = ptrs * ptrs * ptrs;
+        if(ii->i_block[14] && lo < hi &&
+           ext2_release_tree(s, inode, ii->i_block[14], 3, lo, hi)){
+            ext2_free_block(s, ii->i_block[14]);
+            ii->i_block[14] = 0;
+            s->meta_blk = 0;
+            if(inode->i_blocks >= per)inode->i_blocks -= per;
+        }
     }
 }
 
