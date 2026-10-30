@@ -983,8 +983,12 @@ static long sys_readlink(long path, long buf, long bufsiz, long a4, long a5, lon
  * 硬链接
  */
 static long sys_link(long oldpath, long newpath, long a3, long a4, long a5, long a6){
-	(void)oldpath; (void)newpath; (void)a3; (void)a4; (void)a5; (void)a6;
-	return -EPERM;
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	char kold[256], knew[256];
+	if(strncpy_from_user(kold, (void*)oldpath, 256) < 0)return -EFAULT;//复制旧路径到内核
+	if(strncpy_from_user(knew, (void*)newpath, 256) < 0)return -EFAULT;//复制新路径到内核
+	return FsLink(kold, knew, 0);//执行硬链接操作
 }
 
 /*
@@ -992,8 +996,22 @@ static long sys_link(long oldpath, long newpath, long a3, long a4, long a5, long
  * 硬链接
  */
 static long sys_linkat(long olddirfd, long oldpath, long newdirfd, long newpath, long flags, long a6){
-	(void)olddirfd; (void)oldpath; (void)newdirfd; (void)newpath; (void)flags; (void)a6;
-	return -EPERM;
+	(void)a6;
+	if(!current_task)return -EPERM;
+	char kold[256], knew[256];
+	long pr = at_read_path(oldpath, kold, 256);
+	if(pr)return pr;
+	pr = at_read_path(newpath, knew, 256);
+	if(pr)return pr;
+	int follow = ((long)flags & AT_SYMLINK_FOLLOW) ? 1 : 0;
+	struct dentry *odir = NULL,*ndir = NULL;
+	char oname[MAX_NAME], nname[MAX_NAME];
+	long r = at_split(olddirfd, kold, &odir, oname, MAX_NAME);
+	if(r < 0 && r != -ENOSYS)return r;
+	long r2 = at_split(newdirfd, knew, &ndir, nname, MAX_NAME);
+	if(r2 < 0 && r2 != -ENOSYS)return r2;
+	if(r == -ENOSYS || r2 == -ENOSYS)return FsLink(kold, knew, follow);
+	return FsLinkAt(odir, oname, ndir, nname);
 }
 
 /*

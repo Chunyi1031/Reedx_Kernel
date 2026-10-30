@@ -122,6 +122,7 @@
 #define UTIME_OMIT          (-2L)   //保持原值不变
 
 #define AT_REMOVEDIR        0x200
+#define AT_SYMLINK_FOLLOW   0x400
 #define RENAME_NOREPLACE    1
 #define RENAME_EXCHANGE     2
 #define RENAME_WHITEOUT     4

@@ -108,6 +108,8 @@ int FsRename(const char *oldpath, const char *newpath, int flags);//改名/移�
 int FsRenameAt(struct dentry *odir, const char *oname, struct dentry *ndir, const char *nname, int flags);//在目录dentry下改名/移动
 int FsSymlink(const char *target, const char *linkpath);//建符号链接
 int FsSymlinkAt(struct dentry *dir, const char *name, const char *target);//在dir目录下建符号链接
+int FsLink(const char *oldpath, const char *newpath, int follow);//给已有文件再挂一个名字(硬链接)
+int FsLinkAt(struct dentry *odir, const char *oname, struct dentry *ndir, const char *nname);//在两个目录dentry之间建硬链接
 int FsReadlink(const char *path, char *buf, int size);//读符号链接目标,返回长度
 int FsStat(const char *path, struct stat *st);//按路径取属性(跟随符号链接)
 int FsLstat(const char *path, struct stat *st);//按路径取属性(不跟随符号链接)

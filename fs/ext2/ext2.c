@@ -1309,6 +1309,28 @@ static int ext2_drop_inode(struct inode *inode){
     return ext2_free_inode(inode);
 }
 
+//给已有的 inode 再挂一个名字(硬链接)
+static int ext2_link(struct dentry *old, struct inode *dir, struct dentry *newd){
+    if(!old || !old->d_inode || !newd)return -ENOENT;
+    struct inode *inode = old->d_inode;
+    if((inode->i_mode & S_IFMT) == S_IFDIR)return -EPERM;
+    ext2_sb_info_t *s = EX2SB(dir->i_sb);
+    //在目标目录里登记这个名字
+    int r = ext2_add_entry(dir, newd->d_name, newd->d_name_len,
+                           (uint32_t)inode->i_ino, ext2_ftype_of(inode));
+    if(r)return r;
+    //链接数加一, 两个名字共用同一份数据
+    int64_t now = (int64_t)rtc_get_epoch();
+    inode->i_nlink ++;
+    inode->i_ctime_s = now;
+    ext2_write_dinode(inode);
+    dir->i_mtime_s = dir->i_ctime_s = now;
+    ext2_write_dinode(dir);
+    d_add(newd, inode);
+    ext2_commit(s);
+    return 0;
+}
+
 static int ext2_unlink(struct inode *dir, struct dentry *dentry){
     if(!dentry || !dentry->d_inode)return -ENOENT;
     struct inode *inode = dentry->d_inode;
@@ -1440,6 +1462,7 @@ static struct inode_operations g_ext2_iops = {
     .create   = ext2_create,
     .mkdir    = ext2_mkdir,
     .symlink  = ext2_symlink,
+    .link     = ext2_link,
     .unlink   = ext2_unlink,
     .rmdir    = ext2_rmdir,
     .rename   = ext2_rename,

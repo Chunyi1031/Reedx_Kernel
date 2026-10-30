@@ -563,6 +563,68 @@ int FsSymlinkAt(struct dentry *dir, const char *name, const char *target){
     return r;
 }
 
+//在dir目录下给old再挂一个名字
+static int link_locked(struct dentry *old, struct dentry *dir, const char *name){
+    if(!old || !old->d_inode)return -ENOENT;
+    struct inode *din = dir->d_inode;
+    if(!din || (din->i_mode & S_IFMT) != S_IFDIR)return -ENOTDIR;
+    if((old->d_inode->i_mode & S_IFMT) == S_IFDIR)return -EPERM;
+    if(old->d_inode->i_sb != din->i_sb)return -EXDEV;
+    struct dentry *d = dir_lookup(dir, name);
+    if(!d)return -ENOMEM;
+    int r;
+    if(d->d_inode){
+        r = -EEXIST;
+    }else if(!din->i_op || !din->i_op->link){
+        r = -EPERM;
+    }else{
+        r = din->i_op->link(old, din, d);
+    }
+    dput(d);
+    return r;
+}
+
+//在newpath处建一个指向oldpath的硬链接
+int FsLink(const char *oldpath, const char *newpath, int follow){
+    if(!oldpath || !newpath)return -EINVAL;
+    const struct path *oroot = lookup_root(oldpath);
+    const struct path *nroot = lookup_root(newpath);
+    if(!oroot || !nroot)return -EINVAL;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    int r;
+    struct path src;
+    r = path_lookup(oldpath, oroot, follow ? LOOKUP_FOLLOW : LOOKUP_NOFOLLOW, &src);
+    if(r == 0){
+        //解析出父目录与末段名, 再在父目录里建链接
+        struct path pdir;
+        char name[NAMELEN_MAX + 1];
+        r = path_lookup_parent(newpath,nroot,&pdir,name,sizeof(name));
+        if(r == 0){
+            r = link_locked(src.dentry,pdir.dentry,name);
+            dput(pdir.dentry);
+        }
+        dput(src.dentry);
+    }
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
+//在ndir目录下建一个指向odir目录里oname的硬链接
+int FsLinkAt(struct dentry *odir, const char *oname, struct dentry *ndir, const char *nname){
+    if(!odir || !ndir || !oname || !nname)return -EINVAL;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    int r = -ENOENT;
+    struct dentry *src = dir_lookup(odir, oname);
+    if(src){
+        r = link_locked(src, ndir, nname);
+        dput(src);
+    }
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
 //读出符号链接的目标，返回目标长度
 int FsReadlink(const char *path, char *buf, int size){
     if(!path || !buf || size <= 0)return -EINVAL;
