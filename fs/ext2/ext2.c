@@ -484,7 +484,7 @@ static uint64_t ext2_read_direct(struct inode *inode, uint64_t off, void *buf, u
                       ext2_bmap(s, ii, blkno + run) == first + run)run ++;
                 uint32_t bytes = run * s->block_size;
                 if((uint64_t)bytes > len - done)bytes = (uint32_t)(len - done);
-                if(bdev_read(s->bdev, (uint64_t)first * s->block_size, dst + done, bytes))
+                if(ext2_bread(s, (uint64_t)first * s->block_size, dst + done, bytes))
                     break;
                 done += bytes;
                 off  += bytes;

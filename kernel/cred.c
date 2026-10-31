@@ -14,6 +14,27 @@ void CredRoot(cred_t *c){
     c->uid = c->euid = c->suid = CRED_ROOT_ID;
     c->gid = c->egid = c->sgid = CRED_ROOT_ID;
     c->umask = CRED_UMASK_DEF;
+    c->ngroups = 0;
+}
+
+//当前身份是否属于gid
+_Bool CredInGroup(const cred_t *c, uint32_t gid){
+    if(!c)return 0;
+    if(c->egid == gid)return 1;
+    for(uint32_t i = 0;i < c->ngroups && i < CRED_NGROUPS_MAX;i++){
+        if(c->groups[i] == gid)return 1;
+    }
+    return 0;
+}
+
+//setgroups(2)
+int CredSetGroups(cred_t *c, uint32_t n, const uint32_t *list){
+    if(!c)return -EPERM;
+    if(!CredIsRoot(c))return -EPERM;
+    if(n > CRED_NGROUPS_MAX)return -EINVAL;
+    for(uint32_t i = 0;i < n;i++)c->groups[i] = list[i];
+    c->ngroups = n;
+    return 0;
 }
 
 void CredCopy(cred_t *dst, const cred_t *src){
@@ -108,7 +129,7 @@ int CredCheckAccess(const cred_t *c, uint16_t mode, uint32_t i_uid, uint32_t i_g
     //属主看own位,属组看group位,其余看other位
     uint32_t bits;
     if(c->euid == i_uid)bits = (uint32_t)((mode >> 6) & 7);
-    else if(c->egid == i_gid)bits = (uint32_t)((mode >> 3) & 7);
+    else if(CredInGroup(c, i_gid))bits = (uint32_t)((mode >> 3) & 7);
     else bits = (uint32_t)(mode & 7);
     //按要求的访问类型检查对应的权限位
     if((mask & MAY_READ) && !(bits & 4))return -EACCES;

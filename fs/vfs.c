@@ -106,6 +106,14 @@ static int dir_remove(struct dentry *dir, const char *name, int isdir){
     if(pr)return pr;
     struct dentry *d = dir_lookup(dir, name);
     if(!d)return -ENOMEM;
+    //粘滞位目录，只有root、目录属主或文件属主能删
+    if((din->i_mode & S_ISVTX) && d->d_inode){
+        const cred_t *c = CurrentCred();
+        if(!CredIsRoot(c) && c->euid != din->i_uid && c->euid != d->d_inode->i_uid){
+            dput(d);
+            return -EPERM;
+        }
+    }
     int r;
     if(!d->d_inode)r = -ENOENT;
     else if(isdir)r = (din->i_op && din->i_op->rmdir) ? din->i_op->rmdir(din, d) : -EISDIR;
@@ -761,6 +769,28 @@ int FsUmount(const char *target){
     dput(d);
     spin_unlock_irqrestore(&g_fs_lock, lk);
     return r;
+}
+
+//让一个挂载点的文件系统把脏元数据写进块缓存
+static void fs_sync_one(struct vfsmount *m, void *ctx){
+    (void)ctx;
+    if(!m || !m->mnt_sb)return;
+    const struct super_operations *op = m->mnt_sb->s_op;
+    if(op && op->sync_fs)op->sync_fs(m->mnt_sb, 1);
+}
+
+//所有文件系统的脏数据落盘
+int FsSync(void){
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    VfsMountWalk(fs_sync_one, NULL);
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    int n = BlkBdevCount();
+    for(int i = 0;i < n;i++){
+        struct bdev *b = BlkBdevAt(i);
+        if(b)BCacheSyncBdev(b);
+    }
+    return 0;
 }
 
 //inode转stat

@@ -131,6 +131,7 @@ int FsAccess(const char *path, int mask);//存在性/权限检查
 int FsMount(const char *type, const char *target);//把type类型的文件系统挂到target目录上
 int FsMountExt2(const char *target);//把第一个ext2分区挂到target目录上
 int FsUmount(const char *target);//卸载挂在target目录上的文件系统
+int FsSync(void);//把所有文件系统的脏数据刷回磁盘
 int FsExistsAt(struct dentry *dir, const char *name);//存在性检查(0存在,-ENOENT不存在)
 
 void FsClose(fs_file_t *f);//关闭文件

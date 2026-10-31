@@ -197,6 +197,13 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
     //打开ELF文件
     fs_file_t f;
     if(FsOpen(path, O_RDONLY, &f) != 0) return -ENOENT;
+    //记下可执行文件的属主与suid/sgid位
+    uint16_t xmode = f.inode ? f.inode->i_mode : 0;
+    uint32_t xuid  = f.inode ? f.inode->i_uid : 0;
+    uint32_t xgid  = f.inode ? f.inode->i_gid : 0;
+    _Bool nosuid   = (f.mnt && (f.mnt->mnt_flags & MS_NOSUID)) ? 1 : 0;
+    _Bool set_euid = (!nosuid && (xmode & S_ISUID)) ? 1 : 0;
+    _Bool set_egid = (!nosuid && (xmode & S_ISGID) && (xmode & S_IFMT) == S_IFREG) ? 1 : 0;
     //创建全新地址空间
     mm_struct *new_mm = vmm_create_address_space();
     if(!new_mm){
@@ -288,7 +295,7 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
         {AT_PAGESZ, PAGE_SIZE},
         {AT_HWCAP,  (uint64_t)cpuid_edx},
         {AT_ENTRY,  info.entry},
-        {AT_SECURE, 0},
+        {AT_SECURE, (set_euid || set_egid) ? 1U : 0U},
         {AT_RANDOM, random_addr},
         {AT_NULL,   0},
     };
@@ -320,6 +327,8 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
     t->mm = new_mm;
     set_cr3((uintptr_t)new_mm->pgd);
     mmput(old_mm);
+    if(set_euid)t->cred.euid = t->cred.suid = xuid;
+    if(set_egid)t->cred.egid = t->cred.sgid = xgid;
     //清除FS基址(竞态修复: 字段与MSR必须原子更新)
     cli();
     t->fs_base = 0;

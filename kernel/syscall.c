@@ -266,11 +266,13 @@ static long sys_rt_sigprocmask(long how, long set, long oldset, long sigsetsize,
 	if(sigsetsize != 8)return -EINVAL;
 	uint64_t old = current_task->sigmask;
 	if(oldset){
-		if(copy_to_user((void*)oldset, &old, 8))return -EFAULT;
+		uint64_t ou = SIGSET_TO_USER(old);//内核掩码转成用户位图
+		if(copy_to_user((void*)oldset, &ou, 8))return -EFAULT;
 	}
 	if(set){
 		uint64_t mask;
 		if(copy_from_user(&mask, (void*)set, 8))return -EFAULT;
+		mask = SIGSET_FROM_USER(mask);//用户位图转成内核掩码
 		if(how == SIG_BLOCK)current_task->sigmask |= mask;
 		else if(how == SIG_UNBLOCK)current_task->sigmask &= ~mask;
 		else if(how == SIG_SETMASK)current_task->sigmask = mask;
@@ -521,7 +523,7 @@ static long sys_fsync(long fd, long b, long c, long a4, long a5, long a6){
  */
 static long sys_sync(long a, long b, long c, long a4, long a5, long a6){
 	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
-	return 0;
+	return FsSync();
 }
 
 /*
@@ -1255,8 +1257,10 @@ static long sys_ioctl(long fd, long request, long arg, long a4, long a5, long a6
 static long sys_getpgid(long pid, long a2, long a3, long a4, long a5, long a6){
 	(void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
 	if(!current_task)return -ESRCH;
-	if(pid != 0 && pid != (long)current_task->pid)return -ESRCH;
-	return (long)current_task->pid;
+	if(pid == 0 || pid == (long)current_task->pid)return (long)current_task->pid;
+	task_struct *t = TaskFind((pid_t)pid);
+	if(!t)return -ESRCH;
+	return (long)t->pid;
 }
 
 static long sys_getpgrp(long a1, long a2, long a3, long a4, long a5, long a6){
@@ -1872,14 +1876,39 @@ static long sys_rt_sigreturn(long a, long b, long c, long a4, long a5, long a6){
  */
 static long sys_kill(long pid, long sig, long c, long a4, long a5, long a6){
 	(void)c; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -ESRCH;
 	if(sig < 0 || sig > 64)return -EINVAL;
-	task_struct *t = NULL;
-	if(pid > 0)t = TaskFind((pid_t)pid);
-	else if(pid == 0)t = current_task;//等同调用者
-	else return 0;
-	if(!t)return -ESRCH;
-	if(sig == 0)return 0;//探测存在性
-	SignalSend(t, (int)sig, SI_USER, current_task ? current_task->pid : 0, 0);
+	pid_t kpid = (pid_t)pid;
+	pid_t sender = current_task->pid;
+	//pid>0，发给指定进程
+	if(kpid > 0){
+		task_struct *t = TaskFind(kpid);
+		if(!t)return -ESRCH;
+		if(sig)SignalSend(t,(int)sig,SI_USER,sender,0);
+		return 0;
+	}
+	//pid=0，发给本进程组
+	if(kpid == 0){
+		if(sig)SignalSend(current_task, (int)sig, SI_USER, sender, 0);
+		return 0;
+	}
+	//pid=-1，广播给除init与自身外的全部任务
+	if(kpid == -1){
+		task_struct *victims[64];
+		int n = TaskGetAll(victims, 64);
+		for(int i = 0;i < n;i++){
+			task_struct *t = victims[i];
+			if(!t || t == current_task)continue;
+			if(t->pid <= 1)continue;
+			if(!t->mm)continue;
+			if(sig)SignalSend(t, (int)sig, SI_USER, sender, 0);
+		}
+		return 0;
+	}
+	//pid<-1，发给进程组-pid
+	task_struct *g = TaskFind(-kpid);
+	if(!g)return -ESRCH;
+	if(sig)SignalSend(g, (int)sig, SI_USER, sender, 0);
 	return 0;
 }
 
@@ -2033,6 +2062,41 @@ static long sys_getuid(long a, long b, long c, long a4, long a5, long a6){
 	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
 	if(!current_task)return 0;
 	return (long)current_task->cred.uid;
+}
+
+/*
+ * int getgroups(int size, gid_t list[])
+ * 获取附加组列表, size为0时只返回个数
+ */
+static long sys_getgroups(long size, long list, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -ENOSYS;
+	int ksize = (int)size;
+	uint32_t n = current_task->cred.ngroups;
+	if(ksize == 0)return (long)n;
+	if(ksize < 0 || (uint32_t)ksize < n)return -EINVAL;
+	//逐个复制gid
+	for(uint32_t i = 0;i < n;i++){
+		uint32_t g = current_task->cred.groups[i];
+		if(copy_to_user((uint32_t*)list + i, &g, sizeof(g)))return -EFAULT;
+	}
+	return (long)n;
+}
+
+/*
+ * int setgroups(size_t size, const gid_t *list)
+ * 设置附加组列表, 仅root可用
+ */
+static long sys_setgroups(long size, long list, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -ENOSYS;
+	if(size < 0 || size > (long)CRED_NGROUPS_MAX)return -EINVAL;
+	uint32_t tmp[CRED_NGROUPS_MAX];
+	//size为0时list可以为NULL
+	for(uint32_t i = 0;i < (uint32_t)size;i++){
+		if(copy_from_user(&tmp[i], (uint32_t*)list + i, sizeof(uint32_t)))return -EFAULT;
+	}
+	return CredSetGroups(&current_task->cred, (uint32_t)size, tmp);
 }
 
 /*
@@ -2483,6 +2547,8 @@ void InitSyscall(void){
 	syscall_table[SYS_GETPID]     = sys_getpid;
 	syscall_table[SYS_GETPPID]    = sys_getppid;
 	syscall_table[SYS_GETUID]     = sys_getuid;
+	syscall_table[SYS_GETGROUPS]  = sys_getgroups;
+	syscall_table[SYS_SETGROUPS]  = sys_setgroups;
 	syscall_table[SYS_GETEUID]    = sys_geteuid;
 	syscall_table[SYS_GETGID]     = sys_getgid;
 	syscall_table[SYS_GETEGID]    = sys_getegid;

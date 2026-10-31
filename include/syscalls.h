@@ -77,6 +77,8 @@
 #define SYS_SETPGID         109
 #define SYS_SETREUID        113
 #define SYS_SETREGID        114
+#define SYS_GETGROUPS       115
+#define SYS_SETGROUPS       116
 #define SYS_SETRESUID       117
 #define SYS_SETRESGID       119
 #define SYS_GETPPID         110
@@ -290,6 +292,9 @@ typedef struct timeval {
 #define S_IFDIR  0040000
 #define S_IFCHR  0020000
 #define S_IFIFO  0010000
+#define S_ISUID  0004000
+#define S_ISGID  0002000
+#define S_ISVTX  0001000
 #define S_IRWXU  00700
 #define S_IRWXG  00070
 #define S_IRWXO  00007

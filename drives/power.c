@@ -12,6 +12,7 @@
 #include <print.h>
 #include <efi.h>
 #include <task.h>
+#include <fs.h>
 #include <mm/pgtables.h>
 
 void poweroff_acpi(struct acpi_table_fadt* fadt){
@@ -137,6 +138,7 @@ static void kill_all_user_tasks(){
 
 void SYSTEM_Shutdown(){
 	printk(PRINTK_INFO"The machine will shutdown!\n");
+	FsSync();//把块缓存里的脏页落盘
 	mdelay(100);
 	kill_all_user_tasks();//结束所有用户任务
 	cli();
@@ -161,6 +163,7 @@ void SYSTEM_Restart(){
 	if(!fadt)return;
 	if(memcmp(fadt->header.signature,ACPI_SIG_FADT,4) != 0)return;
 	printk(PRINTK_INFO"The machine will reboot!\n");
+	FsSync();//先把块缓存里的脏页落盘
 	mdelay(100);
 	kill_all_user_tasks();//结束所有用户任务
 	cli();
@@ -181,6 +184,7 @@ void SYSTEM_Restart(){
 
 void SYSTEM_Halt(){
 	printk("The machine will halt!\n");
+	FsSync();//先把块缓存里的脏页落盘
 	kill_all_user_tasks();//结束所有用户任务
 	mdelay(500);
 	cli();
