@@ -136,21 +136,20 @@ static void kill_all_user_tasks(){
 }
 
 void SYSTEM_Shutdown(){
-	struct acpi_table_fadt* fadt = SYSTEM_ACPI.fadt;
-	if(!fadt)return;
-	if(memcmp(fadt->header.signature,ACPI_SIG_FADT,4) != 0)return;
-	printk("The machine will shutdown!\n");
+	printk(PRINTK_INFO"The machine will shutdown!\n");
+	mdelay(100);
 	kill_all_user_tasks();//结束所有用户任务
-	mdelay(500);
 	cli();
-	poweroff_acpi(fadt);
-	early_printk("ACPI shutdown failed!Try to VM shutdown\n");
+	//ACPI关机
+	struct acpi_table_fadt* fadt = SYSTEM_ACPI.fadt;
+	if(fadt && memcmp(fadt->header.signature,ACPI_SIG_FADT,4) == 0)poweroff_acpi(fadt);
+	//QEMU/Bochs/VirtualBox虚拟机端口关机
 	outw(0xB004, 0x2000);
 	outw(0x604, 0x2000);
 	outw(0x4004, 0x3400);
 	outw(0x600, 0x34);
 	sti();
-	early_printk("Shutdown failed!\n");
+	printk(PRINTK_ERR"Shutdown failed!\n");
 }
 __attribute__((ms_abi, target("no-sse")))
 static void uefi_reset_system(void){
@@ -161,9 +160,9 @@ void SYSTEM_Restart(){
 	struct acpi_table_fadt* fadt = SYSTEM_ACPI.fadt;
 	if(!fadt)return;
 	if(memcmp(fadt->header.signature,ACPI_SIG_FADT,4) != 0)return;
-	printk("The machine will reboot!\n");
+	printk(PRINTK_INFO"The machine will reboot!\n");
+	mdelay(100);
 	kill_all_user_tasks();//结束所有用户任务
-	mdelay(500);
 	cli();
 	if(UEFI_UseRT && UEFI_RuntimeServices->ResetSystem){
 		uintptr_t saved_cr3 = get_cr3();
@@ -177,7 +176,7 @@ void SYSTEM_Restart(){
 	early_printk("ACPI reboot failed!Try to VM shutdown\n");
 	outb(0x64, 0xFE);
 	sti();
-	early_printk("Restart failed!\n");
+	printk(PRINTK_ERR"Restart failed!\n");
 }
 
 void SYSTEM_Halt(){

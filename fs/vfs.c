@@ -1108,4 +1108,7 @@ void FsInit(struct disk_info *disk){
     DevicesInit();
     FsMkdir("/dev", 0755);
     if(FsMount("devtmpfs", "/dev") != 0)printk(PRINTK_WARNING"vfs:no /dev");
+    //进程与内核状态
+    FsMkdir("/proc", 0555);
+    if(FsMount("procfs", "/proc") != 0)printk(PRINTK_WARNING"vfs:no /proc");
 }

@@ -12,6 +12,7 @@
 #include <klib.h>
 #include <print.h>
 #include <spinlock.h>
+#include <irq.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
 
@@ -79,6 +80,7 @@ static int sig_deliverable(task_struct *t, int sig){
 	if(sig != SIGKILL && sig != SIGSTOP && a)h = a->handler;
 	if(h == SIG_IGN)return 0;
 	if(h == SIG_DFL && signal_default_ignore(sig))return 0;
+	if(t->pid == 1 && h == SIG_DFL)return 0;
 	return 1;
 }
 
@@ -147,7 +149,7 @@ static void sig_build_frame(task_struct *t, int sig, k_sigaction_t *act, const u
 	f->uc.uc_mcontext.rsp = s->rsp;      //原用户栈指针
 	f->uc.uc_mcontext.eflags = s->rflags;
 	f->uc.uc_mcontext.cs = 0x23;
-	f->uc.uc_sigmask = t->sigmask;       //sigreturn恢复用(旧掩码)
+	f->uc.uc_sigmask = SIGSET_TO_USER(t->sigmask);       //sigreturn恢复用(旧掩码)
 	//siginfo
 	f->info.si_signo = sig;
 	f->info.si_errno = 0;
@@ -164,7 +166,7 @@ static void sig_build_frame(task_struct *t, int sig, k_sigaction_t *act, const u
 	*tg->rsi = (uint64_t)&f->info;       //rsi=&siginfo
 	*tg->rdx = (uint64_t)&f->uc;         //rdx=&ucontext
 	//处理期间屏蔽本信号及sa_mask(sigreturn恢复旧掩码)
-	t->sigmask |= (1ULL << sig) | act->mask;
+	t->sigmask |= (1ULL << sig) | SIGSET_FROM_USER(act->mask);
 }
 
 //系统调用返回用户前投递待处理信号(ret=本次系统调用返回值)
@@ -175,7 +177,10 @@ void SignalDeliverUser(long ret){
 		uint64_t bit = 1ULL << sig;
 		if(!(t->sigpending & bit))continue;
 		if(t->sigmask & bit)continue;
-		if(!sig_deliverable(t, sig)){ t->sigpending &= ~bit; continue; }//忽略类: 丢弃
+		if(!sig_deliverable(t, sig)){
+			if(t->pid != 1)t->sigpending &= ~bit;//init的信号不被丢弃, 留给sigtimedwait取走
+			continue;
+		}
 		t->sigpending &= ~bit;
 		k_sigaction_t *a = sig_action(t, sig);
 		uint64_t h = SIG_DFL;
@@ -217,12 +222,15 @@ void SignalDeliverFromIRQ(uint64_t *frame){
 		uint64_t bit = 1ULL << sig;
 		if(!(t->sigpending & bit))continue;
 		if(t->sigmask & bit)continue;
-		if(!sig_deliverable(t, sig)){ t->sigpending &= ~bit; continue; }
+		if(!sig_deliverable(t, sig)){
+			if(t->pid != 1)t->sigpending &= ~bit;//init的信号不被丢弃, 留给sigtimedwait取走
+			continue;
+		}
 		t->sigpending &= ~bit;
 		k_sigaction_t *a = sig_action(t, sig);
-		uint64_t h = SIG_DFL;
-		if(sig != SIGKILL && sig != SIGSTOP && a)h = a->handler;
-		if(h == SIG_DFL){
+		uint64_t hl = SIG_DFL;
+		if(sig != SIGKILL && sig != SIGSTOP && a)hl = a->handler;
+		if(hl == SIG_DFL){
 			t->sig_exit = sig;
 			UserTaskExit(128 + sig);
 		}
@@ -265,7 +273,7 @@ long SignalReturn(void){
 	FRAME_SLOT(12) = f->uc.uc_mcontext.rip;
 	FRAME_SLOT(13) = f->uc.uc_mcontext.rbx;
 	FRAME_SLOT(15) = f->uc.uc_mcontext.rsp;
-	current_task->sigmask = f->uc.uc_sigmask;
+	current_task->sigmask = SIGSET_FROM_USER(f->uc.uc_sigmask);
 	return (long)f->uc.uc_mcontext.rax;//rax槽由汇编用返回值填充
 }
 
@@ -294,6 +302,49 @@ long SignalDoSigaction(long signum, long act, long oldact, long sigsetsize){
 		tbl[signum] = na;
 	}
 	return 0;
+}
+
+//rt_sigtimedwait: 取走set中一个已挂起的信号并回报siginfo; timeout为空表示一直等
+long SignalDoSigtimedwait(long uset, long uinfo, long utimeout, long sigsetsize){
+	if(!current_task || !uset)return -EINVAL;
+	if(sigsetsize != 8)return -EINVAL;
+	uint64_t set;
+	if(copy_from_user(&set, (void*)uset, 8))return -EFAULT;
+	set = SIGSET_FROM_USER(set);//用户位图转成内核掩码
+	set &= (1ULL << MAX_SIG) - 1;//KILL/STOP之外的有效位
+	int has_timeout = utimeout != 0;
+	uint64_t deadline = 0;
+	if(has_timeout){
+		timespec_t ts;
+		if(copy_from_user(&ts, (void*)utimeout, sizeof(ts)))return -EFAULT;
+		if(ts.tv_sec < 0 || ts.tv_nsec < 0)return -EINVAL;
+		uint64_t ms = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+		deadline = SYSTEM_TimerTicks + (ms + 9) / 10;//向上取整到tick(10ms)
+	}
+	for(;;){
+		uint64_t pend = current_task->sigpending & set;
+		if(pend){
+			int sig;
+			for(sig = 1; sig < MAX_SIG; sig++){
+				if(pend & (1ULL << sig))break;
+			}
+			current_task->sigpending &= ~(1ULL << sig);//消费掉该信号
+			if(uinfo){
+				struct k_siginfo si;
+				memset(&si, 0, sizeof(si));
+				si.si_signo = sig;
+				si.si_errno = 0;
+				si.si_code = current_task->sig_last_code;
+				si.payload[0] = (uint64_t)current_task->sig_last_pid;//si_pid
+				si.payload[1] = (uint64_t)current_task->cred.euid;//si_uid
+				if(sig == SIGCHLD)si.payload[2] = (uint64_t)current_task->sig_last_status;
+				if(copy_to_user((void*)uinfo, &si, sizeof(si)))return -EFAULT;
+			}
+			return (long)sig;
+		}
+		if(has_timeout && SYSTEM_TimerTicks >= deadline)return -EAGAIN;
+		msleep(2);//让出CPU等下一次信号到达(投递时TaskWake会提前唤醒)
+	}
 }
 
 //fork: 子进程复制父进程的信号动作表

@@ -165,4 +165,8 @@ int Ext2MountAt(struct vfsmount *parent, struct dentry *mountpoint);
 uint32_t DevFsInodeSize(void);
 const struct super_operations *DevFsSuperOps(void);
 struct dentry *DevFsFillSuper(struct super_block *sb);
+//procfs
+uint32_t ProcFsInodeSize(void);
+const struct super_operations *ProcFsSuperOps(void);
+struct dentry *ProcFsFillSuper(struct super_block *sb);
 #endif

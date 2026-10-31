@@ -40,6 +40,9 @@
 #define SIG_DFL  0
 #define SIG_IGN  1
 
+#define SIGSET_FROM_USER(m) (((uint64_t)(m)) << 1)//用户位图 -> 内核掩码
+#define SIGSET_TO_USER(m)   (((uint64_t)(m)) >> 1)//内核掩码 -> 用户位图
+
 //sa_flags
 #define SA_RESTORER 0x04000000
 #define SA_SIGINFO  4
@@ -68,5 +71,6 @@ void SignalDeliverUser(long ret);//syscall返回用户前投递(可能改写返�
 void SignalDeliverFromIRQ(uint64_t *frame);//中断返回用户前投递(IRQ栈帧指针)
 long SignalReturn(void);//rt_sigreturn: 从用户栈信号帧恢复上下文
 long SignalDoSigaction(long signum, long act, long oldact, long sigsetsize);//rt_sigaction
+long SignalDoSigtimedwait(long uset, long uinfo, long utimeout, long sigsetsize);//rt_sigtimedwait
 
 #endif

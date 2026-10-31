@@ -20,6 +20,8 @@
 #define TASK_BLOCKED    2
 #define TASK_TERMINATED 3
 
+#define TASK_CMDLINE_MAX 128//exec时保存的命令行长度上限
+
 //线程上下文
 typedef struct task_context {
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
@@ -51,6 +53,8 @@ typedef struct task_struct {
     pid_t               tgid;       //线程组ID
     int                 state;      //进程状态
     char                name[16];   //进程名
+    char                cmdline[TASK_CMDLINE_MAX];//命令行
+    uint32_t            cmdline_len;//cmdline里的有效字节数
     pid_t               parent;     //父进程PID(0=无父进程)
     int                 exit_code;  //退出码(waitpid读取)
     wait_queue_head_t   child_wq;   //等待子进程退出的队列
@@ -123,6 +127,7 @@ void user_trampoline(void);//从内核栈iretq回ring3
 void TaskListAdd(task_struct* t);//将任务加入任务链表
 void TaskListRemove(task_struct* t);//将任务从任务链表中移除
 task_struct* TaskFind(pid_t pid);//根据PID查找任务
+void TaskForEach(int (*cb)(task_struct *t, void *ctx), void *ctx);//遍历所有任务,cb返回非0时提前结束
 void TaskSignalDescendants(task_struct *root, int sig);//给root的所有子孙进程投递信号
 /**
  * @brief 查找指定父进程的指定子进程

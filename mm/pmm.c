@@ -196,6 +196,14 @@ uint64_t GetMemoryTotalSize() {
     return total;
 }
 
+//当前空闲的物理内存字节数
+uint64_t PmmFreeSize(void){
+    if(!MemDescAddr)return 0;
+    uint64_t pages = 0;
+    for(int i = 0;i < MemDescNum;i ++)pages += (uint64_t)GetCountOf_InBitmap(&MemDescAddr[i].bitmap, PMM_FREE);//遍历描述符表，统计空闲页数
+    return pages * PAGE_SIZE;
+}
+
 /*
  * PmmSwitchToHigh — 内核高半映射建立后，将 PMM 描述符/位图指针切换为高半地址。
  * 此后代码可能运行在用户页表下（低半区无映射），必须经高半访问。

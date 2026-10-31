@@ -112,8 +112,17 @@ int VfsDetachMount(struct vfsmount *m){
     return 0;
 }
 
-struct dentry *VfsDotDot(struct vfsmount **mnt_io, struct dentry *dentry){
-    if(!mnt_io || !dentry)return NULL;
+//遍历所有挂载点
+void VfsMountWalk(void (*cb)(struct vfsmount *m, void *ctx), void *ctx){
+    if(!cb)return;
+    struct list_node *pos;
+    for(pos = g_mount_list.next;pos != &g_mount_list;pos = pos->next){
+        struct vfsmount *m = (struct vfsmount*)((char*)pos - __builtin_offsetof(struct vfsmount, mnt_list));
+        cb(m, ctx);
+    }
+}
+
+struct dentry *VfsDotDot(struct vfsmount **mnt_io, struct dentry *dentry){    if(!mnt_io || !dentry)return NULL;
     struct vfsmount *m = *mnt_io;
     while(m && m->mnt_parent && dentry == m->mnt_root){
         dentry = m->mnt_mountpoint;
@@ -155,6 +164,10 @@ int VfsMountNew(struct vfsmount *parent, struct dentry *mountpoint, const char *
         sb = SuperAlloc("devtmpfs", 0x1373, DevFsInodeSize(), DevFsSuperOps());
         if(!sb)return -ENOMEM;
         root = DevFsFillSuper(sb);
+    }else if(strcmp(type, "procfs") == 0){
+        sb = SuperAlloc("procfs", 0x9FA0, ProcFsInodeSize(), ProcFsSuperOps());
+        if(!sb)return -ENOMEM;
+        root = ProcFsFillSuper(sb);
     }else if(strcmp(type, "ramfs") == 0 || strcmp(type, "tmpfs") == 0){
         sb = SuperAlloc("ramfs", 0x01021994, Ramfs2InodeSize(), Ramfs2SuperOps());
         if(!sb)return -ENOMEM;

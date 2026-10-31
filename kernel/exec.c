@@ -168,6 +168,29 @@ static int elf_load(fs_file_t *f, mm_struct *mm, uint64_t preferred_base, elf_lo
     return 0;
 }
 
+//把argv拼成'\0'分隔的命令行存进任务
+static void exec_set_cmdline(task_struct *t, char *const argv[], int argc){
+    if(!t)return;
+    int pos = 0;
+    for(int i = 0;i < argc && pos < TASK_CMDLINE_MAX - 1;i ++){
+        const char *a = argv ? argv[i] : NULL;
+        if(!a)break;
+        while(*a && pos < TASK_CMDLINE_MAX - 1)t->cmdline[pos ++] = *a ++;
+        t->cmdline[pos ++] = 0;
+    }
+    t->cmdline_len = (uint32_t)pos;
+    //进程名换成 rgv[0]去掉路径后的末段
+    const char *p = (argv && argc > 0 && argv[0]) ? argv[0] : t->name;
+    const char *base = p;
+    for(const char *q = p;*q;q ++)if(*q == '/')base = q + 1;
+    int n = 0;
+    while(base[n] && n < (int)sizeof(t->name) - 1){
+        t->name[n] = base[n];
+        n ++;
+    }
+    t->name[n] = 0;
+}
+
 //加载并执行新程序
 int do_execve(const char *path, char *const argv[], char *const envp[]){
     if(!current_task || !current_task->mm) return -1;
@@ -312,6 +335,7 @@ int do_execve(const char *path, char *const argv[], char *const envp[]){
     p[12] = exec_entry;//用户程序入口(有解释器时为ld.so入口)
     p[14] = 0;//rax=0
     p[15] = sp;//用户RSP=新栈顶
+    exec_set_cmdline(t, argv, argc);//记下命令行
     if(t->vfork_parent > 0){
         task_struct *vp = TaskFind(t->vfork_parent);
         if(vp){ vp->vfork_waiting = 0; TaskWake(vp); }

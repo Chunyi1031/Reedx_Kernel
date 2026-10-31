@@ -23,6 +23,8 @@
 #define LINUX_REBOOT_CMD_RESTART    0x01234567
 #define LINUX_REBOOT_CMD_POWER_OFF  0x4321fedc
 #define LINUX_REBOOT_CMD_HALT       0xcdef0123
+#define LINUX_REBOOT_CMD_CAD_OFF    0x00000000
+#define LINUX_REBOOT_CMD_CAD_ON     0x89abcdef
 
 void poweroff_acpi(struct acpi_table_fadt* fadt);
 void reset_acpi(struct acpi_table_fadt* fadt);

@@ -12,3 +12,4 @@ docs/
 scripts/mk-testdisk.sh
 tests/
 *.py
+*.bak

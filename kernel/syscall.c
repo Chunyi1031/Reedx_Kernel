@@ -1850,6 +1850,15 @@ static long sys_rt_sigaction(long signum, long act, long oldact, long sigsetsize
 }
 
 /*
+ * int rt_sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *timeout, size_t sigsetsize)
+ * 等待集合中的信号, 返回信号编号; 超时返回-EAGAIN
+ */
+static long sys_rt_sigtimedwait(long set, long info, long timeout, long sigsetsize, long a5, long a6){
+	(void)a5; (void)a6;
+	return SignalDoSigtimedwait(set, info, timeout, sigsetsize);
+}
+
+/*
  * long rt_sigreturn(void)
  * 用户restorer执行, 从信号帧恢复上下文
  */
@@ -2364,12 +2373,15 @@ static long sys_uname(long name, long a2, long a3, long a4, long a5, long a6){
  */
 static long sys_reboot(long magic,long magic2,long cmd,long arg,long a5,long a6){
 	(void)arg; (void)a5; (void)a6;
-	//魔数校验+
+	//魔数校验
 	if((uint32_t)magic != (uint32_t)LINUX_REBOOT_MAGIC1)return -EINVAL;
 	uint32_t m2 = (uint32_t)magic2;
 	if(m2 != (uint32_t)LINUX_REBOOT_MAGIC2 && m2 != (uint32_t)LINUX_REBOOT_MAGIC2A &&
 	   m2 != (uint32_t)LINUX_REBOOT_MAGIC2B && m2 != (uint32_t)LINUX_REBOOT_MAGIC2C)return -EINVAL;
 	switch((uint32_t)cmd){
+		case (uint32_t)LINUX_REBOOT_CMD_CAD_OFF:
+		case (uint32_t)LINUX_REBOOT_CMD_CAD_ON:
+			return 0;
 		//重启
 		case (uint32_t)LINUX_REBOOT_CMD_RESTART:
 			SYSTEM_Restart();
@@ -2456,6 +2468,7 @@ void InitSyscall(void){
 	syscall_table[SYS_RT_SIGACTION]     = sys_rt_sigaction;
 	syscall_table[SYS_RT_SIGPROCMASK]   = sys_rt_sigprocmask;
 	syscall_table[SYS_RT_SIGRETURN]     = sys_rt_sigreturn;
+	syscall_table[SYS_RT_SIGTIMEDWAIT]  = sys_rt_sigtimedwait;
 	syscall_table[SYS_SETPGID]          = sys_setpgid;
 	syscall_table[SYS_GETPGRP]          = sys_getpgrp;
 	syscall_table[SYS_GETPGID]          = sys_getpgid;

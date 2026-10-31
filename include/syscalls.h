@@ -84,6 +84,7 @@
 #define SYS_GETRESUID       118
 #define SYS_GETRESGID       120
 #define SYS_GETPGID         121
+#define SYS_RT_SIGTIMEDWAIT 128
 #define SYS_SIGALTSTACK     131
 #define SYS_MKNOD           133
 #define SYS_PRCTL           157
@@ -130,8 +131,8 @@
 #define AT_EMPTY_PATH       0x1000  //path 为空字符串时对 dirfd 自身操作(glibc fstat 用它)
 #define AT_SYMLINK_NOFOLLOW 0x100   //不跟随符号链接
 
-#define UTIME_NOW           (-1L)   //设为当前时间
-#define UTIME_OMIT          (-2L)   //保持原值不变
+#define UTIME_NOW          0x3FFFFFFFL
+#define UTIME_OMIT         0x3FFFFFFEL
 
 #define AT_REMOVEDIR        0x200
 #define AT_SYMLINK_FOLLOW   0x400

@@ -168,6 +168,15 @@ task_struct* TaskFind(pid_t pid){
     return NULL;
 }
 
+void TaskForEach(int (*cb)(task_struct *t, void *ctx), void *ctx){
+    if(!cb)return;
+    struct list_node *pos;
+    list_for_each(pos, &task_list_head) {
+        task_struct *task = container_of(pos, task_struct, list);
+        if(cb(task, ctx))return;
+    }
+}
+
 //查找指定父进程的指定子进程
 task_struct* TaskFindChild(pid_t parent_pid, pid_t child_pid){
     if(parent_pid <= 0 || child_pid <= 0)return NULL;
