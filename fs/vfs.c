@@ -12,6 +12,7 @@
 #include <print.h>
 #include <mm/pagecache.h>
 #include <drives/bcache.h>
+#include <drives/cdev.h>
 #include <vfs.h>
 
 static struct path g_vfs_root;//新VFS的根
@@ -161,7 +162,11 @@ static int file_bind(fs_file_t *out, struct dentry *d, struct vfsmount *mnt, int
     struct file *file = FileAlloc();
     if(!file){ dput(d); return -ENOMEM; }
     file->f_inode = ino;
-    file->f_op    = ino->i_fop;
+    file->f_op = FileOpsOf(ino);
+    if(!file->f_op && (ino->i_mode & S_IFMT) == S_IFCHR){
+        FilePut(file);
+        return -ENXIO;
+    }
     file->f_flags = (uint32_t)flags;
     file->f_pos   = (flags & O_APPEND) ? ino->i_size : 0;
     file->f_path.mnt    = mnt;
@@ -294,14 +299,14 @@ static uint64_t fs_file_size(fs_file_t *f){
     return f->inode->i_size;
 }
 
-/*==================== 读写/定位 ====================*/
 uint64_t FsRead(fs_file_t *f, void *buf, uint64_t len){
     if(!f || !f->used || !f->f || !f->inode)return 0;
     if((f->flags & O_ACCMODE) == O_WRONLY)return 0;
-    if(!f->inode->i_fop || !f->inode->i_fop->read)return 0;
+    const struct file_operations *op = f->f->f_op ? f->f->f_op : f->inode->i_fop;
+    if(!op || !op->read)return 0;
     uint64_t lk;
     spin_lock_irqsave(&g_fs_lock, lk);
-    int64_t n = f->inode->i_fop->read(f->f, (char*)buf, len, &f->f->f_pos);
+    int64_t n = op->read(f->f, (char*)buf, len, &f->f->f_pos);
     spin_unlock_irqrestore(&g_fs_lock, lk);
     return (n > 0) ? (uint64_t)n : 0;
 }
@@ -309,11 +314,12 @@ uint64_t FsRead(fs_file_t *f, void *buf, uint64_t len){
 uint64_t FsWrite(fs_file_t *f, const void *buf, uint64_t len){
     if(!f || !f->used || !f->f || !f->inode)return 0;
     if((f->flags & O_ACCMODE) == O_RDONLY)return 0;
-    if(!f->inode->i_fop || !f->inode->i_fop->write)return 0;
+    const struct file_operations *op = f->f->f_op ? f->f->f_op : f->inode->i_fop;
+    if(!op || !op->write)return 0;
     uint64_t lk;
     spin_lock_irqsave(&g_fs_lock, lk);
     if(f->flags & O_APPEND)f->f->f_pos = f->inode->i_size;//追加模式定位到末尾
-    int64_t n = f->inode->i_fop->write(f->f, (const char*)buf, len, &f->f->f_pos);
+    int64_t n = op->write(f->f, (const char*)buf, len, &f->f->f_pos);
     spin_unlock_irqrestore(&g_fs_lock, lk);
     return (n > 0) ? (uint64_t)n : 0;
 }
@@ -413,7 +419,13 @@ static int dent_emit(void *ctx, const char *name, int namelen, uint64_t ino, int
     d->d_ino    = ino;
     d->d_off    = (int64_t)(2 + c->seen);
     d->d_reclen = (uint16_t)reclen;
-    d->d_type   = (uint8_t)((type == S_IFDIR) ? DT_DIR : ((type == S_IFREG) ? DT_REG : ((type == S_IFLNK) ? DT_LNK : DT_UNKNOWN)));
+    d->d_type   = (uint8_t)((type == S_IFDIR) ? DT_DIR
+                          : (type == S_IFREG) ? DT_REG
+                          : (type == S_IFLNK) ? DT_LNK
+                          : (type == S_IFCHR) ? DT_CHR
+                          : (type == S_IFBLK) ? DT_BLK
+                          : (type == S_IFIFO) ? DT_FIFO
+                          : (type == S_IFSOCK) ? DT_SOCK : DT_UNKNOWN);
     memcpy(d->d_name, name, (size_t)namelen);
     d->d_name[namelen] = 0;
     c->written += reclen;
@@ -442,7 +454,8 @@ int FsGetdents(fs_file_t *f, void *buf, uint64_t len){
     if(!f || !f->used || !f->f || !buf)return -EINVAL;
     if(!f->inode)return -EBADF;
     if((f->inode->i_mode & S_IFMT) != S_IFDIR)return -ENOTDIR;
-    if(!f->inode->i_fop || !f->inode->i_fop->iterate)return -ENOSYS;
+    const struct file_operations *op = f->f->f_op ? f->f->f_op : f->inode->i_fop;
+    if(!op || !op->iterate)return -ENOSYS;
     dents_ctx_t c;
     memset(&c, 0, sizeof(c));
     c.buf  = (char*)buf;
@@ -455,14 +468,13 @@ int FsGetdents(fs_file_t *f, void *buf, uint64_t len){
         if(c.next == 1 && dent_put_virtual(&c, "..", f->inode->i_ino))goto finish;
     }
     c.skip = (f->f->f_pos > 2) ? (f->f->f_pos - 2) : 0;
-    f->inode->i_fop->iterate(f->f, &c, dent_emit);
+    op->iterate(f->f, &c, dent_emit);
 finish:
     f->f->f_pos = c.next;
     spin_unlock_irqrestore(&g_fs_lock, lk);
     return c.written;
 }
 
-/*==================== 目录项增删(路径版) ====================*/
 int FsMkdir(const char *path, int mode){
     if(!lookup_root(path))return -ENOENT;
     uint64_t lk;
@@ -1005,6 +1017,40 @@ int FsChownFd(int fd, uint32_t uid, uint32_t gid){
     return r;
 }
 
+//在路径处建一个设备节点
+int FsMknod(const char *path, uint16_t mode, uint32_t rdev){
+    if(!path)return -EINVAL;
+    const struct path *root = lookup_root(path);
+    if(!root)return -ENOENT;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    struct path pdir;
+    char name[NAMELEN_MAX + 1];
+    int r = path_lookup_parent(path, root, &pdir, name, sizeof(name));
+    if(r == 0){
+        struct inode *din = pdir.dentry->d_inode;
+        if(!din || (din->i_mode & S_IFMT) != S_IFDIR){
+            r = -ENOTDIR;
+        }else if(!din->i_op || !din->i_op->mknod){
+            r = -EPERM;
+        }else{
+            r = InodePermission(din, MAY_WRITE | MAY_EXEC);
+            if(r == 0){
+                struct dentry *d = dir_lookup(pdir.dentry, name);
+                if(!d){
+                    r = -ENOMEM;
+                }else{
+                    r = d->d_inode ? -EEXIST : din->i_op->mknod(din, d, mode, rdev);
+                    dput(d);
+                }
+            }
+        }
+        dput(pdir.dentry);
+    }
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
 int FsExistsAt(struct dentry *dir, const char *name){
     uint64_t lk;
     spin_lock_irqsave(&g_fs_lock, lk);
@@ -1058,4 +1104,8 @@ void FsInit(struct disk_info *disk){
     FsMkdir("/tmp", 0755);
     FsMount("tmpfs", "/tmp");
     FsChmod("/tmp", 01777);
+    //注册字符设备并挂devtmpfs
+    DevicesInit();
+    FsMkdir("/dev", 0755);
+    if(FsMount("devtmpfs", "/dev") != 0)printk(PRINTK_WARNING"vfs:no /dev");
 }

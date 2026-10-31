@@ -20,9 +20,13 @@
 
 //目录项类型
 #define DT_UNKNOWN 0
+#define DT_FIFO    1
+#define DT_CHR     2
 #define DT_DIR     4
+#define DT_BLK     6
 #define DT_REG     8
 #define DT_LNK     10
+#define DT_SOCK    12
 
 //目录项迭代结果
 typedef struct fs_dirent {
@@ -114,6 +118,7 @@ int FsChmod(const char *path, uint16_t mode);//按路径改权限位
 int FsChmodFd(int fd, uint16_t mode);//按文件描述符改权限位
 int FsChown(const char *path, uint32_t uid, uint32_t gid, int follow);//按路径改属主/属组
 int FsChownFd(int fd, uint32_t uid, uint32_t gid);//按文件描述符改属主/属组
+int FsMknod(const char *path, uint16_t mode, uint32_t rdev);//在路径处建设备节点
 int FsReadlink(const char *path, char *buf, int size);//读符号链接目标,返回长度
 int FsStat(const char *path, struct stat *st);//按路径取属性(跟随符号链接)
 int FsLstat(const char *path, struct stat *st);//按路径取属性(不跟随符号链接)
@@ -156,4 +161,8 @@ int Ext2ReadSuper(struct super_block *sb, struct bdev *bd);
 struct bdev *Ext2FindPartition(void);
 struct super_block *Ext2NewSuper(struct bdev *bd, struct dentry **root_out);
 int Ext2MountAt(struct vfsmount *parent, struct dentry *mountpoint);
+//devtmpfs
+uint32_t DevFsInodeSize(void);
+const struct super_operations *DevFsSuperOps(void);
+struct dentry *DevFsFillSuper(struct super_block *sb);
 #endif

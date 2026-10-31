@@ -148,11 +148,20 @@ int VfsMountNew(struct vfsmount *parent, struct dentry *mountpoint, const char *
     //检查参数与挂载点
     if(!parent || !mountpoint || !type)return -EINVAL;
     if((mountpoint->d_inode->i_mode & S_IFMT) != S_IFDIR)return -ENOTDIR;
-    if(strcmp(type, "ramfs") && strcmp(type, "tmpfs"))return -ENODEV;
     //新建一个超级块,并把它的根目录dentry建出来
-    struct super_block *sb = SuperAlloc("ramfs", 0x01021994, Ramfs2InodeSize(), Ramfs2SuperOps());
-    if(!sb)return -ENOMEM;
-    struct dentry *root = Ramfs2FillSuper(sb);
+    struct super_block *sb = NULL;
+    struct dentry *root = NULL;
+    if(strcmp(type, "devtmpfs") == 0){
+        sb = SuperAlloc("devtmpfs", 0x1373, DevFsInodeSize(), DevFsSuperOps());
+        if(!sb)return -ENOMEM;
+        root = DevFsFillSuper(sb);
+    }else if(strcmp(type, "ramfs") == 0 || strcmp(type, "tmpfs") == 0){
+        sb = SuperAlloc("ramfs", 0x01021994, Ramfs2InodeSize(), Ramfs2SuperOps());
+        if(!sb)return -ENOMEM;
+        root = Ramfs2FillSuper(sb);
+    }else{
+        return -ENODEV;
+    }
     if(!root)return -ENOMEM;
     //先把新文件系统挂成一棵独立的挂载树,再挂到mountpoint下面
     struct vfsmount *m = VfsKernMount(sb, root, 0);

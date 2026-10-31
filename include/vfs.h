@@ -58,6 +58,7 @@ struct path {
 
 const cred_t *CurrentCred(void);//当前进程的身份
 int InodePermission(struct inode *inode, int mask);//按当前身份检查inode的权限位
+const struct file_operations *FileOpsOf(struct inode *inode);//打开时用的文件操作集
 
 //setattr 用到的字段
 #define ATTR_MODE  0x0001          // ia_mode 有效

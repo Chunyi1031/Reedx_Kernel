@@ -628,6 +628,34 @@ static long sys_fchownat(long dirfd, long path, long uid, long gid, long flags, 
 }
 
 /*
+ * int mknod(const char *path, mode_t mode, dev_t dev) / mknodat
+ * 建设备节点
+ */
+static long sys_mknod(long path, long mode, long dev, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	if(!CredIsRoot(CurrentCred()))return -EPERM;
+	if(!path)return -EFAULT;
+	char kpath[256];
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
+	return FsMknod(kpath, (uint16_t)mode, (uint32_t)dev);
+}
+
+static long sys_mknodat(long dirfd, long path, long mode, long dev, long a5, long a6){
+	(void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	if(!CredIsRoot(CurrentCred()))return -EPERM;
+	if(!path)return -EFAULT;
+	char kpath[256];
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
+	//fd 相对路径先拼成完整路径, 拼不出来就按当前目录解析
+	char full[256];
+	if(at_full_path(dirfd, kpath, full, (int)sizeof(full)) == 0)
+		return FsMknod(full, (uint16_t)mode, (uint32_t)dev);
+	return FsMknod(kpath, (uint16_t)mode, (uint32_t)dev);
+}
+
+/*
  * mode_t umask(mode_t mask)
  * 返回旧掩码
  */
@@ -2475,6 +2503,8 @@ void InitSyscall(void){
 	syscall_table[SYS_FCHOWN]     = sys_fchown;
 	syscall_table[SYS_LCHOWN]     = sys_lchown;
 	syscall_table[SYS_FCHOWNAT]   = sys_fchownat;
+	syscall_table[SYS_MKNOD]      = sys_mknod;
+	syscall_table[SYS_MKNODAT]    = sys_mknodat;
 	syscall_table[SYS_UMASK]      = sys_umask;
 	syscall_table[SYS_UNLINK]     = sys_unlink;
 	syscall_table[SYS_UNLINKAT]   = sys_unlinkat;

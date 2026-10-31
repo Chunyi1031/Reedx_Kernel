@@ -9,6 +9,7 @@
 #include <vfs.h>
 #include <mm/kslab.h>
 #include <print.h>
+#include <drives/cdev.h>
 
 static struct kmem_cache *g_file_cache;//文件对象缓存
 static spinlock_t g_file_lock = {0};
@@ -16,6 +17,13 @@ static uint32_t g_nr_files;//当前打开文件数量
 
 static void file_init(void){
     if(!g_file_cache)g_file_cache = KslabCreate("file", sizeof(struct file));
+}
+
+//打开后该用的读写操作表
+const struct file_operations *FileOpsOf(struct inode *inode){
+    if(!inode)return NULL;
+    if((inode->i_mode & S_IFMT) == S_IFCHR)return ChrdevLookup((uint32_t)inode->i_rdev);
+    return inode->i_fop;
 }
 
 //新建一个打开文件描述
