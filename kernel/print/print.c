@@ -174,17 +174,45 @@ void print_to_console(int count){
 	sti();
 }
 
+//读控制寄存器,崩溃现场里一起打出来
+static inline uint64_t panic_read_cr0(void){ uint64_t v; __asm__ volatile("mov %%cr0,%0" : "=r"(v)); return v; }
+static inline uint64_t panic_read_cr2(void){ uint64_t v; __asm__ volatile("mov %%cr2,%0" : "=r"(v)); return v; }
+static inline uint64_t panic_read_cr3(void){ uint64_t v; __asm__ volatile("mov %%cr3,%0" : "=r"(v)); return v; }
+static inline uint64_t panic_read_cr4(void){ uint64_t v; __asm__ volatile("mov %%cr4,%0" : "=r"(v)); return v; }
+
+static void panic_line(const char* fmt, ...){
+	char buf[256];
+	__builtin_va_list args;
+	__builtin_va_start(args, fmt);
+	vsprintf(buf, fmt, args);
+	__builtin_va_end(args);
+	printk(PRINTK_EMERG"%s", buf);
+	SerialWriteString(SERIAL_COM1, buf);
+	SerialWriteString(SERIAL_COM1, "\n");
+}
+
+void panic_report(struct exc_frame *f, const char *msg){
+	cli();
+	panic_line("==:( KERNEL PANIC: %s ):===", msg);
+	panic_line("RIP=%p RSP=%p CS =%p RFLAGS=%p SS=%p", (void*)f->rip, (void*)f->rsp,(void*)f->cs, (void*)f->rflags, (void*)f->ss);
+	panic_line("RAX=%p RBX=%p RCX=%p RDX=%p", (void*)f->rax, (void*)f->rbx, (void*)f->rcx, (void*)f->rdx);
+	panic_line("RSI=%p RDI=%p RBP=%p R8 =%p", (void*)f->rsi, (void*)f->rdi, (void*)f->rbp, (void*)f->r8);
+	panic_line("R9 =%p R10=%p R11=%p R12=%p", (void*)f->r9, (void*)f->r10, (void*)f->r11, (void*)f->r12);
+	panic_line("R13=%p R14=%p R15=%p", (void*)f->r13, (void*)f->r14, (void*)f->r15);
+	panic_line("CR0=%p CR2=%p CR3=%p CR4=%p", (void*)panic_read_cr0(), (void*)panic_read_cr2(),(void*)panic_read_cr3(), (void*)panic_read_cr4());
+	if(current_task)panic_line("task: pid=%d name=%s kstack=%p",(int)current_task->pid, current_task->name, current_task->kernel_stack);
+	else panic_line("task: none");
+	panic_line("The system will terminate, and then you can restart it.");
+	print_to_console(PRINTK_COUNT_MAX);//把日志环形缓冲区刷到屏幕上
+	cli();
+	SYSTEM_STOP();
+}
+
 void panic(const char* fmt, ...){
 	char buf[256];
 	__builtin_va_list args;
 	__builtin_va_start(args, fmt);
 	vsprintf(buf, fmt, args);
-	printk(PRINTK_EMERG"%s",buf);
-	printk(PRINTK_EMERG":( Kernel Panic!");
-	printk(PRINTK_EMERG"The system will terminate, and then you can restart it.");
 	__builtin_va_end(args);
-	cli();
-	print_to_console(PRINTK_COUNT_MAX);
-	cli();
-	SYSTEM_STOP();
+	panic_enter(buf, (uint64_t)__builtin_return_address(0));
 }

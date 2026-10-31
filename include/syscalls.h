@@ -85,6 +85,7 @@
 #define SYS_GETRESGID       120
 #define SYS_GETPGID         121
 #define SYS_SIGALTSTACK     131
+#define SYS_MKNOD           133
 #define SYS_PRCTL           157
 #define SYS_ARCH_PRCTL      158
 #define SYS_SYNC            162
@@ -105,8 +106,10 @@
 #define SYS_TGKILL          234
 #define SYS_OPENAT          257
 #define SYS_MKDIRAT         258
-#define SYS_UNLINKAT        263
+#define SYS_MKNODAT         259
+#define SYS_FCHOWNAT        260
 #define SYS_NEWFSTATAT      262
+#define SYS_UNLINKAT        263
 #define SYS_RENAMEAT        264
 #define SYS_LINKAT          265
 #define SYS_SYMLINKAT       266

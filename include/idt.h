@@ -129,8 +129,19 @@ extern void default_int_handler_entry(void);//默认中断处理程序入口 (ke
 extern void default_int_handler(void);//默认中断处理程序(kernel/desc/idt.c)
 extern void int_13_handler(void);
 extern void int_14_handler(void);
-extern void interrupt_GP(uint64_t error_code, uint64_t rip, uint64_t cs);
-extern void interrupt_PF(uint64_t fault_addr, uint64_t error_code, uintptr_t rip, uintptr_t user_rsp);
+
+
+typedef struct exc_frame {
+    uint64_t pad;
+    uint64_t r15, r14, r13, r12, r11, r10, r9, r8;//通用寄存器
+    uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
+    uint64_t vector, errcode;//向量号与CPU压入的错误码
+    uint64_t rip, cs, rflags, rsp, ss;//硬件压入的返回现场
+} exc_frame_t;
+
+extern void exc_dispatch(exc_frame_t *frame);
+extern void interrupt_GP(exc_frame_t *frame);
+extern void interrupt_PF(exc_frame_t *frame);
 
 extern volatile uintptr_t gp_recover_ip;//#GP恢复点
 extern volatile uint64_t gp_probe_active;//探测激活标志

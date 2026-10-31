@@ -119,13 +119,13 @@ void KernelMain(){
     //创建首个用户程序
     mm_struct* umm = vmm_create_address_space();
     if(!umm)SYSTEM_STOP();
-    if(vmm_mmap(umm, 0x400000, PAGE_SIZE, VM_READ | VM_EXEC | VM_WRITE))SYSTEM_STOP();
-    if(vmm_mmap(umm, umm->start_stack, PAGE_SIZE, VM_READ | VM_WRITE))SYSTEM_STOP();
+    if(vmm_mmap(umm, 0x400000, PAGE_SIZE, VM_READ | VM_EXEC | VM_WRITE)){vmm_destroy_address_space(umm);panic("Cannot create init task:Memory mapping failed.");}
+    if(vmm_mmap(umm, umm->start_stack, PAGE_SIZE, VM_READ | VM_WRITE)){vmm_destroy_address_space(umm);panic("Cannot create init task:Memory mapping failed.");}
     uintptr_t *code_pte = (uintptr_t*)get_pte((uintptr_t)umm->pgd, 0x400000, 0, 0);
-    if(!code_pte || !pte_is_present(*code_pte))SYSTEM_STOP();
+    if(!code_pte || !pte_is_present(*code_pte)){vmm_destroy_address_space(umm);panic("Cannot create init task:Memory mapping failed.");}
     memcpy((void*)PHYS_TO_VIRT(pte_get_paddr(*code_pte)), (void*)user_main,(uintptr_t)user_main_end - (uintptr_t)user_main);
     init_task = CreateProcess(0x400000, umm, "init");
-    if(!init_task)panic("Cannot create init task");
+    if(!init_task){vmm_destroy_address_space(umm);panic("Cannot create init task");}
     printk(PRINTK_INFO"init runs as pid %d", (int)init_task->pid);
     SYSTEM_STOP();//内核挂起
 }

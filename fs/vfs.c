@@ -78,13 +78,18 @@ static int dir_create(struct dentry *dir, const char *name, int isdir, uint16_t 
     int (*fn)(struct inode*, struct dentry*, uint16_t) = NULL;
     if(din->i_op)fn = isdir ? din->i_op->mkdir : din->i_op->create;
     if(!fn)return -EROFS;
+    //检查在父目录的写权限和搜索权限
+    int pr = InodePermission(din, MAY_WRITE | MAY_EXEC);
+    if(pr)return pr;
     struct dentry *d = dir_lookup(dir, name);
     if(!d)return -ENOMEM;
     if(d->d_inode){
         dput(d);
         return -EEXIST;
     }
-    int r = fn(din, d, mode);
+    //新建文件的权限位要扣掉本进程的umask
+    uint16_t m = (uint16_t)(mode & ~CurrentCred()->umask & 07777);
+    int r = fn(din, d, m);
     if(r){ dput(d); return r; }
     if(out)*out = d;
     else dput(d);
@@ -95,6 +100,9 @@ static int dir_create(struct dentry *dir, const char *name, int isdir, uint16_t 
 static int dir_remove(struct dentry *dir, const char *name, int isdir){
     if(!dir || !dir->d_inode)return -ENOTDIR;
     struct inode *din = dir->d_inode;
+    //检查在父目录的写权限和搜索权限
+    int pr = InodePermission(din, MAY_WRITE | MAY_EXEC);
+    if(pr)return pr;
     struct dentry *d = dir_lookup(dir, name);
     if(!d)return -ENOMEM;
     int r;
@@ -114,6 +122,11 @@ static int dir_rename(struct dentry *odir, const char *oname, struct dentry *ndi
     if(oi->i_sb != ni->i_sb)return -EXDEV;
     if(!oi->i_op || !oi->i_op->rename)return -EROFS;
     if(!nname || !*nname)return -ENOENT;
+    //检查两边父目录是否都可写
+    int pr = InodePermission(oi, MAY_WRITE | MAY_EXEC);
+    if(pr)return pr;
+    pr = InodePermission(ni, MAY_WRITE | MAY_EXEC);
+    if(pr)return pr;
     struct dentry *od = dir_lookup(odir, oname);
     if(!od)return -ENOMEM;
     if(!od->d_inode){ dput(od); return -ENOENT; }
@@ -138,6 +151,13 @@ static int open_check(struct inode *ino, int flags){
 //把 dentry 变成打开文件描述; 成功时接管 d 的引用
 static int file_bind(fs_file_t *out, struct dentry *d, struct vfsmount *mnt, int flags){
     struct inode *ino = d->d_inode;
+    //打开方式决定要读权限还是写权限
+    int acc  = flags & O_ACCMODE;
+    int mask = (acc == O_WRONLY) ? MAY_WRITE
+             : (acc == O_RDWR) ? (MAY_READ | MAY_WRITE)
+             : MAY_READ;
+    int r = InodePermission(ino, mask);
+    if(r){ dput(d); return r; }
     struct file *file = FileAlloc();
     if(!file){ dput(d); return -ENOMEM; }
     file->f_inode = ino;
@@ -518,6 +538,9 @@ int FsRenameAt(struct dentry *odir, const char *oname, struct dentry *ndir, cons
 static int symlink_locked(struct dentry *dir, const char *name, const char *target){
     struct inode *din = dir->d_inode;
     if(!din || (din->i_mode & S_IFMT) != S_IFDIR)return -ENOTDIR;
+    //检查在父目录的写权限和搜索权限
+    int pr = InodePermission(din, MAY_WRITE | MAY_EXEC);
+    if(pr)return pr;
     struct dentry *d = dir_lookup(dir, name);
     if(!d)return -ENOMEM;
     int r;
@@ -570,6 +593,9 @@ static int link_locked(struct dentry *old, struct dentry *dir, const char *name)
     if(!din || (din->i_mode & S_IFMT) != S_IFDIR)return -ENOTDIR;
     if((old->d_inode->i_mode & S_IFMT) == S_IFDIR)return -EPERM;
     if(old->d_inode->i_sb != din->i_sb)return -EXDEV;
+    //检查在父目录的写权限和搜索权限
+    int pr = InodePermission(din, MAY_WRITE | MAY_EXEC);
+    if(pr)return pr;
     struct dentry *d = dir_lookup(dir, name);
     if(!d)return -ENOMEM;
     int r;
@@ -859,9 +885,122 @@ int FsAccess(const char *path, int mask){
     int r = lookup_path(path, &p);
     if(r == 0){
         struct inode *ino = p.dentry->d_inode;
-        if(ino->i_op && ino->i_op->permission)r = ino->i_op->permission(ino, mask);
+        r = InodePermission(ino, mask);
+        if(r == 0 && ino->i_op && ino->i_op->permission)r = ino->i_op->permission(ino, mask);
         dput(p.dentry);
     }
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
+//检查身份后改属性
+static int setattr_checked(struct dentry *d, struct iattr *ia){
+    if(!d || !d->d_inode)return -ENOENT;
+    struct inode *inode = d->d_inode;
+    const cred_t *c = CurrentCred();
+    if(ia->ia_valid & (ATTR_UID | ATTR_GID)){
+        if(!CredIsRoot(c))return -EPERM;
+    }else if(ia->ia_valid & ATTR_MODE){
+        if(!CredIsRoot(c) && c->euid != inode->i_uid)return -EPERM;
+    }
+    if(!inode->i_op || !inode->i_op->setattr)return -EPERM;
+    ia->ia_valid |= ATTR_CTIME;
+    ia->ia_ctime = (int64_t)rtc_get_epoch();
+    return inode->i_op->setattr(d, ia);
+}
+
+//构造chown的属性参数
+static int chown_iattr(struct iattr *ia, uint32_t uid, uint32_t gid){
+    memset(ia, 0, sizeof(*ia));
+    if(uid != (uint32_t)-1){
+        ia->ia_valid |= ATTR_UID;
+        ia->ia_uid = uid;
+    }
+    if(gid != (uint32_t)-1){
+        ia->ia_valid |= ATTR_GID;
+        ia->ia_gid = gid;
+    }
+    if(!ia->ia_valid)return -EINVAL;
+    return 0;
+}
+
+//按路径改权限位
+int FsChmod(const char *path, uint16_t mode){
+    //解析起点
+    if(!path)return -EINVAL;
+    const struct path *root = lookup_root(path);
+    if(!root)return -ENOENT;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    //解析路径
+    struct path p;
+    int r = path_lookup(path, root, LOOKUP_FOLLOW, &p);
+    if(r == 0){
+        //更改权限位
+        struct iattr ia;
+        memset(&ia, 0, sizeof(ia));
+        ia.ia_valid = ATTR_MODE;
+        ia.ia_mode  = (uint16_t)(mode & 07777);
+        r = setattr_checked(p.dentry, &ia);
+        dput(p.dentry);
+    }
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
+//按已打开的描述改权限位
+int FsChmodFd(int fd, uint16_t mode){
+    //获取目录项
+    if(!current_task || fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+    struct dentry *d = current_task->files[fd].dentry;
+    if(!d)return -EBADF;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    //更改权限位
+    struct iattr ia;
+    memset(&ia, 0, sizeof(ia));
+    ia.ia_valid = ATTR_MODE;
+    ia.ia_mode  = (uint16_t)(mode & 07777);
+    int r = setattr_checked(d, &ia);
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
+//按路径改属主/属组
+int FsChown(const char *path, uint32_t uid, uint32_t gid, int follow){
+    if(!path)return -EINVAL;
+    //构造chown的属性参数
+    struct iattr ia;
+    int r = chown_iattr(&ia, uid, gid);
+    if(r)return r;
+    //解析路径
+    const struct path *root = lookup_root(path);
+    if(!root)return -ENOENT;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    struct path p;
+    r = path_lookup(path, root, follow ? LOOKUP_FOLLOW : LOOKUP_NOFOLLOW, &p);
+    if(r == 0){
+        r = setattr_checked(p.dentry, &ia);//生效更改属主/属组
+        dput(p.dentry);
+    }
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
+//按已打开的描述改属主/属组
+int FsChownFd(int fd, uint32_t uid, uint32_t gid){
+    //构造chown的属性参数
+    struct iattr ia;
+    int r = chown_iattr(&ia, uid, gid);
+    if(r)return r;
+    //获取目录项
+    if(!current_task || fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+    struct dentry *d = current_task->files[fd].dentry;
+    if(!d)return -EBADF;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    r = setattr_checked(d, &ia);//生效更改属主/属组
     spin_unlock_irqrestore(&g_fs_lock, lk);
     return r;
 }
@@ -918,4 +1057,5 @@ void FsInit(struct disk_info *disk){
     //挂载tmpfs
     FsMkdir("/tmp", 0755);
     FsMount("tmpfs", "/tmp");
+    FsChmod("/tmp", 01777);
 }

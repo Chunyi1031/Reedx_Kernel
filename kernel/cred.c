@@ -8,6 +8,7 @@
  */
 #include <cred.h>
 #include <syscalls.h>
+#include <vfs.h>
 
 void CredRoot(cred_t *c){
     c->uid = c->euid = c->suid = CRED_ROOT_ID;
@@ -93,5 +94,25 @@ int CredSetResGid(cred_t *c, uint32_t rgid, uint32_t egid, uint32_t sgid){
     if(rgid != CRED_NO_CHANGE)c->gid  = rgid;
     if(egid != CRED_NO_CHANGE)c->egid = egid;
     if(sgid != CRED_NO_CHANGE)c->sgid = sgid;
+    return 0;
+}
+
+int CredCheckAccess(const cred_t *c, uint16_t mode, uint32_t i_uid, uint32_t i_gid, int mask){
+    if(!c)return -EPERM;
+    if(!mask)return 0;
+    //root读写都放行
+    if(CredIsRoot(c)){
+        if((mask & MAY_EXEC) && !(mode & 0111))return -EACCES;//执行要有x位
+        return 0;
+    }
+    //属主看own位,属组看group位,其余看other位
+    uint32_t bits;
+    if(c->euid == i_uid)bits = (uint32_t)((mode >> 6) & 7);
+    else if(c->egid == i_gid)bits = (uint32_t)((mode >> 3) & 7);
+    else bits = (uint32_t)(mode & 7);
+    //按要求的访问类型检查对应的权限位
+    if((mask & MAY_READ) && !(bits & 4))return -EACCES;
+    if((mask & MAY_WRITE) && !(bits & 2))return -EACCES;
+    if((mask & MAY_EXEC) && !(bits & 1))return -EACCES;
     return 0;
 }

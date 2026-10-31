@@ -11,6 +11,7 @@
 
 #include <klib.h>
 #include <syscalls.h>
+#include <cred.h>
 
 struct super_block;
 struct inode;
@@ -55,17 +56,24 @@ struct path {
 #define MAY_WRITE 0x02             // 需要写权限(w)
 #define MAY_READ  0x04             // 需要读权限(r)
 
+const cred_t *CurrentCred(void);//当前进程的身份
+int InodePermission(struct inode *inode, int mask);//按当前身份检查inode的权限位
+
 //setattr 用到的字段
 #define ATTR_MODE  0x0001          // ia_mode 有效
 #define ATTR_SIZE  0x0002          // ia_size 有效
 #define ATTR_ATIME 0x0004          // ia_atime 有效
 #define ATTR_MTIME 0x0008          // ia_mtime 有效
 #define ATTR_CTIME 0x0010          // ia_ctime 有效
+#define ATTR_UID   0x0020          // ia_uid 有效
+#define ATTR_GID   0x0040          // ia_gid 有效
 
 //属性修改参数
 struct iattr {
     uint32_t ia_valid;             //哪些字段有效(ATTR_*)
     uint16_t ia_mode;              //新权限位
+    uint32_t ia_uid;               //新属主
+    uint32_t ia_gid;               //新属组
     uint64_t ia_size;              //新文件长度
     int64_t  ia_atime;             //新访问时间(秒)
     int64_t  ia_mtime;             //新修改时间(秒)

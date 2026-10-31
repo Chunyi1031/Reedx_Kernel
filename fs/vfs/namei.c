@@ -80,8 +80,8 @@ static int walk(const char *path, const struct path *root, int to_parent,struct 
         }
         if(!cur->d_inode){ dput(cur); return -ENOENT; }
         if((cur->d_inode->i_mode & S_IFMT) != S_IFDIR){ dput(cur); return -ENOTDIR; }
-        if(cur->d_inode->i_op && cur->d_inode->i_op->permission &&
-           cur->d_inode->i_op->permission(cur->d_inode, MAY_EXEC)){
+        //进目录，检查x位
+        if(InodePermission(cur->d_inode, MAY_EXEC) || (cur->d_inode->i_op && cur->d_inode->i_op->permission && cur->d_inode->i_op->permission(cur->d_inode, MAY_EXEC))){
             dput(cur);
             return -EACCES;
         }

@@ -530,24 +530,101 @@ static long sys_sync(long a, long b, long c, long a4, long a5, long a6){
  * int fchmodat(int dirfd, const char *pathname, mode_t mode, int flags)
  * FAT32 没有权限位, 当成功处理(否则程序会因 ENOSYS 报错)
  */
+/*
+ * int chmod(const char *path, mode_t mode)
+ * 按路径修改权限位
+ */
 static long sys_chmod(long path, long mode, long a3, long a4, long a5, long a6){
-	(void)mode; (void)a3; (void)a4; (void)a5; (void)a6;
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
 	if(!path)return -EFAULT;
-	return 0;
+	char kpath[256];
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
+	return FsChmod(kpath, (uint16_t)((long)mode & 07777));
 }
 
+/*
+ * int fchmod(int fd, mode_t mode)
+ * 按fd修改权限位
+ */
 static long sys_fchmod(long fd, long mode, long a3, long a4, long a5, long a6){
-	(void)mode; (void)a3; (void)a4; (void)a5; (void)a6;
-	if(fd < 0)return -EBADF;
-	if(fd >= 3){
-		if(!current_task || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
-	}
-	return 0;
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	return FsChmodFd((int)fd, (uint16_t)((long)mode & 07777));
 }
 
+static long at_full_path(long dirfd, const char *kpath, char *out, int outsz);//把fd相对路径拼成完整路径
+
+/*
+ * int fchmodat(int dirfd, const char *pathname, mode_t mode, int flags)
+ * 按fd相对路径修改权限位
+ */
 static long sys_fchmodat(long dirfd, long path, long mode, long flags, long a5, long a6){
-	(void)dirfd; (void)path; (void)mode; (void)flags; (void)a5; (void)a6;
-	return 0;
+	(void)flags; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	if(!path)return -EFAULT;
+	char kpath[256];
+	if(strncpy_from_user(kpath,(void*)path, 256) < 0)return -EFAULT;
+	char full[256];
+	if(at_full_path(dirfd, kpath, full, (int)sizeof(full)) == 0)
+		return FsChmod(full, (uint16_t)((long)mode & 07777));
+	return FsChmod(kpath, (uint16_t)((long)mode & 07777));
+}
+
+static long do_chown(const char *path, long uid, long gid, int follow){
+	return FsChown(path, (uint32_t)uid, (uint32_t)gid, follow);
+}
+
+/*
+ * int chown(const char *path, uid_t uid, gid_t gid)
+ * 按路径改属主属组
+ */
+static long sys_chown(long path, long uid, long gid, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	if(!path)return -EFAULT;
+	char kpath[256];
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
+	return do_chown(kpath, uid, gid, 1);
+}
+
+/*
+ * int lchown(const char *path, uid_t uid, gid_t gid)
+ * 不跟随符号链接
+ */
+static long sys_lchown(long path, long uid, long gid, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	if(!path)return -EFAULT;
+	char kpath[256];
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
+	return do_chown(kpath, uid, gid, 0);
+}
+
+/*
+ * int fchown(int fd, uid_t uid, gid_t gid)
+ * 按fd改属主属组
+ */
+static long sys_fchown(long fd, long uid, long gid, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	return FsChownFd((int)fd, (uint32_t)uid, (uint32_t)gid);
+}
+
+/*
+ * int fchownat(int dirfd, const char *path, uid_t uid, gid_t gid, int flags)
+ * 按fd相对路径改属主属组
+ */
+static long sys_fchownat(long dirfd, long path, long uid, long gid, long flags, long a6){
+	(void)a6;
+	if(!current_task)return -EPERM;
+	if(!path)return -EFAULT;
+	char kpath[256];
+	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
+	int follow = ((long)flags & AT_SYMLINK_NOFOLLOW) ? 0 : 1;
+	char full[256];
+	if(at_full_path(dirfd, kpath, full, (int)sizeof(full)) == 0)return do_chown(full, uid, gid, follow);
+	return do_chown(kpath, uid, gid, follow);
 }
 
 /*
@@ -931,7 +1008,6 @@ static long sys_statx(long dirfd, long path, long flags, long mask, long buf, lo
 
 /*
  * int access(const char *path, int mode)
- * 权限暂不检查, 只检查存在性(F_OK=0)
  */
 static long sys_access(long path, long mode, long a3, long a4, long a5, long a6){
 	(void)mode; (void)a3; (void)a4; (void)a5; (void)a6;
@@ -939,7 +1015,12 @@ static long sys_access(long path, long mode, long a3, long a4, long a5, long a6)
 	if(!path)return -EFAULT;
 	char kpath[256];
 	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
-	return FsAccess(kpath, 0);
+	//R_OK/W_OK/X_OK换算成 MAY_*,F_OK(0)
+	int mask = 0;
+	if(mode & 4)mask |= MAY_READ;
+	if(mode & 2)mask |= MAY_WRITE;
+	if(mode & 1)mask |= MAY_EXEC;
+	return FsAccess(kpath, mask);
 }
 
 /*
@@ -2390,6 +2471,10 @@ void InitSyscall(void){
 	syscall_table[SYS_CHMOD]      = sys_chmod;
 	syscall_table[SYS_FCHMOD]     = sys_fchmod;
 	syscall_table[SYS_FCHMODAT]   = sys_fchmodat;
+	syscall_table[SYS_CHOWN]      = sys_chown;
+	syscall_table[SYS_FCHOWN]     = sys_fchown;
+	syscall_table[SYS_LCHOWN]     = sys_lchown;
+	syscall_table[SYS_FCHOWNAT]   = sys_fchownat;
 	syscall_table[SYS_UMASK]      = sys_umask;
 	syscall_table[SYS_UNLINK]     = sys_unlink;
 	syscall_table[SYS_UNLINKAT]   = sys_unlinkat;

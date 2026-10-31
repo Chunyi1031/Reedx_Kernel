@@ -57,4 +57,8 @@ int  printk(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void print_to_console(int count);
 void panic(const char* fmt, ...);
 
+struct exc_frame;
+void panic_enter(const char *msg, uint64_t ra) __attribute__((noreturn));//panic汇编入口
+void panic_report(struct exc_frame *f, const char *msg) __attribute__((noreturn));//用printk打出消息与整帧寄存器
+
 #endif

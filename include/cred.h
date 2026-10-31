@@ -26,6 +26,7 @@ void CredRoot(cred_t *c);//把身份设成root的默认值
 void CredCopy(cred_t *dst, const cred_t *src);//复制一份身份
 _Bool CredIsRoot(const cred_t *c);//获取有效用户ID是不是root
 _Bool CredMaySetId(const cred_t *c, uint32_t id);//获取当前身份能不能切换到id
+int CredCheckAccess(const cred_t *c, uint16_t mode, uint32_t i_uid, uint32_t i_gid, int mask);//按属主/属组/其他的权限位判断能否访问
 int CredSetUid(cred_t *c, uint32_t uid);//setuid(2)
 int CredSetGid(cred_t *c, uint32_t gid);//setgid(2)
 int CredSetReUid(cred_t *c, uint32_t ruid, uint32_t euid);//setreuid(2)

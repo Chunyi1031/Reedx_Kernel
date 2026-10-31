@@ -73,12 +73,46 @@ static int exc_to_signal(uint32_t vector){
 	}
 }
 
+//读控制寄存器, 崩溃现场里一起打出来
+static inline uint64_t read_cr0(void){ uint64_t v; __asm__ volatile("mov %%cr0,%0" : "=r"(v)); return v; }
+static inline uint64_t read_cr2(void){ uint64_t v; __asm__ volatile("mov %%cr2,%0" : "=r"(v)); return v; }
+static inline uint64_t read_cr3(void){ uint64_t v; __asm__ volatile("mov %%cr3,%0" : "=r"(v)); return v; }
+static inline uint64_t read_cr4(void){ uint64_t v; __asm__ volatile("mov %%cr4,%0" : "=r"(v)); return v; }
+
+//崩溃信息同时打到屏幕和串口
+static void panic_print(const char *fmt, ...){
+        char buf[256];
+        __builtin_va_list args;
+        __builtin_va_start(args, fmt);
+        vsprintf(buf, fmt, args);
+        __builtin_va_end(args);
+        TTY_Print(buf, CurrentConsoleStyle.TextColor);
+        SerialWriteString(SERIAL_COM1, buf);
+}
+
+//把整帧寄存器与控制寄存器打出来
+static void dump_frame(const char *reason, const exc_frame_t *f){
+        panic_print("\n==:( KERNEL CRASH: %s ):===\n", reason);
+        panic_print("vector=%u errcode=%p\n", (unsigned)f->vector, (void*)f->errcode);
+        panic_print("RAX=%p RBX=%p RCX=%p RDX=%p\n", (void*)f->rax, (void*)f->rbx, (void*)f->rcx, (void*)f->rdx);
+        panic_print("RSI=%p RDI=%p RBP=%p RSP=%p\n", (void*)f->rsi, (void*)f->rdi, (void*)f->rbp, (void*)f->rsp);
+        panic_print("R8 =%p R9 =%p R10=%p R11=%p\n", (void*)f->r8, (void*)f->r9, (void*)f->r10, (void*)f->r11);
+        panic_print("R12=%p R13=%p R14=%p R15=%p\n", (void*)f->r12, (void*)f->r13, (void*)f->r14, (void*)f->r15);
+        panic_print("RIP=%p CS=%p RFLAGS=%p SS=%p\n", (void*)f->rip, (void*)f->cs, (void*)f->rflags, (void*)f->ss);
+        panic_print("CR0=%p CR2=%p CR3=%p CR4=%p\n", (void*)read_cr0(), (void*)read_cr2(), (void*)read_cr3(), (void*)read_cr4());
+        if(current_task)panic_print("task: pid=%d name=%s kstack=%p\n",(int)current_task->pid, current_task->name, current_task->kernel_stack);
+        else panic_print("task: none\n");
+}
+
 //异常公共分发函数
-void exc_dispatch(uint32_t vector,uintptr_t rip,uint64_t cs){
+void exc_dispatch(exc_frame_t *f){
+	uint32_t vector = (uint32_t)f->vector;
+	uintptr_t rip   = (uintptr_t)f->rip;
+	uint64_t cs     = f->cs;
 	if (vector < NUM_EXCEPTION_VECTORS){
 		if(vector == INT_GATE_NMI){
 			static volatile uint64_t nmi_counter = 0;
-    		nmi_counter++;
+			nmi_counter++;
 			return;
 		}
 		if((cs & 3) == 3){
@@ -87,7 +121,7 @@ void exc_dispatch(uint32_t vector,uintptr_t rip,uint64_t cs){
 			user_exception_exit(exc_to_signal(vector));
 		}
 		print_error();
-		early_printk("%s at RIP=%p\n",exception_names[vector],rip);
+		dump_frame(exception_names[vector], f);
 	}else{
 		SerialWriteString(SERIAL_COM1,"Unknown exception");
 		return;
@@ -145,7 +179,10 @@ static int do_wp_page(mm_struct *mm, uintptr_t fault_addr){
 	return 0;
 }
 
-void interrupt_PF(uint64_t fault_addr, uint64_t error_code, uintptr_t rip, uintptr_t user_rsp){
+void interrupt_PF(exc_frame_t *f){
+	uint64_t fault_addr = read_cr2();
+	uint64_t error_code = f->errcode;
+	uintptr_t rip       = (uintptr_t)f->rip;
 	//按需分页：用户态、页不存在、非保留位错误
 	if ((error_code & PF_ERR_USER) && !(error_code & PF_ERR_PRESENT) && !(error_code & PF_ERR_RSVD)) {
 		if (current_task && current_task->mm) {
@@ -185,12 +222,10 @@ pf_error:
 	//用户态缺页且无法处理
 	if(error_code & PF_ERR_USER){
 		early_printk("%s [USER] pid=%d RIP=%p CR2=%p ec=%X\n",exception_names[INT_GATE_PF],current_task?(int)current_task->pid:-1,rip,fault_addr,error_code);
-		(void)user_rsp;
 		user_exception_exit(SIGSEGV);
 	}
 	print_error();
-	early_printk("%s pid=%d\nRIP=%p CR2=%p Error Code=%X\n",exception_names[INT_GATE_PF],current_task?(int)current_task->pid:-1,rip,fault_addr,error_code);
-	(void)user_rsp;
+	dump_frame(exception_names[INT_GATE_PF], f);
 	TTY_Print(error_code & PF_ERR_USER ? "[USER]" : "[SUPER]", error_code & PF_ERR_USER ? COLOR_YELLOW : COLOR_CYAN);
 	TTY_Print(error_code & PF_ERR_WRITE ? "[WRITE]" : "[READ]", COLOR_YELLOW);
 	TTY_Print(error_code & PF_ERR_EXEC ? "[EXEC]" : "", COLOR_YELLOW);
@@ -205,20 +240,23 @@ pf_error:
 volatile uintptr_t gp_recover_ip = 0;
 volatile uint64_t gp_probe_active = 0;
 
-void interrupt_GP(uint64_t error_code, uint64_t rip, uint64_t cs){
-    if(gp_probe_active && gp_recover_ip){
-        gp_probe_active = 0;//汇编handler检测gp_recover_ip非零后跳转恢复
-        return;
-    }
+void interrupt_GP(exc_frame_t *f){
+	uint64_t error_code = f->errcode;
+	uintptr_t rip       = (uintptr_t)f->rip;
+	uint64_t cs         = f->cs;
+	if(gp_probe_active && gp_recover_ip){
+		gp_probe_active = 0;
+		return;
+	}
 	//用户态#GP
-    if((cs & 3) == 3){
-        early_printk("%s [USER] pid=%d ec=%p RIP=%p\n",exception_names[INT_GATE_GP],current_task?(int)current_task->pid:-1,error_code,rip);
-        user_exception_exit(SIGSEGV);
-    }
-    print_error();
-	early_printk("%s\nError Code=%p RIP=%p\n",exception_names[INT_GATE_GP],error_code,rip);
+	if((cs & 3) == 3){
+		early_printk("%s [USER] pid=%d ec=%p RIP=%p\n",exception_names[INT_GATE_GP],current_task?(int)current_task->pid:-1,error_code,rip);
+		user_exception_exit(SIGSEGV);
+	}
+	print_error();
+	dump_frame(exception_names[INT_GATE_GP], f);
 	DrawString("The machine needs to restart\n",SYSTEM_ScreenInfo.Width/2-145,SYSTEM_ScreenInfo.Height/2-8,COLOR_YELLOW);
-    SYSTEM_STOP();
+	SYSTEM_STOP();
 }
 
 void setup_exceptions(void){

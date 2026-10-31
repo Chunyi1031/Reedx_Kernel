@@ -27,6 +27,53 @@
 .type int_14_handler, @function
 .type int_13_handler, @function
 .align 16
+
+/*
+ * panic_enter — 软件 panic 的汇编入口
+ * 调用时 %rdi = 消息指针, %rsi = panic 的调用点地址。这里按 exc_frame_t 的
+ * 布局摆好一帧再交给 C, 让 panic 打出来的现场和硬件异常是同一套格式。
+ */
+.globl panic_enter
+.type panic_enter, @function
+panic_enter:
+	subq $192, %rsp			/* 192 是 exc_frame_t(184) 向上取整, 留对齐余量 */
+	movq %r15, 8(%rsp)
+	movq %r14, 16(%rsp)
+	movq %r13, 24(%rsp)
+	movq %r12, 32(%rsp)
+	movq %r11, 40(%rsp)
+	movq %r10, 48(%rsp)
+	movq %r9,  56(%rsp)
+	movq %r8,  64(%rsp)
+	movq %rbp, 72(%rsp)
+	movq %rdi, 80(%rsp)		/* 消息指针稍后还要用, 先存现场 */
+	movq %rsi, 88(%rsp)		/* panic 的调用点地址 */
+	movq %rdx, 96(%rsp)
+	movq %rcx, 104(%rsp)
+	movq %rbx, 112(%rsp)
+	movq %rax, 120(%rsp)
+	movq $0xFF, 128(%rsp)		/* vector: 标记这是软件 panic, 不是硬件异常 */
+	movq $0, 136(%rsp)		/* errcode */
+	movq 88(%rsp), %rax
+	movq %rax, 144(%rsp)		/* rip = panic 的调用点 */
+	xorq %rax, %rax
+	movw %cs, %ax
+	movq %rax, 152(%rsp)		/* cs */
+	pushfq
+	popq %rax
+	movq %rax, 160(%rsp)		/* rflags */
+	leaq 200(%rsp), %rax
+	movq %rax, 168(%rsp)		/* rsp = 调用 panic 时的栈顶 */
+	xorq %rax, %rax
+	movw %ss, %ax
+	movq %rax, 176(%rsp)		/* ss */
+	movq 80(%rsp), %rsi		/* 第二个参数: 消息指针 */
+	movq %rsp, %rdi			/* 第一个参数: 帧指针 */
+	andq $-16, %rsp			/* 调用前把栈对齐 */
+	call panic_report
+	hlt				/* panic_report 不返回, 这里只是保险 */
+
+.align 16
 exc_entries_start:
 	.set i, 0
 	.rept NUM_EXCEPTION_VECTORS
@@ -45,7 +92,8 @@ exc_entries_start:
 
 /*
  * exc_common_handler — 异常公共入口
- * 后续 push 15 个寄存器 + sub $8 对齐后，vec_num 位于 RSP+128。
+ * 后续 push 15 个寄存器 + sub $8 对齐后，栈帧就与 exc_frame_t 一一对应，
+ * 直接把 %rsp 当参数交给 exc_dispatch。
  */
 exc_common_handler:
 	cli
@@ -65,9 +113,7 @@ exc_common_handler:
 	pushq %r14
 	pushq %r15
 	subq $8, %rsp
-	movq 128(%rsp), %rdi
-	movq 144(%rsp), %rsi
-	movq 152(%rsp), %rdx
+	movq %rsp, %rdi
 	call exc_dispatch
 	addq $8, %rsp
 	popq %r15
@@ -91,13 +137,14 @@ exc_common_handler:
 
 int_13_handler:
 	cli
+	pushq $13				/* 向量号, 让栈帧与公共入口一致 */
 	pushq %rax
+	pushq %rbx
 	pushq %rcx
 	pushq %rdx
-	pushq %rbx
-	pushq %rbp
 	pushq %rsi
 	pushq %rdi
+	pushq %rbp
 	pushq %r8
 	pushq %r9
 	pushq %r10
@@ -106,15 +153,13 @@ int_13_handler:
 	pushq %r13
 	pushq %r14
 	pushq %r15
-	sub $8, %rsp
-	movq 128(%rsp), %rdi
-	movq 136(%rsp), %rsi
-	movq 144(%rsp), %rdx
+	subq $8, %rsp
+	movq %rsp, %rdi
 	call interrupt_GP
 	movq gp_recover_ip(%rip), %rax
 	testq %rax, %rax
 	jz 1f
-	movq %rax, 136(%rsp)
+	movq %rax, 144(%rsp)
 	movq $0, gp_recover_ip(%rip)
 	addq $8, %rsp
 	popq %r15
@@ -125,27 +170,28 @@ int_13_handler:
 	popq %r10
 	popq %r9
 	popq %r8
+	popq %rbp
 	popq %rdi
 	popq %rsi
-	popq %rbp
-	popq %rbx
 	popq %rdx
 	popq %rcx
+	popq %rbx
 	popq %rax
-	addq $8, %rsp
+	addq $16, %rsp
 	iretq
 1:
 	ud2
 
 int_14_handler:
 	cli
+	pushq $14
 	pushq %rax
+	pushq %rbx
 	pushq %rcx
 	pushq %rdx
-	pushq %rbx
-	pushq %rbp
 	pushq %rsi
 	pushq %rdi
+	pushq %rbp
 	pushq %r8
 	pushq %r9
 	pushq %r10
@@ -154,11 +200,8 @@ int_14_handler:
 	pushq %r13
 	pushq %r14
 	pushq %r15
-	sub $8, %rsp 
-	mov %cr2, %rdi
-	movq 128(%rsp), %rsi
-	movq 136(%rsp), %rdx
-	movq 160(%rsp), %rcx
+	subq $8, %rsp
+	movq %rsp, %rdi
 	call interrupt_PF
 	addq $8, %rsp
 	popq %r15
@@ -169,13 +212,13 @@ int_14_handler:
 	popq %r10
 	popq %r9
 	popq %r8
+	popq %rbp
 	popq %rdi
 	popq %rsi
-	popq %rbp
-	popq %rbx
 	popq %rdx
 	popq %rcx
+	popq %rbx
 	popq %rax
-	addq $8, %rsp
+	addq $16, %rsp
 	iretq
 	sti

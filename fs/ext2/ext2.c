@@ -746,6 +746,8 @@ static uint32_t ext2_alloc_inode(struct super_block *sb, uint16_t mode, int isdi
         memset(&di, 0, sizeof(di));
         uint64_t now = rtc_get_epoch();
         di.i_mode        = mode;
+        di.i_uid         = (uint16_t)CurrentCred()->euid;
+        di.i_gid         = (uint16_t)CurrentCred()->egid;
         di.i_links_count = 1;
         di.i_size        = 0;
         di.i_atime       = (uint32_t)now;
@@ -1249,6 +1251,8 @@ static int ext2_setattr(struct dentry *dentry, void *iattr){
     }
     if(ia->ia_valid & ATTR_MODE)
         inode->i_mode = (uint16_t)((inode->i_mode & S_IFMT) | (ia->ia_mode & 07777));
+    if(ia->ia_valid & ATTR_UID)inode->i_uid = ia->ia_uid;
+    if(ia->ia_valid & ATTR_GID)inode->i_gid = ia->ia_gid;
     if(ia->ia_valid & ATTR_ATIME){ inode->i_atime_s = ia->ia_atime; inode->i_atime_ns = 0; }
     if(ia->ia_valid & ATTR_MTIME){ inode->i_mtime_s = ia->ia_mtime; inode->i_mtime_ns = 0; }
     if(ia->ia_valid & ATTR_CTIME){ inode->i_ctime_s = ia->ia_ctime; inode->i_ctime_ns = 0; }

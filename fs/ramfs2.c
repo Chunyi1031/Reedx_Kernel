@@ -127,8 +127,8 @@ static struct inode *ramfs_new_inode(struct inode *dir, uint16_t mode){
     struct inode *inode = IgetLocked(sb, sb->s_ino_next ++);
     if(!inode)return NULL;
     inode->i_mode  = mode;
-    inode->i_uid   = 0;
-    inode->i_gid   = 0;
+    inode->i_uid   = CurrentCred()->euid;
+    inode->i_gid   = CurrentCred()->egid;
     inode->i_nlink = 1;
     inode->i_op    = dir->i_op;
     inode->i_fop   = &g_ramfs_fops;
@@ -230,8 +230,13 @@ static int ramfs_getattr(const struct path *path, struct stat *st){
 }
 
 static int ramfs_setattr(struct dentry *dentry, void *iattr){
-    (void)iattr;   //权限/属主在 1C 里统一实现
-    if(!dentry || !dentry->d_inode)return -ENOENT;
+    if(!dentry || !dentry->d_inode || !iattr)return -EINVAL;
+    struct inode *inode = dentry->d_inode;
+    struct iattr *ia = (struct iattr*)iattr;
+    if(ia->ia_valid & ATTR_MODE)inode->i_mode = (uint16_t)((inode->i_mode & S_IFMT) | (ia->ia_mode & 07777));
+    if(ia->ia_valid & ATTR_UID)inode->i_uid = ia->ia_uid;
+    if(ia->ia_valid & ATTR_GID)inode->i_gid = ia->ia_gid;
+    if(ia->ia_valid & ATTR_CTIME)inode->i_ctime_s = ia->ia_ctime;
     return 0;
 }
 

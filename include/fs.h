@@ -110,6 +110,10 @@ int FsSymlink(const char *target, const char *linkpath);//建符号链接
 int FsSymlinkAt(struct dentry *dir, const char *name, const char *target);//在dir目录下建符号链接
 int FsLink(const char *oldpath, const char *newpath, int follow);//给已有文件再挂一个名字(硬链接)
 int FsLinkAt(struct dentry *odir, const char *oname, struct dentry *ndir, const char *nname);//在两个目录dentry之间建硬链接
+int FsChmod(const char *path, uint16_t mode);//按路径改权限位
+int FsChmodFd(int fd, uint16_t mode);//按文件描述符改权限位
+int FsChown(const char *path, uint32_t uid, uint32_t gid, int follow);//按路径改属主/属组
+int FsChownFd(int fd, uint32_t uid, uint32_t gid);//按文件描述符改属主/属组
 int FsReadlink(const char *path, char *buf, int size);//读符号链接目标,返回长度
 int FsStat(const char *path, struct stat *st);//按路径取属性(跟随符号链接)
 int FsLstat(const char *path, struct stat *st);//按路径取属性(不跟随符号链接)
