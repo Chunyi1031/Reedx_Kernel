@@ -266,6 +266,7 @@ void             VfsDumpMounts(void);
 //路径解析
 int path_lookup(const char *path, const struct path *root, unsigned flags, struct path *out);//解析完整路径
 int path_lookup_parent(const char *path, const struct path *root, struct path *out,char *name, int namesz);//只解析到父目录
+const struct path *VfsRoot(void);//获取当前VFS根
 int d_path(const struct path *p, char *buf, int size);//把 dentry 还原成绝对路径
 
 #endif

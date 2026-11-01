@@ -9,6 +9,8 @@
 #include <vfs.h>
 #include <print.h>
 
+const struct path *VfsRoot(void) __attribute__((weak));
+
 //取下一段名字,返回长度
 static int next_component(const char **pp, char *name, int max){
     const char *p = *pp;
@@ -32,7 +34,7 @@ static int next_component(const char **pp, char *name, int max){
 #define SYMLINK_PATH_MAX 256  //展开后的路径缓冲(受内核栈大小限制)
 
 //逐段解析
-static int walk(const char *path, const struct path *root, int to_parent,struct path *out, char *last_name, int namesz, unsigned flags, int depth){
+static int walk(const char *path, const struct path *root, const struct path *rootpath, int to_parent,struct path *out, char *last_name, int namesz, unsigned flags, int depth){
     if(!path || !root || !root->mnt || !root->dentry)return -EINVAL;
     struct vfsmount *mnt = root->mnt;
     struct dentry   *cur = dget(root->dentry);
@@ -123,12 +125,20 @@ static int walk(const char *path, const struct path *root, int to_parent,struct 
             memcpy(npath, target, (size_t)tl);
             if(rl){ npath[tl] = '/'; memcpy(npath + tl + 1, rest, (size_t)rl); npath[tl + 1 + rl] = 0; }
             else  npath[tl] = 0;
-            //绝对目标从 root 解析, 相对目标从链接所在目录解析
+            //绝对目标从进程根解析,相对目标从链接所在目录解析
             struct path nroot;
-            if(target[0] == '/'){ nroot.mnt = root->mnt;    nroot.dentry = dget(root->dentry); }
-            else                { nroot.mnt = mnt;          nroot.dentry = cur; }
+            if(target[0] == '/' && rootpath){
+                nroot.mnt = rootpath->mnt;
+                nroot.dentry = dget(rootpath->dentry);
+            }else if(target[0] == '/'){
+                nroot.mnt = root->mnt;
+                nroot.dentry = dget(root->dentry);
+            }else{
+                nroot.mnt = mnt;
+                nroot.dentry = cur;
+            }
             dput(next);
-            int nr = walk(npath, &nroot, to_parent, out, last_name, namesz, flags, depth + 1);
+            int nr = walk(npath, &nroot, rootpath, to_parent, out, last_name, namesz, flags, depth + 1);
             dput(nroot.dentry);
             return nr;
         }
@@ -148,7 +158,8 @@ int path_lookup(const char *path, const struct path *root, unsigned flags, struc
     out->dentry = NULL;
     out->mnt = NULL;
     //解析路径
-    int ec = walk(path,root,0,out,NULL,0,flags,0);
+    const struct path *rp = VfsRoot ? VfsRoot() : root;
+    int ec = walk(path,root,rp ? rp : root,0,out,NULL,0,flags,0);
     if(ec != 0)return ec;
     //负缓存
     if(!out->dentry->d_inode){
@@ -179,7 +190,8 @@ int path_lookup_parent(const char *path, const struct path *root, struct path *o
     out->mnt = NULL;
     out->dentry = NULL;
     //解析路径到父目录
-    int ec = walk(path, root, 1, out, name, namesz, LOOKUP_FOLLOW, 0);
+    const struct path *rp = VfsRoot ? VfsRoot() : root;
+    int ec = walk(path, root, rp ? rp : root, 1, out, name, namesz, LOOKUP_FOLLOW, 0);
     if(ec)return ec;
     //父目录必须存在且是目录
     if(!out->dentry->d_inode || ((out->dentry->d_inode->i_mode & S_IFMT) != S_IFDIR)){

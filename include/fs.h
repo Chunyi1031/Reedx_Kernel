@@ -170,4 +170,8 @@ struct dentry *DevFsFillSuper(struct super_block *sb);
 uint32_t ProcFsInodeSize(void);
 const struct super_operations *ProcFsSuperOps(void);
 struct dentry *ProcFsFillSuper(struct super_block *sb);
+//sysfs
+uint32_t SysFsInodeSize(void);
+const struct super_operations *SysFsSuperOps(void);
+struct dentry *SysFsFillSuper(struct super_block *sb);
 #endif

@@ -2618,4 +2618,5 @@ void InitSyscall(void){
 	wrmsr(IA32_LSTAR, (uint64_t)syscall_entry);//入口RIP
 	wrmsr(IA32_FMASK, 0x700);//进入内核时清除TF|IF|DF
 	printk(PRINTK_INFO"Syscalls ready");
+	printk(PRINTK_INFO"build stamp: %s %s", __DATE__, __TIME__);
 }

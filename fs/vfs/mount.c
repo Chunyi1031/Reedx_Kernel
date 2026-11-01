@@ -157,6 +157,7 @@ int VfsMountNew(struct vfsmount *parent, struct dentry *mountpoint, const char *
     //检查参数与挂载点
     if(!parent || !mountpoint || !type)return -EINVAL;
     if((mountpoint->d_inode->i_mode & S_IFMT) != S_IFDIR)return -ENOTDIR;
+    if(strcmp(type, "proc") == 0)type = "procfs";
     //新建一个超级块,并把它的根目录dentry建出来
     struct super_block *sb = NULL;
     struct dentry *root = NULL;
@@ -168,6 +169,10 @@ int VfsMountNew(struct vfsmount *parent, struct dentry *mountpoint, const char *
         sb = SuperAlloc("procfs", 0x9FA0, ProcFsInodeSize(), ProcFsSuperOps());
         if(!sb)return -ENOMEM;
         root = ProcFsFillSuper(sb);
+    }else if(strcmp(type, "sysfs") == 0){
+        sb = SuperAlloc("sysfs", 0x62656572, SysFsInodeSize(), SysFsSuperOps());
+        if(!sb)return -ENOMEM;
+        root = SysFsFillSuper(sb);
     }else if(strcmp(type, "ramfs") == 0 || strcmp(type, "tmpfs") == 0){
         sb = SuperAlloc("ramfs", 0x01021994, Ramfs2InodeSize(), Ramfs2SuperOps());
         if(!sb)return -ENOMEM;

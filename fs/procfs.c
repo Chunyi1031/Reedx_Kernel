@@ -28,13 +28,16 @@ enum {
     PROC_K_STATUS,    //进程状态
     PROC_K_CMDLINE,   //命令行
     PROC_K_STAT,      //进程stat行
+    PROC_K_FDDIR,     //进程fd目录
+    PROC_K_FDLINK,    //单个fd的符号链接
 };
 
 //每个proc inode的私有信息
 typedef struct proc_inode_info {
     uint32_t kind;//本inode的种类(PROC_K_*)
     uint32_t pid; //进程相关文件的pid
-    char     link[16];//符号链接的目标
+    uint32_t fd;  //fd相关文件的描述符
+    char     link[256];//符号链接的目标
 } proc_inode_info_t;
 
 #define PROC_INFO(ino) ((proc_inode_info_t*)(ino)->i_private)
@@ -44,6 +47,8 @@ typedef struct proc_inode_info {
 #define PROC_INO_FIXED(k)    ((uint64_t)(2 + (k)))
 #define PROC_INO_PID(p)      ((uint64_t)((uint64_t)(p) * 16 + 8))
 #define PROC_INO_PIDFILE(p,k)((uint64_t)((uint64_t)(p) * 16 + 8 + (k)))
+#define PROC_INO_FDDIR(p)    ((uint64_t)((uint64_t)(p) * 16 + 8 + 4))
+#define PROC_INO_FDLINK(p,f) ((uint64_t)(0x10000000ULL + (uint64_t)(p) * 1024 + (uint64_t)(f)))
 
 //根目录下的固定文件
 static const struct {
@@ -86,6 +91,17 @@ static int proc_parse_pid(const char *name, uint32_t len){
     return (int)v;
 }
 
+//把名字解析成非负十进制数
+static int proc_parse_num(const char *name, uint32_t len){
+    if(!len || len > 10)return -1;
+    uint32_t v = 0;
+    for(uint32_t i = 0;i < len;i ++){
+        if(name[i] < '0' || name[i] > '9')return -1;
+        v = v * 10 + (uint32_t)(name[i] - '0');
+    }
+    return (int)v;
+}
+
 //按(kind, pid)建或取回inode
 static struct inode *proc_iget(struct super_block *sb, uint64_t ino, uint32_t kind, uint32_t pid){
     struct inode *inode = IgetLocked(sb, ino);
@@ -95,12 +111,13 @@ static struct inode *proc_iget(struct super_block *sb, uint64_t ino, uint32_t ki
     if(!ii)return NULL;
     ii->kind = kind;
     ii->pid  = pid;
+    ii->fd   = 0;
     ii->link[0] = 0;
     //设置inode的属性
     inode->i_uid = 0;
     inode->i_gid = 0;
     //进程目录的属主取进程自己
-    if(kind == PROC_K_PIDDIR){
+    if(kind == PROC_K_PIDDIR || kind == PROC_K_FDDIR){
         task_struct *t = TaskFind((pid_t)pid);
         if(t){
             inode->i_uid = t->cred.euid;
@@ -111,13 +128,13 @@ static struct inode *proc_iget(struct super_block *sb, uint64_t ino, uint32_t ki
     inode->i_nlink = 1;
     inode->i_fop = &g_proc_file_fops;
     //根目录或或进程目录，设置为目录
-    if(kind == PROC_K_ROOT || kind == PROC_K_PIDDIR){
+    if(kind == PROC_K_ROOT || kind == PROC_K_PIDDIR || kind == PROC_K_FDDIR){
         inode->i_mode = (uint16_t)(S_IFDIR | 0555);
         inode->i_nlink = 2;
         inode->i_op = &g_proc_dir_iops;
         inode->i_fop = &g_proc_dir_fops;
     //符号链接
-    }else if(kind == PROC_K_SELF){
+    }else if(kind == PROC_K_SELF || kind == PROC_K_FDLINK){
         inode->i_mode = (uint16_t)(S_IFLNK | 0777);
         inode->i_op = &g_proc_link_iops;
         inode->i_fop = NULL;
@@ -192,7 +209,7 @@ static void proc_mounts_one(struct vfsmount *m, void *ctx){
         p.dentry = m->mnt_root;
         p.mnt = NULL;
     }
-    if(d_path(&p,path,((int)sizeof(path)) < 0))return;
+    if(d_path(&p, path, (int)sizeof(path)) < 0)return;
     const char *type = (m->mnt_sb && m->mnt_sb->s_type_name[0]) ? m->mnt_sb->s_type_name : "unknown";
     int n = sprintf(c->buf + c->len, "%s %s %s rw 0 0\n",path,type,type);
     if(n > 0)c->len += n;
@@ -282,24 +299,45 @@ static int64_t proc_read(struct file *f, char *buf, uint64_t len, uint64_t *pos)
     return (int64_t)k;
 }
 
-//self的目标
-static int proc_self_get_link(struct dentry *dentry, struct inode *inode, const char **target){
+//符号链接的目标
+static int proc_get_link(struct dentry *dentry, struct inode *inode, const char **target){
     (void)dentry;
     proc_inode_info_t *ii = inode ? PROC_INFO(inode) : NULL;
     if(!ii || !target)return -EINVAL;
-    int pid = current_task ? (int)current_task->pid : 0;
-    sprintf(ii->link, "%d", pid);
-    *target = ii->link;
-    return 0;
+    ii->link[0] = 0;
+    if(ii->kind == PROC_K_SELF){
+        int pid = current_task ? (int)current_task->pid : 0;
+        sprintf(ii->link, "%d", pid);
+        *target = ii->link;
+        return 0;
+    }
+    if(ii->kind == PROC_K_FDLINK){
+        task_struct *t = TaskFind((pid_t)ii->pid);
+        if(!t)return -ESRCH;
+        if(ii->fd >= (uint32_t)MAX_FD || !t->files[ii->fd].used)return -ENOENT;
+        fs_file_t *ff = &t->files[ii->fd];
+        if(ff->dentry){
+            struct path p;
+            p.dentry = ff->dentry;
+            p.mnt    = ff->mnt;
+            if(d_path(&p, ii->link, (int)sizeof(ii->link)) < 0)ii->link[0] = 0;
+        }
+        if(!ii->link[0])sprintf(ii->link, "anon_inode:[%d]", (int)ii->fd);
+        *target = ii->link;
+        return 0;
+    }
+    return -EINVAL;
 }
 
 //按名字造一个inode并挂到dentry上
-static struct dentry *proc_add(struct inode *dir,struct dentry *dentry,uint64_t ino,uint32_t kind,uint32_t pid){
+static struct dentry *proc_add(struct inode *dir,struct dentry *dentry,uint64_t ino,uint32_t kind,uint32_t pid,uint32_t fd){
     struct inode *inode = proc_iget(dir->i_sb, ino, kind, pid);
     if(!inode){
         d_add(dentry, NULL);
         return NULL;
     }
+    proc_inode_info_t *ii = PROC_INFO(inode);
+    if(ii)ii->fd = fd;
     d_add(dentry, inode);
     Iput(inode);
     return dentry;
@@ -317,22 +355,29 @@ static struct dentry *proc_lookup(struct inode *dir, struct dentry *dentry, unsi
     uint32_t len = dentry->d_name_len;
     //根目录下的文件或目录
     if(di->kind == PROC_K_ROOT){
-        if(len == 4 && memcmp(name, "self", 4) == 0)return proc_add(dir, dentry, PROC_INO_FIXED(PROC_NFILES), PROC_K_SELF, 0);
+        if(len == 4 && memcmp(name, "self", 4) == 0)return proc_add(dir, dentry, PROC_INO_FIXED(PROC_NFILES), PROC_K_SELF, 0, 0);
         //固定文件
         for(int i = 0;i < PROC_NFILES;i ++){
-            if((strlen(g_proc_files[i].name) == len) && (memcmp(g_proc_files[i].name, name, len) == 0))return proc_add(dir, dentry, PROC_INO_FIXED(i), g_proc_files[i].kind, 0);
+            if((strlen(g_proc_files[i].name) == len) && (memcmp(g_proc_files[i].name, name, len) == 0))return proc_add(dir, dentry, PROC_INO_FIXED(i), g_proc_files[i].kind, 0, 0);
         }
         //进程目录
         int pid = proc_parse_pid(name, len);
-        if(pid > 0 && TaskFind((pid_t)pid))return proc_add(dir, dentry, PROC_INO_PID(pid), PROC_K_PIDDIR, (uint32_t)pid);
+        if(pid > 0 && TaskFind((pid_t)pid))return proc_add(dir, dentry, PROC_INO_PID(pid), PROC_K_PIDDIR, (uint32_t)pid, 0);
     //进程目录下的文件
     }else if(di->kind == PROC_K_PIDDIR){
         for(int i = 0;i < PROC_NPIDFILES;i ++){
             if((strlen(g_proc_pidfiles[i].name) == len) && (memcmp(g_proc_pidfiles[i].name, name, len) == 0)){
                 if(!TaskFind((pid_t)di->pid))break;
-                return (proc_add(dir, dentry, PROC_INO_PIDFILE(di->pid, i + 1),g_proc_pidfiles[i].kind, di->pid));
+                return (proc_add(dir, dentry, PROC_INO_PIDFILE(di->pid, i + 1),g_proc_pidfiles[i].kind, di->pid, 0));
             }
         }
+        if(len == 2 && memcmp(name, "fd", 2) == 0 && TaskFind((pid_t)di->pid))return proc_add(dir, dentry, PROC_INO_FDDIR(di->pid), PROC_K_FDDIR, di->pid, 0);//fd目录
+    //fd目录下的描述符
+    }else if(di->kind == PROC_K_FDDIR){
+        task_struct *t = TaskFind((pid_t)di->pid);
+        int fd = proc_parse_num(name, len);
+        if(t && fd >= 0 && fd < MAX_FD && t->files[fd].used)
+            return proc_add(dir, dentry, PROC_INO_FDLINK(di->pid, fd), PROC_K_FDLINK, di->pid, (uint32_t)fd);
     }
     d_add(dentry, NULL);//负缓存
     return NULL;
@@ -367,6 +412,17 @@ static int proc_iterate(struct file *f,void *ctx,int (*emit)(void *ctx,const cha
         TaskForEach(proc_emit_pid, args);
     }else if(ii->kind == PROC_K_PIDDIR){
         for(int i = 0;i < PROC_NPIDFILES;i ++)emit(ctx, g_proc_pidfiles[i].name,(int)strlen(g_proc_pidfiles[i].name),PROC_INO_PIDFILE(ii->pid, i + 1), S_IFREG, off ++);
+        emit(ctx, "fd", 2, PROC_INO_FDDIR(ii->pid), S_IFDIR, off ++);
+    }else if(ii->kind == PROC_K_FDDIR){
+        task_struct *t = TaskFind((pid_t)ii->pid);
+        if(t){
+            for(int fd = 0;fd < MAX_FD;fd ++){
+                if(!t->files[fd].used)continue;
+                char name[12];
+                int n = sprintf(name, "%d", fd);
+                emit(ctx, name, n, PROC_INO_FDLINK(ii->pid, fd), S_IFLNK, off ++);
+            }
+        }
     }
     return 0;
 }
@@ -376,7 +432,7 @@ static struct inode_operations g_proc_dir_iops = {
 };
 
 static struct inode_operations g_proc_link_iops = {
-    .get_link = proc_self_get_link,
+    .get_link = proc_get_link,
 };
 
 static struct file_operations g_proc_dir_fops = {

@@ -467,6 +467,16 @@ static uint64_t nvme_prp_setup(uint64_t phys,uint32_t bytes,uint64_t *prp2){
         *prp2 = next;
         return phys;
     }
+    //跨3页以上才需要PRP列表
+    if(!g_prp_list_phys){
+        g_prp_list_phys = (uint64_t)Pmm_Malloc(1);
+        if(!g_prp_list_phys){
+            *prp2 = 0;
+            return phys;
+        }
+        memset((void*)PHYS_TO_VIRT(g_prp_list_phys), 0, PAGE_SIZE);
+    }
+    if(npg > PAGE_SIZE / sizeof(uint64_t))npg = PAGE_SIZE / sizeof(uint64_t);//列表页最多装的项数
     uint64_t *lst = (uint64_t*)PHYS_TO_VIRT(g_prp_list_phys);
     for(uint32_t i = 0; i < npg; i++)lst[i] = next + (uint64_t)i * PAGE_SIZE;
     *prp2 = g_prp_list_phys;

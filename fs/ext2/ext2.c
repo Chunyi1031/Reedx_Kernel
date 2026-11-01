@@ -406,7 +406,10 @@ static uint32_t ext2_find_entry(ext2_sb_info_t *s, struct inode *dir,
     if(start >= nb)start = 0;
     for(uint32_t k = 0;k < nb;k ++){
         uint32_t n = (start + k) % nb;
-        if(ext2_read_dir_block(s, dir, n))return 0;
+        if(ext2_read_dir_block(s, dir, n)){
+            printk(PRINTK_ERR"ext2: read dir block %u(ino=%llu) failed.", n, (unsigned long long)dir->i_ino);
+            return 0;
+        }
         uint32_t ino = ext2_scan_entry(s, s->blk_buf, name, namelen);
         if(ino){
             if(ii)ii->i_dir_hint = n;
@@ -1617,6 +1620,10 @@ int Ext2ReadSuper(struct super_block *sb, bdev_t *bd){
         Pmm_Free(pa, 1);
         KslabFree(g_ext2_info_cache, s);
         return -ENODEV;
+    }
+    if(s->incompat & ~EXT2_INCOMPAT_FILETYPE){
+        printk(PRINTK_WARNING"ext2: unsupported incompat features %p (extents=0x40 64bit=0x80 meta_bg=0x10 flex_bg=0x200), read may be wrong",
+               (void*)(uintptr_t)(s->incompat & ~EXT2_INCOMPAT_FILETYPE));
     }
     if(!s->inode_size)s->inode_size = 128;
     if(s->block_size < 1024 || s->block_size > 4096 ||
