@@ -29,6 +29,7 @@ void send_eoi(uint8_t irq){
 }
 
 void irq_dispatch(uint32_t vector, uint64_t *frame){
+	PRINTK_in_irq ++;//标记进入中断上下文
 	vector -= IRQ_VECTOR_BASE;
 	switch (vector) {
 	case IRQ_TIMER:
@@ -39,6 +40,7 @@ void irq_dispatch(uint32_t vector, uint64_t *frame){
 		send_eoi((uint8_t)vector);//发送EOI
 		schedule();//调度
 		SignalDeliverFromIRQ(frame);//返回用户前投递待处理信号
+		PRINTK_in_irq --;
 		return;
 	case IRQ_KEYBOARD:
 		Keyboard_IRQ();
@@ -48,6 +50,7 @@ void irq_dispatch(uint32_t vector, uint64_t *frame){
 	}
 	send_eoi((uint8_t)vector);
 	SignalDeliverFromIRQ(frame);//返回用户前投递待处理信号
+	PRINTK_in_irq --;
 }
 
 //APIC中断系统初始化

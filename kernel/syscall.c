@@ -21,6 +21,7 @@
 #include <vfs.h>
 #include <futex.h>
 #include <pipe.h>
+#include <poll.h>
 #include <signals.h>
 #include <rtc.h>
 #include <delay.h>
@@ -112,7 +113,7 @@ static long sys_getdents64(long fd, long buf, long count, long a4, long a5, long
 //判断fd是否为控制台表项
 static inline _Bool fd_is_console(long fd){
 	if(!current_task || fd < 0 || fd >= MAX_FD)return false;
-	return current_task->files[fd].used && !current_task->files[fd].inode && !current_task->files[fd].pipe;
+    return current_task->files[fd].used && !current_task->files[fd].inode && !current_task->files[fd].pipe && !current_task->files[fd].epoll;
 }
 
 /*
@@ -124,6 +125,7 @@ static long sys_read(long fd, long buf, long count, long a4, long a5, long a6){
 	(void)a4; (void)a5; (void)a6;
 	if(count < 0)return -EINVAL;
 	if(!buf)return -EFAULT;
+	if(current_task && (fd >= 0) && (fd < MAX_FD) && current_task->files[fd].epoll)return -EINVAL;//epoll fd不可读
 	//键盘读取
 	if((fd == 0 && (!current_task || !current_task->files[0].used)) || (fd_is_console(fd) && (current_task->files[fd].flags & O_ACCMODE) != O_WRONLY)){
 		if(count == 0)return 0;
@@ -188,6 +190,7 @@ static long sys_write(long fd, long buf, long count, long a4, long a5, long a6){
 	(void)a4; (void)a5; (void)a6;
 	if(count < 0) return -EINVAL;
 	if(!buf) return -EFAULT;
+	if(current_task && (fd >= 0) && (fd < MAX_FD) && current_task->files[fd].epoll)return -EINVAL;//epoll fd不可写
 	//输出到TTY
 	_Bool __con_out = fd_is_console(fd) && (current_task->files[fd].flags & O_ACCMODE) != O_RDONLY;
 	if(((fd == 1 || fd == 2) && (!current_task || !current_task->files[fd].used)) || __con_out) {
@@ -308,14 +311,18 @@ static long sys_open(long path, long flags, long mode, long a4, long a5, long a6
 static void fd_close_one(long fd){
 	if(!current_task)return;
 	if(fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return;
-	if(current_task->files[fd].pipe){
-		pipeCloseEnd((struct pipe*)current_task->files[fd].pipe,(current_task->files[fd].flags & O_ACCMODE) == O_WRONLY);
-	}else{
-		FsClose(&current_task->files[fd]);
-	}
-	current_task->files[fd].used = false;
-	current_task->files[fd].pipe = NULL;
-	current_task->files[fd].inode = NULL;
+    if(current_task->files[fd].epoll){
+        EpollDestroy(current_task->files[fd].epoll);//销毁epoll实例
+    }else if(current_task->files[fd].pipe){
+        pipeCloseEnd((struct pipe*)current_task->files[fd].pipe,(current_task->files[fd].flags & O_ACCMODE) == O_WRONLY);//关闭管道一端
+    }else{
+        FsClose(&current_task->files[fd]);//普通文件关闭
+    }
+	//清空文件描述符表项
+    current_task->files[fd].used = false;
+    current_task->files[fd].pipe = NULL;
+    current_task->files[fd].inode = NULL;
+    current_task->files[fd].epoll = NULL;
 }
 
 //复制文件描述符表项
@@ -1669,39 +1676,13 @@ static long sys_poll(long fds, long nfds, long timeout, long a4, long a5, long a
 	kpollfd_t pfd[KPOLL_MAX];
 	unsigned long bytes = (unsigned long)nfds * sizeof(kpollfd_t);
 	if(copy_from_user(pfd, (void*)fds, bytes))return -EFAULT;
-	uint64_t waited = 0;
+	uint64_t start = SYSTEM_TimerTicks;
 	for(;;){
 		int ready = 0;
 		for(long i = 0; i < nfds; i++){
 			short ev = pfd[i].events;
 			short rv = 0;
-			long fd = pfd[i].fd;
-			if(fd >= 0){
-				_Bool con_in = false, con_out = false;
-				if(fd < 3 && (!current_task || !current_task->files[fd].used)){
-					con_in = con_out = true;//标准输入输出默认就是控制台
-				}else if(fd_is_console(fd)){
-					int acc = current_task->files[fd].flags & O_ACCMODE;
-					con_in  = (acc != O_WRONLY);
-					con_out = (acc != O_RDONLY);
-				}
-				if(con_in || con_out){
-					if(con_in && TTY_ReadReady())rv |= KPOLL_IN;
-					if(con_out)rv |= KPOLL_OUT;
-				}else if(current_task && fd < MAX_FD && current_task->files[fd].used){
-					int acc = current_task->files[fd].flags & O_ACCMODE;
-					if(current_task->files[fd].pipe){
-						int pr = pipeReady((struct pipe*)current_task->files[fd].pipe);
-						if((pr & 1) && acc != O_WRONLY)rv |= KPOLL_IN;
-						if((pr & 2) && acc != O_RDONLY)rv |= KPOLL_OUT;
-					}else{//普通文件/设备: 恒就绪
-						if(acc != O_WRONLY)rv |= KPOLL_IN;
-						if(acc != O_RDONLY)rv |= KPOLL_OUT;
-					}
-				}else{
-					rv |= KPOLL_NVAL;//无效fd
-				}
-			}
+			if(pfd[i].fd >= 0)rv = PollFdReady(pfd[i].fd,ev);
 			rv &= (short)(ev | KPOLL_NVAL);//只上报调用者关心的事件(外加NVAL)
 			pfd[i].revents = rv;
 			if(rv)ready++;
@@ -1710,17 +1691,81 @@ static long sys_poll(long fds, long nfds, long timeout, long a4, long a5, long a
 			if(copy_to_user((void*)fds, pfd, bytes))return -EFAULT;
 			return ready;
 		}
-		if(timeout == 0)return 0;
-		if(SignalPending())return -EINTR;//有待投递信号: 交给用户态重试
-		if(timeout > 0 && waited >= (uint64_t)timeout)return 0;
-		uint64_t step = 2;
-		if(timeout > 0){
-			uint64_t left = (uint64_t)timeout - waited;
-			if(left < step)step = left;
+		int64_t left = -1;
+		if(timeout >= 0){
+			uint64_t elapsed = (SYSTEM_TimerTicks - start) * 10;
+			if(elapsed >= (uint64_t)timeout)return 0;
+			left = (int64_t)((uint64_t)timeout - elapsed);
 		}
-		msleep(step);
-		waited += step;
+		int w = PollWait(left);
+		if(w == POLL_WAIT_TIMEOUT)return 0;
+		if(w == POLL_WAIT_INTR)return -EINTR;
 	}
+}
+
+#define KEP_BATCH 64//栈上分批处理的批大小
+
+typedef struct __attribute__((packed)) kepoll_event_user {
+	uint32_t events;
+	uint64_t data;
+} kepoll_event_user_t;
+
+//int epoll_create1(int flags)
+static long sys_epoll_create1(long flags, long a2, long a3, long a4, long a5, long a6){
+	(void)flags; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EBADF;
+	return EpollCreate();
+}
+
+//int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
+static long sys_epoll_ctl(long epfd, long op, long fd, long event, long a5, long a6){
+	(void)a5; (void)a6;
+	uint32_t events = 0;
+	uint64_t data   = 0;
+	if(op != EP_CTL_DEL){
+		if(!event)return -EFAULT;
+		kepoll_event_user_t ev;
+		if(copy_from_user(&ev, (void*)event, sizeof(ev)))return -EFAULT;
+		events = ev.events;
+		data   = ev.data;
+	}
+	return EpollCtl((int)epfd, (int)op, fd, events, data);
+}
+
+//int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout)
+static long sys_epoll_wait_common(long epfd, long events, long maxevents, long timeout, _Bool have_mask){
+	(void)have_mask;
+	if(maxevents <= 0)return -EINVAL;
+	if(!events)return -EFAULT;
+	kepoll_event_t out[KEP_BATCH];
+	int want = (maxevents > KEP_BATCH) ? KEP_BATCH : (int)maxevents;
+	int n = EpollWait((int)epfd, out, want, (int64_t)timeout);
+	if(n <= 0)return n;
+	if(copy_to_user((void*)events, out, (unsigned long)n * sizeof(kepoll_event_t)))return -EFAULT;
+	return n;
+}
+
+//int epoll_pwait(int epfd, ... , const sigset_t *sigmask, size_t sigsetsize)
+static long sys_epoll_wait(long epfd, long events, long maxevents, long timeout, long a5, long a6){
+	(void)a5; (void)a6;
+	return sys_epoll_wait_common(epfd, events, maxevents, timeout, false);
+}
+
+static long sys_epoll_pwait(long epfd, long events, long maxevents, long timeout, long a5, long a6){
+	(void)a5; (void)a6;
+	return sys_epoll_wait_common(epfd, events, maxevents, timeout, true);
+}
+
+static long sys_epoll_pwait2(long epfd, long events, long maxevents, long tsp, long a5, long a6){
+	(void)a5; (void)a6;
+	int64_t ms = -1;
+	if(tsp){
+		struct { long sec; long nsec; } ts;
+		if(copy_from_user(&ts, (void*)tsp, sizeof(ts)))return -EFAULT;
+		if(ts.sec < 0 || ts.nsec < 0)return -EINVAL;
+		ms = (int64_t)ts.sec * 1000 + (int64_t)(ts.nsec / 1000000);
+	}
+	return sys_epoll_wait_common(epfd, events, maxevents, ms, true);
 }
 
 /*
@@ -1735,37 +1780,16 @@ static long sys_poll(long fds, long nfds, long timeout, long a4, long a5, long a
 
 //返回0表示fd有效, *revents 填入已就绪事件; 返回-1表示fd无效
 static int sel_fd_check(long fd, int want, int *revents){
-	int rv = 0;
 	if(!current_task || fd < 0 || fd >= MAX_FD){
 		*revents = 0;
 		return -1;
 	}
-	_Bool con_in = false, con_out = false;
-	if(fd < 3 && !current_task->files[fd].used){
-		con_in = con_out = true;//标准输入输出默认就是控制台
-	}else if(fd_is_console(fd)){
-		int acc = current_task->files[fd].flags & O_ACCMODE;
-		con_in  = (acc != O_WRONLY);
-		con_out = (acc != O_RDONLY);
-	}
-	if(con_in || con_out){
-		if(con_in && TTY_ReadReady())rv |= KSEL_IN;
-		if(con_out)rv |= KSEL_OUT;
-	}else if(current_task->files[fd].used){
-		int acc = current_task->files[fd].flags & O_ACCMODE;
-		if(current_task->files[fd].pipe){
-			int pr = pipeReady((struct pipe*)current_task->files[fd].pipe);
-			if((pr & 1) && acc != O_WRONLY)rv |= KSEL_IN;
-			if((pr & 2) && acc != O_RDONLY)rv |= KSEL_OUT;
-		}else{//普通文件/设备: 恒就绪
-			if(acc != O_WRONLY)rv |= KSEL_IN;
-			if(acc != O_RDONLY)rv |= KSEL_OUT;
-		}
-	}else{
+	short rv = PollFdReady(fd, (short)(want | KSEL_EXC));
+	if(rv & FSPOLL_NVAL){
 		*revents = 0;
 		return -1;
 	}
-	*revents = rv & want;
+	*revents = (((rv & FSPOLL_IN) ? KSEL_IN : 0) | ((rv & FSPOLL_OUT) ? KSEL_OUT : 0)) & want;
 	return 0;
 }
 
@@ -1779,7 +1803,7 @@ static long select_common(long nfds, long rfd, long wfd, long efd, uint64_t time
 	if(rfd && copy_from_user(rb, (void*)rfd, nset))return -EFAULT;
 	if(wfd && copy_from_user(wb, (void*)wfd, nset))return -EFAULT;
 	if(efd && copy_from_user(eb, (void*)efd, nset))return -EFAULT;
-	uint64_t waited = 0;
+	uint64_t start = SYSTEM_TimerTicks;
 	for(;;){
 		memset(ro, 0, sizeof(ro)); memset(wo, 0, sizeof(wo)); memset(eo, 0, sizeof(eo));
 		int cnt = 0;
@@ -1803,16 +1827,15 @@ static long select_common(long nfds, long rfd, long wfd, long efd, uint64_t time
 			return cnt;
 		}
 		if(have_timeout && timeout_ms == 0)return 0;
-		if(SignalPending())return -EINTR;
-		uint64_t step = 2;
+		int64_t left = -1;
 		if(have_timeout){
-			uint64_t left = timeout_ms - waited;
-			if(left < step)step = left;
-			if(step == 0)step = 1;
+			uint64_t elapsed = (SYSTEM_TimerTicks - start) * 10;
+			if(elapsed >= timeout_ms)return 0;
+			left = (int64_t)(timeout_ms - elapsed);
 		}
-		msleep(step);
-		waited += step;
-		if(have_timeout && waited >= timeout_ms)return 0;
+		int w = PollWait(left);
+		if(w == POLL_WAIT_TIMEOUT)return 0;
+		if(w == POLL_WAIT_INTR)return -EINTR;
 	}
 }
 
@@ -2529,6 +2552,10 @@ void InitSyscall(void){
 	syscall_table[SYS_POLL]       = sys_poll;
 	syscall_table[SYS_SELECT]     = sys_select;
 	syscall_table[SYS_PSELECT6]   = sys_pselect6;
+	syscall_table[SYS_EPOLL_WAIT]    = sys_epoll_wait;
+	syscall_table[SYS_EPOLL_CTL]     = sys_epoll_ctl;
+	syscall_table[SYS_EPOLL_PWAIT]   = sys_epoll_pwait;
+	syscall_table[SYS_EPOLL_CREATE1] = sys_epoll_create1;
 	syscall_table[SYS_RT_SIGACTION]     = sys_rt_sigaction;
 	syscall_table[SYS_RT_SIGPROCMASK]   = sys_rt_sigprocmask;
 	syscall_table[SYS_RT_SIGRETURN]     = sys_rt_sigreturn;

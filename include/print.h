@@ -51,6 +51,7 @@ typedef struct PRINTK_LOG_INFO {
 
 extern char*              PRINTK_text_buffer;
 extern PRINTK_LOG_INFO_t* PRINTK_log_info;
+extern volatile int       PRINTK_in_irq;
 
 int  InitPrintk(void);
 int  printk(const char* fmt, ...) __attribute__((format(printf, 1, 2)));

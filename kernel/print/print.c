@@ -41,6 +41,20 @@ void print_ok(){
 
 char* PRINTK_text_buffer = NULL;
 PRINTK_LOG_INFO_t* PRINTK_log_info    = NULL;
+volatile int PRINTK_in_irq = 0;//中断上下文嵌套计数
+static volatile int printk_nesting = 0;//printk 重入计数
+
+//保存中断标志
+static inline uint64_t printk_save_irq(void){
+	uint64_t f;
+	__asm__ volatile("pushfq\n\tpopq %0" : "=r"(f) : : "memory");
+	return f;
+}
+
+//按保存的标志恢复中断状态
+static inline void printk_restore_irq(uint64_t f){
+	__asm__ volatile("pushq %0\n\tpopfq" : : "r"(f) : "memory");
+}
 static int text_pos = 0;//文本缓冲区当前写入位置
 static int info_head = 0;//日志信息数组写入索引
 static int info_count = 0;//已记录日志条数
@@ -61,6 +75,7 @@ static const char *level_strings[] = {
 void task_putlog(){
 	while(1){
 		print_to_console(1);
+		msleep(20);
 	}
 }
 
@@ -91,7 +106,8 @@ int printk(const char* fmt, ...){
 		level = fmt[1] - '0';
 		msg = fmt + 3;
 	}
-    cli();
+	uint64_t iflags = printk_save_irq();
+	cli();
     //格式化字符
 	__builtin_va_start(args, fmt);
 	ret = vsprintf(buf, msg, args);
@@ -113,7 +129,12 @@ int printk(const char* fmt, ...){
 	info->length = ret;
 	text_pos += len;
 	info_count++;
-    sti();
+	printk_restore_irq(iflags);
+	if(!PRINTK_in_irq && !printk_nesting){
+		printk_nesting ++;
+		print_to_console(PRINTK_COUNT_MAX);
+		printk_nesting --;
+	}
 	return ret;
 fallback:
     //未初始化时回退到无级别解析的直出
@@ -125,17 +146,21 @@ fallback:
 }
 
 void print_to_console(int count){
+	uint64_t iflags = printk_save_irq();
 	cli();
 	int i, idx, to_print;
 	char buf[320];
 	PRINTK_LOG_INFO_t *info;
 	const char *lvl;
 	uint32_t lvl_color;
-	if (!PRINTK_text_buffer || !PRINTK_log_info || info_count == 0){sti();return;}
-	//环形缓冲区满时旧条目被覆盖，游标可能失效，兜底复位
+	if (!PRINTK_text_buffer || !PRINTK_log_info || info_count == 0){printk_restore_irq(iflags);return;}
+	//环形缓冲区满时旧条目被覆盖，游标可能失效，兵底复位
 	if (console_read > info_count)console_read = 0;
 	to_print = info_count - console_read;
-	if (to_print <= 0){sti();return;}
+	if (to_print <= 0){
+		printk_restore_irq(iflags);
+		return;
+	}
 	if (count < to_print)to_print = count;
 	//最旧条目索引 + 已读偏移 = 下一条待打印索引
 	//原理：本环形缓冲区约定 info_head 始终指向最旧条目（未满时即 0），
@@ -171,7 +196,7 @@ void print_to_console(int count){
 		TTY_PrintChar('\n', CurrentConsoleStyle.TextColor);
 	}
 	console_read += to_print;
-	sti();
+	printk_restore_irq(iflags);
 }
 
 //读控制寄存器,崩溃现场里一起打出来

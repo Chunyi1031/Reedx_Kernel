@@ -8,7 +8,7 @@
 #ifndef _PIPE_H_
 #define _PIPE_H_
 
-#include <types.h>
+#include <klib.h>
 
 struct pipe;//管道对象
 

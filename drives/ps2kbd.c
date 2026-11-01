@@ -8,6 +8,8 @@
 #include <drives/ps2kbd.h>
 #include <drives/tty.h>
 #include <irq.h>
+#include <print.h>
+#include <poll.h>
 
 static char KeyboardRingBuffer[KEYBOARD_BUFFER_SIZE];//键盘缓冲区
 static int key_count = 0;//可读键总数
@@ -272,6 +274,7 @@ void Keyboard_IRQ(){
 		key_count++;
 	}
 	spin_unlock_irqrestore(&g_kbd_lock, flags);
+	if(n > 0)PollWakeAll();//终端输入到达，唤醒poll/select/epoll等待者
 }
 
 char GetKey(){

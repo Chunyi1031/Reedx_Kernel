@@ -8,6 +8,7 @@
 //由DeepSeek V4.1 Flash生成
 #include <signals.h>
 #include <task.h>
+#include <poll.h>
 #include <syscalls.h>
 #include <klib.h>
 #include <print.h>
@@ -105,6 +106,7 @@ void SignalSend(task_struct *t, int sig, int code, pid_t sender, int status){
 	t->sig_last_pid = sender;
 	t->sig_last_status = status;
 	if(t->state == TASK_BLOCKED)TaskWake(t);//让阻塞中的任务尽快回到投递点
+	PollWakeAll();
 }
 
 //用户寄存器快照(系统调用出口与中断返回两条投递路径共用)

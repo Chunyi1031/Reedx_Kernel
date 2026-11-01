@@ -6,6 +6,7 @@
  * 
  */
 #include <pipe.h>
+#include <poll.h>
 #include <task.h>
 #include <signals.h>
 #include <klib.h>
@@ -111,6 +112,7 @@ long pipeRead(struct pipe *p, void *buf, uint64_t len){
     }
     if(!plist_empty(&p->write_wq))pipe_wake_all(&p->write_wq);//腾出空间唤醒写端
     spin_unlock_irqrestore(&p->lock, flags);
+    PollWakeAll();//唤醒poll/epoll等待者
     return (long)n;
 }
 
@@ -171,6 +173,7 @@ long pipeWrite(struct pipe *p, const void *buf, uint64_t len){
     }
     if(!plist_empty(&p->read_wq))pipe_wake_all(&p->read_wq);//有数据唤醒读端
     spin_unlock_irqrestore(&p->lock, flags);
+    PollWakeAll();//唤醒poll/epoll等待者
     return (long)written;
 }
 

@@ -106,6 +106,8 @@
 #define SYS_CLOCK_GETRES    229
 #define SYS_CLOCK_NANOSLEEP 230
 #define SYS_EXIT_GROUP      231
+#define SYS_EPOLL_WAIT      232
+#define SYS_EPOLL_CTL       233
 #define SYS_TGKILL          234
 #define SYS_OPENAT          257
 #define SYS_MKDIRAT         258
@@ -123,6 +125,8 @@
 #define SYS_PPOLL           271
 #define SYS_SET_ROBUST_LIST 273
 #define SYS_UTIMENSAT       280
+#define SYS_EPOLL_PWAIT     281
+#define SYS_EPOLL_CREATE1   291
 #define SYS_DUP3            292
 #define SYS_PIPE2           293
 #define SYS_PRLIMIT64       302
@@ -228,6 +232,7 @@
 #define EINVAL              22
 #define ENOTTY              25
 #define ENFILE              23
+#define EMFILE              24
 #define ENOSPC              28
 #define EROFS               30
 #define ERANGE              34

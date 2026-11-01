@@ -9,7 +9,7 @@
 #ifndef _SIGNAL_H_
 #define _SIGNAL_H_
 
-#include <types.h>
+#include <klib.h>
 
 //标准信号编号(x86_64)
 #define SIGHUP   1
