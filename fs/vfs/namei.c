@@ -55,6 +55,12 @@ static int walk(const char *path, const struct path *root, const struct path *ro
         const char *q = p;
         while(*q == '/')q ++;
         if(to_parent && *q == 0){
+            while(cur->d_mounted){
+                struct vfsmount *sm = cur->d_mounted;
+                dput(cur);
+                mnt = sm;
+                cur = dget(sm->mnt_root);
+            }
             if(last_name && namesz > 0){
                 int i = 0;
                 for(;i < n && i < namesz - 1;i ++)last_name[i] = name[i];

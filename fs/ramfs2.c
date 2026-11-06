@@ -211,8 +211,26 @@ static int ramfs_rmdir(struct inode *dir, struct dentry *dentry){
     return 0;
 }
 
-static int ramfs_getattr(const struct path *path, struct stat *st){
-    if(!path || !path->dentry || !path->dentry->d_inode)return -ENOENT;
+//改名
+static int ramfs_rename(struct inode *odir, struct dentry *odent, struct inode *ndir, struct dentry *ndent){
+    if(!odent || !odent->d_inode)return -ENOENT;
+    struct inode *inode = odent->d_inode;
+    _Bool isdir = ((inode->i_mode & S_IFMT) == S_IFDIR);
+    if(isdir)return -EOPNOTSUPP;
+    if(ndent->d_inode){
+        if((ndent->d_inode->i_mode & S_IFMT) == S_IFDIR)return -EISDIR;
+        ramfs_unlink_child(ndir, ndent);
+        if(ndent->d_inode->i_nlink)ndent->d_inode->i_nlink --;
+        d_invalidate(ndent);
+    }
+    ramfs_unlink_child(odir, odent);
+    d_invalidate(odent);
+    d_add(ndent, inode);
+    ramfs_link_child(ndir, ndent);
+    return 0;
+}
+
+static int ramfs_getattr(const struct path *path, struct stat *st){    if(!path || !path->dentry || !path->dentry->d_inode)return -ENOENT;
     struct inode *inode = path->dentry->d_inode;
     memset(st, 0, sizeof(*st));
     st->st_ino   = inode->i_ino;
@@ -279,6 +297,7 @@ static const struct inode_operations g_ramfs_iops = {
     .unlink   = ramfs_unlink,
     .rmdir    = ramfs_rmdir,
     .symlink  = ramfs_symlink,
+    .rename   = ramfs_rename,
     .get_link = ramfs_get_link,
     .getattr  = ramfs_getattr,
     .setattr  = ramfs_setattr,

@@ -6,6 +6,8 @@
  *
  * 语义要点: 读在未就绪时一律返回 -EAGAIN, 由调用方先用 epoll/poll 等就绪;
  *           就绪状态变化必须调用 PollWakeAll()。
+ * 
+ * 由DeepSeek V4.1 Flash生成
  */
 #include <anon.h>
 #include <fs.h>

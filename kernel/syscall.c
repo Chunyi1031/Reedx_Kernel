@@ -23,6 +23,7 @@
 #include <pipe.h>
 #include <poll.h>
 #include <anon.h>
+#include <inotify.h>
 #include <signals.h>
 #include <rtc.h>
 #include <delay.h>
@@ -2573,6 +2574,37 @@ static long sys_pidfd_send_signal(long pidfd, long sig, long info, long flags, l
 	return AnonPidFdSignal((int)pidfd, (int)sig);
 }
 
+/*
+ * int inotify_init1(int flags)
+ * 创建inotify实例
+ */
+static long sys_inotify_init1(long flags, long a2, long a3, long a4, long a5, long a6){
+	(void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EBADF;
+	return AnonInotifyInit((int)flags);
+}
+
+/*
+ * int inotify_add_watch(int fd, const char *pathname, uint32_t mask)
+ * 添加监视项
+ */
+static long sys_inotify_add_watch(long fd, long pathname, long mask, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!pathname)return -EFAULT;
+	char kpath[256];
+	if(strncpy_from_user(kpath, (void*)pathname, sizeof(kpath)) < 0)return -EFAULT;
+	return AnonInotifyAddWatch((int)fd, kpath, (uint32_t)mask);
+}
+
+/*
+ * int inotify_rm_watch(int fd, int wd)
+ * 删除监视项
+ */
+static long sys_inotify_rm_watch(long fd, long wd, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	return AnonInotifyRmWatch((int)fd, (int)wd);
+}
+
 /* 
  * int reboot(int magic,int magic2,int cmd, void *arg)
  * 重启/关机/挂起系统
@@ -2682,6 +2714,9 @@ void InitSyscall(void){
 	syscall_table[SYS_SIGNALFD4]       = sys_signalfd4;
 	syscall_table[SYS_PIDFD_OPEN]        = sys_pidfd_open;
 	syscall_table[SYS_PIDFD_SEND_SIGNAL] = sys_pidfd_send_signal;
+	syscall_table[SYS_INOTIFY_INIT1]     = sys_inotify_init1;
+	syscall_table[SYS_INOTIFY_ADD_WATCH] = sys_inotify_add_watch;
+	syscall_table[SYS_INOTIFY_RM_WATCH]  = sys_inotify_rm_watch;
 	syscall_table[SYS_RT_SIGACTION]     = sys_rt_sigaction;
 	syscall_table[SYS_RT_SIGPROCMASK]   = sys_rt_sigprocmask;
 	syscall_table[SYS_RT_SIGRETURN]     = sys_rt_sigreturn;

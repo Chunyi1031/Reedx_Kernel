@@ -14,6 +14,7 @@
 #include <drives/bcache.h>
 #include <drives/cdev.h>
 #include <vfs.h>
+#include <inotify.h>
 
 static struct path g_vfs_root;//新VFS的根
 static spinlock_t g_fs_lock = {0};//全局文件系统锁
@@ -21,6 +22,24 @@ static spinlock_t g_fs_lock = {0};//全局文件系统锁
 //获取当前VFS的根目录
 const struct path *VfsRoot(void){
     return g_vfs_root.dentry ? &g_vfs_root : NULL;
+}
+
+//把(父目录,名字)拼成绝对路径后发inotify事件
+static void notify_at(struct dentry *dir, const char *name, uint32_t mask){
+    if(!dir || !name)return;
+    char buf[256];
+    struct path p;
+    p.dentry = dir;
+    p.mnt    = NULL;
+    if(d_path(&p, buf, (int)sizeof(buf)) < 0)return;
+    int n = (int)strlen(buf);
+    if(n > 0 && buf[n - 1] == '/')n --;
+    int m = (int)strlen(name);
+    if(n + 1 + m + 1 > (int)sizeof(buf))return;
+    buf[n] = '/';
+    memcpy(buf + n + 1, name, (uint64_t)m);
+    buf[n + 1 + m] = 0;
+    InotifyNotify(buf, mask);
 }
 
 //当前工作目录(任务没设置过就是根)
@@ -230,6 +249,7 @@ int FsOpen(const char *path, int flags, fs_file_t *out){
     if(!out || !root || !path)return -ENOENT;
     if((flags & O_TMPFILE) == O_TMPFILE)return -EOPNOTSUPP;
     uint64_t lk;
+    _Bool created = false;
     spin_lock_irqsave(&g_fs_lock, lk);
     struct path p;
     int r = path_lookup(path, root, (flags & O_DIRECTORY) ? LOOKUP_DIRECTORY : 0, &p);
@@ -240,6 +260,7 @@ int FsOpen(const char *path, int flags, fs_file_t *out){
         }
     }else if(r == -ENOENT && (flags & O_CREAT)){
         r = path_create(path, 0, 0644, &p.dentry);
+        if(r == 0)created = true;
         if(r == -EEXIST){//别的任务抢先建好了
             if(flags & O_EXCL)goto done;
             r = path_lookup(path, root, 0, &p);
@@ -249,6 +270,8 @@ int FsOpen(const char *path, int flags, fs_file_t *out){
     if(r == 0)r = open_dentry(p.dentry, p.mnt, flags, out);
 done:
     spin_unlock_irqrestore(&g_fs_lock, lk);
+    if(r == 0 && created)InotifyNotify(path, IN_CREATE);
+    if(r == 0)InotifyNotify(path, IN_OPEN);
     return r;
 }
 
@@ -257,6 +280,7 @@ int FsOpenAt(struct dentry *dir, const char *name, int flags, fs_file_t *out){
     if(!out || !dir || !name || !*name)return -EINVAL;
     if((flags & O_TMPFILE) == O_TMPFILE)return -EOPNOTSUPP;
     uint64_t lk;
+    _Bool created = false;
     spin_lock_irqsave(&g_fs_lock, lk);
     int r;
     struct dentry *d = dir_lookup(dir, name);
@@ -267,6 +291,7 @@ int FsOpenAt(struct dentry *dir, const char *name, int flags, fs_file_t *out){
         if(!(flags & O_CREAT)){ dput(d); r = -ENOENT; goto done; }
         dput(d);
         r = dir_create(dir, name, 0, 0644, &d);
+        if(r == 0)created = true;
         if(r == -EEXIST){
             d = dir_lookup(dir, name);
             r = d ? 0 : -ENOENT;
@@ -276,11 +301,23 @@ int FsOpenAt(struct dentry *dir, const char *name, int flags, fs_file_t *out){
     r = open_dentry(d, NULL, flags, out);
 done:
     spin_unlock_irqrestore(&g_fs_lock, lk);
+    if(r == 0 && created)notify_at(dir,name,IN_CREATE);
+    if(r == 0)notify_at(dir,name,IN_OPEN);
     return r;
 }
 
 void FsClose(fs_file_t *f){
     if(!f || !f->used)return;
+    if(f->dentry){
+        char pbuf[256];
+        struct path p;
+        p.dentry = f->dentry;
+        p.mnt    = f->mnt;
+        if(d_path(&p, pbuf, (int)sizeof(pbuf)) > 0){
+            uint32_t cmask = ((f->flags & O_ACCMODE) == O_RDONLY) ? IN_CLOSE_NOWRITE : IN_CLOSE_WRITE;
+            InotifyNotify(pbuf, cmask);
+        }
+    }
     if(f->f){
         if(f->f->f_op && f->f->f_op->release)f->f->f_op->release(f->f->f_inode, f->f);
         FilePut(f->f);          //最后一个引用会归还 f_path 里的目录项
@@ -329,6 +366,13 @@ uint64_t FsWrite(fs_file_t *f, const void *buf, uint64_t len){
     if(f->flags & O_APPEND)f->f->f_pos = f->inode->i_size;//追加模式定位到末尾
     int64_t n = op->write(f->f, (const char*)buf, len, &f->f->f_pos);
     spin_unlock_irqrestore(&g_fs_lock, lk);
+    if(n > 0){
+        char pbuf[256];
+        struct path p;
+        p.dentry = f->dentry;
+        p.mnt = f->mnt;
+        if(d_path(&p, pbuf, (int)sizeof(pbuf)) > 0)InotifyNotify(pbuf,IN_MODIFY);
+    }
     return (n > 0) ? (uint64_t)n : 0;
 }
 
@@ -489,6 +533,7 @@ int FsMkdir(const char *path, int mode){
     spin_lock_irqsave(&g_fs_lock, lk);
     int r = path_create(path, 1, (uint16_t)mode, NULL);
     spin_unlock_irqrestore(&g_fs_lock, lk);
+    if(r == 0)InotifyNotify(path, IN_CREATE | IN_ISDIR);
     return r;
 }
 
@@ -497,6 +542,7 @@ int FsMkdirAt(struct dentry *dir, const char *name, int mode){
     spin_lock_irqsave(&g_fs_lock, lk);
     int r = dir_create(dir, name, 1, (uint16_t)mode, NULL);
     spin_unlock_irqrestore(&g_fs_lock, lk);
+    if(r == 0)notify_at(dir, name, IN_CREATE | IN_ISDIR);
     return r;
 }
 
@@ -513,6 +559,7 @@ int FsUnlink(const char *path, int isdir){
         dput(pdir.dentry);
     }
     spin_unlock_irqrestore(&g_fs_lock, lk);
+    if(r == 0)InotifyNotify(path, (isdir ? (IN_DELETE | IN_ISDIR) : IN_DELETE));
     return r;
 }
 
@@ -521,6 +568,7 @@ int FsUnlinkAt(struct dentry *dir, const char *name, int isdir){
     spin_lock_irqsave(&g_fs_lock, lk);
     int r = dir_remove(dir, name, isdir);
     spin_unlock_irqrestore(&g_fs_lock, lk);
+    if(r == 0)notify_at(dir, name, isdir ? (IN_DELETE | IN_ISDIR) : IN_DELETE);
     return r;
 }
 
@@ -543,6 +591,10 @@ int FsRename(const char *oldpath, const char *newpath, int flags){
     dput(opdir.dentry);
 done:
     spin_unlock_irqrestore(&g_fs_lock, lk);
+    if(r == 0){
+        InotifyNotify(oldpath,IN_MOVED_FROM);
+        InotifyNotify(newpath,IN_MOVED_TO);
+    }
     return r;
 }
 
@@ -551,6 +603,10 @@ int FsRenameAt(struct dentry *odir, const char *oname, struct dentry *ndir, cons
     spin_lock_irqsave(&g_fs_lock, lk);
     int r = dir_rename(odir, oname, ndir, nname, flags);
     spin_unlock_irqrestore(&g_fs_lock, lk);
+    if(r == 0){
+        notify_at(odir, oname, IN_MOVED_FROM);
+        notify_at(ndir, nname, IN_MOVED_TO);
+    }
     return r;
 }
 
@@ -593,6 +649,7 @@ int FsSymlink(const char *target, const char *linkpath){
         dput(pdir.dentry);
     }
     spin_unlock_irqrestore(&g_fs_lock, lk);
+    if(r == 0)InotifyNotify(linkpath, IN_CREATE);
     return r;
 }
 
@@ -603,6 +660,7 @@ int FsSymlinkAt(struct dentry *dir, const char *name, const char *target){
     spin_lock_irqsave(&g_fs_lock, lk);
     int r = symlink_locked(dir, name, target);
     spin_unlock_irqrestore(&g_fs_lock, lk);
+    if(r == 0)notify_at(dir, name, IN_CREATE);
     return r;
 }
 
@@ -653,6 +711,7 @@ int FsLink(const char *oldpath, const char *newpath, int follow){
         dput(src.dentry);
     }
     spin_unlock_irqrestore(&g_fs_lock, lk);
+    if(r == 0)InotifyNotify(newpath,IN_CREATE);
     return r;
 }
 
@@ -988,6 +1047,7 @@ int FsChmod(const char *path, uint16_t mode){
         dput(p.dentry);
     }
     spin_unlock_irqrestore(&g_fs_lock, lk);
+    if(r == 0)InotifyNotify(path,IN_ATTRIB);
     return r;
 }
 
@@ -1028,6 +1088,7 @@ int FsChown(const char *path, uint32_t uid, uint32_t gid, int follow){
         dput(p.dentry);
     }
     spin_unlock_irqrestore(&g_fs_lock, lk);
+    if(r == 0)InotifyNotify(path,IN_ATTRIB);
     return r;
 }
 
