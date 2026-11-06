@@ -7,6 +7,7 @@
  * 统一的就绪判定与等待
  */
 #include <poll.h>
+#include <anon.h>
 #include <fs.h>
 #include <task.h>
 #include <pipe.h>
@@ -26,7 +27,7 @@ void PollWakeAll(void){
 //fd是否为控制台
 static _Bool poll_fd_is_console(long fd, fs_file_t *f){
     if(fd < 3 && !f->used)return true;
-    return f->used && !f->inode && !f->pipe && !f->epoll;
+    return f->used && !f->inode && !f->pipe && !f->anon;
 }
 
 //控制台就绪位
@@ -56,7 +57,7 @@ short PollFdReady(long fd, short want){
     fs_file_t *f = &current_task->files[fd];
     if(poll_fd_is_console(fd, f))return poll_console_ready(f, fd);//控制台，控制台就绪位
     if(!f->used)return FSPOLL_NVAL;
-    if(f->epoll)return EpollReadyMask(f->epoll);
+    if(f->anon)return AnonPoll(f->anon,want);
     if(f->pipe)return poll_pipe_ready(f);
     //普通文件/设备，恒就绪
     int acc = f->flags & O_ACCMODE;

@@ -91,7 +91,7 @@ typedef struct fs_file{
     struct dentry   *dentry;//新VFS的目录项
     struct vfsmount *mnt;   //解析时经过的挂载点
     void            *pipe;  //管道对象
-    void            *epoll; //epoll实例
+    void            *anon;  //匿名对象
     int              flags; //打开标志
     _Bool            used;  //是否使用
     _Bool            tty_mark;//控制台fd是否已查询终端

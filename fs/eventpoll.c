@@ -7,12 +7,12 @@
  * 水平触发(LT)
  */
 #include <poll.h>
+#include <anon.h>
 #include <fs.h>
 #include <task.h>
 #include <irq.h>
-#include <print.h>
-#include <mm/pmm.h>
-#include <mm/vmm.h>
+#include <syscalls.h>
+#include <kstring.h>
 
 //单个被监视的fd
 typedef struct epitem {
@@ -24,27 +24,10 @@ typedef struct epitem {
 
 //一个epoll实例
 typedef struct epoll_inst {
-    uint32_t refs;                  //引用计数
-    int      count;                 //当前被监视的fd个数
-    epitem_t items[EP_MAX_WATCH];   //表项数组
+    anon_obj_t hdr;//匿名对象头
+    int        count;//当前监视的fd个数
+    epitem_t   items[EP_MAX_WATCH];//监视表
 } epoll_inst_t;
-
-//fd对应的epoll实例
-static epoll_inst_t *ep_from_fd(int epfd){
-    if(!current_task)return NULL;
-    if(epfd < 0 || epfd >= MAX_FD)return NULL;
-    fs_file_t *f = &current_task->files[epfd];
-    if(!f->used || !f->epoll)return NULL;
-    return (epoll_inst_t*)f->epoll;
-}
-
-//实例里找某个fd对应的表项
-static epitem_t *ep_find(epoll_inst_t *ep, long fd){
-    for(int i = 0;i < EP_MAX_WATCH;i ++){
-        if(ep->items[i].used && ep->items[i].fd == fd)return &ep->items[i];
-    }
-    return NULL;
-}
 
 //实例是否有就绪事件
 short EpollReadyMask(void *inst){
@@ -59,47 +42,44 @@ short EpollReadyMask(void *inst){
     return 0;
 }
 
+//epoll fd自身的就绪判定
+static short ep_poll(anon_obj_t *o, short want){
+    (void)want;
+    return EpollReadyMask(o);
+}
+
+static const anon_ops_t g_ep_ops = { .poll = ep_poll };
+
 //引用计数+1
 void EpollGet(void *inst){
-    epoll_inst_t *ep = (epoll_inst_t*)inst;
-    if(ep)ep->refs++;
+    AnonGet(inst);
 }
 
 //释放实例
 void EpollDestroy(void *inst){
-    epoll_inst_t *ep = (epoll_inst_t*)inst;
-    if(!ep)return;
-    if(ep->refs > 1){
-        ep->refs--;
-        return;
+    AnonPut(inst);
+}
+
+//fd对应的epoll实例
+static epoll_inst_t *ep_from_fd(int epfd){
+    anon_obj_t *o = (anon_obj_t*)AnonFromFd(epfd);
+    if(!o || o->kind != ANON_EPOLL)return NULL;
+    return (epoll_inst_t*)o;
+}
+
+//实例里找某个fd对应的表项
+static epitem_t *ep_find(epoll_inst_t *ep, long fd){
+    for(int i = 0;i < EP_MAX_WATCH;i ++){
+        if(ep->items[i].used && ep->items[i].fd == fd)return &ep->items[i];
     }
-    Pmm_Free((void*)VIRT_TO_PHYS(ep),(int)((sizeof(epoll_inst_t) + PAGE_SIZE - 1) / PAGE_SIZE));
+    return NULL;
 }
 
 //创建epoll实例并返回fd
 int EpollCreate(void){
-    if(!current_task)return -EBADF;
-    int fd = -1;
-    //寻找空闲fd
-    for(int i = 3;i < MAX_FD;i ++){
-        if(!current_task->files[i].used){
-            fd = i;
-            break;
-        }
-    }
-    if(fd < 0)return -EMFILE;
-    //分配epoll实例
-    int pages = (int)((sizeof(epoll_inst_t) + PAGE_SIZE - 1) / PAGE_SIZE);
-    epoll_inst_t *ep = (epoll_inst_t*)PHYS_TO_VIRT(Pmm_Malloc(pages));
+    epoll_inst_t *ep = (epoll_inst_t*)AnonAlloc(ANON_EPOLL,&g_ep_ops,sizeof(*ep));
     if(!ep)return -ENOMEM;
-    //初始化实例
-    memset(ep, 0, sizeof(*ep));
-    ep->refs = 1;
-    memset(&current_task->files[fd], 0, sizeof(fs_file_t));
-    current_task->files[fd].used  = true;
-    current_task->files[fd].flags = O_RDWR;
-    current_task->files[fd].epoll = ep;
-    return fd;
+    return AnonInstallFd(ep,O_RDWR);
 }
 
 //增删改被监视的fd
@@ -108,7 +88,7 @@ int EpollCtl(int epfd, int op, long fd, uint32_t events, uint64_t data){
     if(!ep)return -EBADF;
     if((fd < 0) || (fd >= MAX_FD))return -EBADF;
     if(fd == epfd)return -EINVAL;
-    if(!current_task->files[fd].used && !(fd < 3))return -EBADF;
+    if(!current_task->files[fd].used && (fd >= 3))return -EBADF;
     epitem_t *it = ep_find(ep, fd);
     if(op == EP_CTL_ADD){
         if(it)return -EEXIST;

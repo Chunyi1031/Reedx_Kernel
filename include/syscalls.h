@@ -126,6 +126,11 @@
 #define SYS_SET_ROBUST_LIST 273
 #define SYS_UTIMENSAT       280
 #define SYS_EPOLL_PWAIT     281
+#define SYS_TIMERFD_CREATE  283
+#define SYS_TIMERFD_SETTIME 286
+#define SYS_TIMERFD_GETTIME 287
+#define SYS_SIGNALFD4       289
+#define SYS_EVENTFD2        290
 #define SYS_EPOLL_CREATE1   291
 #define SYS_DUP3            292
 #define SYS_PIPE2           293
@@ -133,6 +138,8 @@
 #define SYS_RENAMEAT2       316
 #define SYS_GETRANDOM       318
 #define SYS_STATX           332
+#define SYS_PIDFD_SEND_SIGNAL 424
+#define SYS_PIDFD_OPEN      434
 #define AT_FDCWD            (-100)
 #define AT_EMPTY_PATH       0x1000  //path 为空字符串时对 dirfd 自身操作(glibc fstat 用它)
 #define AT_SYMLINK_NOFOLLOW 0x100   //不跟随符号链接

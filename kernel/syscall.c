@@ -22,6 +22,7 @@
 #include <futex.h>
 #include <pipe.h>
 #include <poll.h>
+#include <anon.h>
 #include <signals.h>
 #include <rtc.h>
 #include <delay.h>
@@ -113,7 +114,7 @@ static long sys_getdents64(long fd, long buf, long count, long a4, long a5, long
 //判断fd是否为控制台表项
 static inline _Bool fd_is_console(long fd){
 	if(!current_task || fd < 0 || fd >= MAX_FD)return false;
-    return current_task->files[fd].used && !current_task->files[fd].inode && !current_task->files[fd].pipe && !current_task->files[fd].epoll;
+    return current_task->files[fd].used && !current_task->files[fd].inode && !current_task->files[fd].pipe && !current_task->files[fd].anon;
 }
 
 /*
@@ -125,7 +126,14 @@ static long sys_read(long fd, long buf, long count, long a4, long a5, long a6){
 	(void)a4; (void)a5; (void)a6;
 	if(count < 0)return -EINVAL;
 	if(!buf)return -EFAULT;
-	if(current_task && (fd >= 0) && (fd < MAX_FD) && current_task->files[fd].epoll)return -EINVAL;//epoll fd不可读
+	//匿名对象读
+	if(current_task && (fd >= 0) && (fd < MAX_FD) && current_task->files[fd].anon){
+		char abuf[512];
+		long n = (long)AnonRead(current_task->files[fd].anon, abuf, count < (long)sizeof(abuf) ? count : (long)sizeof(abuf));
+		if(n <= 0)return n;
+		if(copy_to_user((void*)buf, abuf, (unsigned long)n))return -EFAULT;
+		return n;
+	}
 	//键盘读取
 	if((fd == 0 && (!current_task || !current_task->files[0].used)) || (fd_is_console(fd) && (current_task->files[fd].flags & O_ACCMODE) != O_WRONLY)){
 		if(count == 0)return 0;
@@ -190,7 +198,13 @@ static long sys_write(long fd, long buf, long count, long a4, long a5, long a6){
 	(void)a4; (void)a5; (void)a6;
 	if(count < 0) return -EINVAL;
 	if(!buf) return -EFAULT;
-	if(current_task && (fd >= 0) && (fd < MAX_FD) && current_task->files[fd].epoll)return -EINVAL;//epoll fd不可写
+	//匿名对象写
+	if(current_task && (fd >= 0) && (fd < MAX_FD) && current_task->files[fd].anon){
+		char abuf[512];
+		long n = count < (long)sizeof(abuf) ? count : (long)sizeof(abuf);
+		if(copy_from_user(abuf, (void*)buf, (unsigned long)n))return -EFAULT;
+		return (long)AnonWrite(current_task->files[fd].anon, abuf, n);
+	}
 	//输出到TTY
 	_Bool __con_out = fd_is_console(fd) && (current_task->files[fd].flags & O_ACCMODE) != O_RDONLY;
 	if(((fd == 1 || fd == 2) && (!current_task || !current_task->files[fd].used)) || __con_out) {
@@ -311,8 +325,8 @@ static long sys_open(long path, long flags, long mode, long a4, long a5, long a6
 static void fd_close_one(long fd){
 	if(!current_task)return;
 	if(fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return;
-    if(current_task->files[fd].epoll){
-        EpollDestroy(current_task->files[fd].epoll);//销毁epoll实例
+    if(current_task->files[fd].anon){
+        AnonPut(current_task->files[fd].anon);//释放epoll/eventfd等匿名对象
     }else if(current_task->files[fd].pipe){
         pipeCloseEnd((struct pipe*)current_task->files[fd].pipe,(current_task->files[fd].flags & O_ACCMODE) == O_WRONLY);//关闭管道一端
     }else{
@@ -322,7 +336,7 @@ static void fd_close_one(long fd){
     current_task->files[fd].used = false;
     current_task->files[fd].pipe = NULL;
     current_task->files[fd].inode = NULL;
-    current_task->files[fd].epoll = NULL;
+    current_task->files[fd].anon = NULL;
 }
 
 //复制文件描述符表项
@@ -347,6 +361,7 @@ static long fd_dup_to(long oldfd, long newfd){
 	current_task->files[newfd] = current_task->files[oldfd];//复制描述符
 	FileGet(current_task->files[newfd].f);//引用计数增加
 	if(current_task->files[newfd].pipe)pipeForkRef((struct pipe*)current_task->files[newfd].pipe,(current_task->files[newfd].flags & O_ACCMODE) == O_WRONLY);
+        if(current_task->files[newfd].anon)AnonGet(current_task->files[newfd].anon);//匿名对象共享
 	return newfd;
 }
 
@@ -2454,6 +2469,110 @@ static long sys_uname(long name, long a2, long a3, long a4, long a5, long a6){
 	return 0;
 }
 
+/*
+ * int eventfd2(unsigned int initval, int flags)
+ * 创建eventfd
+ */
+static long sys_eventfd2(long initval, long flags, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EBADF;
+	return AnonEventFd((uint32_t)initval, (int)flags);
+}
+
+struct k_itimerspec {long interval_sec,interval_nsec,value_sec,value_nsec;};
+
+/*
+ * int timerfd_create(int clockid, int flags)
+ * 创建timerfd
+ */
+static long sys_timerfd_create(long clockid, long flags, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EBADF;
+	return AnonTimerFdCreate((int)clockid, (int)flags);
+}
+
+/*
+ * int timerfd_settime(int fd, int flags, const struct itimerspec *new_value, struct itimerspec *old_value)
+ * 设置定时器
+ */
+static long sys_timerfd_settime(long fd, long flags, long newv, long oldv, long a5, long a6){
+	(void)a5; (void)a6;
+	if(!newv)return -EINVAL;
+	struct k_itimerspec ns;
+	if(copy_from_user(&ns, (void*)newv, sizeof(ns)))return -EFAULT;
+	if((ns.interval_sec < 0) || (ns.interval_nsec < 0) || (ns.value_sec < 0) || (ns.value_nsec < 0))return -EINVAL;
+	//先取旧值再装载
+	if(oldv){
+		uint64_t ov = 0,oi = 0;
+		if(AnonTimerFdGetTime((int)fd,&ov,&oi) == 0){
+			struct k_itimerspec os;
+			os.interval_sec = (long)(oi / 1000000000ULL);
+			os.interval_nsec = (long)(oi % 1000000000ULL);
+			os.value_sec = (long)(ov / 1000000000ULL);
+			os.value_nsec = (long)(ov % 1000000000ULL);
+			if(copy_to_user((void*)oldv, &os, sizeof(os)))return -EFAULT;
+		}
+	}
+	uint64_t value_ns = ((uint64_t)ns.value_sec * 1000000000ULL + (uint64_t)ns.value_nsec);
+	uint64_t interval_ns = ((uint64_t)ns.interval_sec * 1000000000ULL + (uint64_t)ns.interval_nsec);
+	_Bool disarm = (flags & 1) != 0;
+	return AnonTimerFdSetTime((int)fd, value_ns, interval_ns, disarm);//装载定时器
+}
+
+/**
+ * int timerfd_gettime(int fd, struct itimerspec *cur_value)
+ * 获取定时器当前值
+ */
+static long sys_timerfd_gettime(long fd, long curv, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!curv)return -EINVAL;
+	//查询剩余时间与间隔
+	uint64_t v = 0,it = 0;
+	int r = AnonTimerFdGetTime((int)fd,&v,&it);
+	if(r)return r;
+	struct k_itimerspec os;
+	os.interval_sec = (long)(it / 1000000000ULL);
+	os.interval_nsec = (long)(it % 1000000000ULL);
+	os.value_sec = (long)(v / 1000000000ULL);
+	os.value_nsec = (long)(v % 1000000000ULL);
+	if(copy_to_user((void*)curv,&os,sizeof(os)))return -EFAULT;
+	return 0;
+}
+
+/*
+ * int signalfd4(int fd, const sigset_t *mask, size_t sizemask, int flags)
+ * 创建signalfd
+ */
+static long sys_signalfd4(long fd, long mask, long sizemask, long flags, long a5, long a6){
+	(void)fd; (void)a5; (void)a6;
+	if(!mask)return -EINVAL;
+	if(sizemask < 8)return -EINVAL;
+	uint64_t um = 0;
+	if(copy_from_user(&um, (void*)mask, sizeof(um)))return -EFAULT;
+	if(!current_task)return -EBADF;
+	return AnonSignalFd(SIGSET_FROM_USER(um), (int)flags);
+}
+
+/*
+ * int pidfd_open(pid_t pid, unsigned int flags)
+ * 创建pidfd
+ */
+static long sys_pidfd_open(long pid, long flags, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EBADF;
+	return AnonPidFdOpen(pid, (int)flags);
+}
+
+/*
+ * int pidfd_send_signal(int pidfd, int sig, siginfo_t *info, unsigned int flags)
+ * 通过pidfd向进程发送信号
+ */
+static long sys_pidfd_send_signal(long pidfd, long sig, long info, long flags, long a5, long a6){
+	(void)info; (void)flags; (void)a5; (void)a6;
+	if(!current_task)return -EBADF;
+	return AnonPidFdSignal((int)pidfd, (int)sig);
+}
+
 /* 
  * int reboot(int magic,int magic2,int cmd, void *arg)
  * 重启/关机/挂起系统
@@ -2556,6 +2675,13 @@ void InitSyscall(void){
 	syscall_table[SYS_EPOLL_CTL]     = sys_epoll_ctl;
 	syscall_table[SYS_EPOLL_PWAIT]   = sys_epoll_pwait;
 	syscall_table[SYS_EPOLL_CREATE1] = sys_epoll_create1;
+	syscall_table[SYS_EVENTFD2]      = sys_eventfd2;
+	syscall_table[SYS_TIMERFD_CREATE]  = sys_timerfd_create;
+	syscall_table[SYS_TIMERFD_SETTIME] = sys_timerfd_settime;
+	syscall_table[SYS_TIMERFD_GETTIME] = sys_timerfd_gettime;
+	syscall_table[SYS_SIGNALFD4]       = sys_signalfd4;
+	syscall_table[SYS_PIDFD_OPEN]        = sys_pidfd_open;
+	syscall_table[SYS_PIDFD_SEND_SIGNAL] = sys_pidfd_send_signal;
 	syscall_table[SYS_RT_SIGACTION]     = sys_rt_sigaction;
 	syscall_table[SYS_RT_SIGPROCMASK]   = sys_rt_sigprocmask;
 	syscall_table[SYS_RT_SIGRETURN]     = sys_rt_sigreturn;

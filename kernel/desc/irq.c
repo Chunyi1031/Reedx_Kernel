@@ -13,6 +13,7 @@
 #include <task.h>
 #include <futex.h>
 #include <signals.h>
+#include <anon.h>
 
 volatile uint64_t SYSTEM_TimerTicks = 0;
 
@@ -36,6 +37,7 @@ void irq_dispatch(uint32_t vector, uint64_t *frame){
 		SYSTEM_TimerTicks++;//增加计数
 		timeout_wake_check();//检查并唤醒超时的msleep任务
 		futex_timeout_check();//检查并唤醒超时的futex等待者
+		AnonTimerTick();//推进到期的timerfd
 		TTY_IntrCheck();//终端Ctrl+C挂起信号投递
 		send_eoi((uint8_t)vector);//发送EOI
 		schedule();//调度
