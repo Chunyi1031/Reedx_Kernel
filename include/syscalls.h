@@ -39,6 +39,21 @@
 #define SYS_DUP2                    33
 #define SYS_NANOSLEEP               35
 #define SYS_GETPID                  39
+#define SYS_SOCKET                  41
+#define SYS_CONNECT                 42
+#define SYS_ACCEPT                  43
+#define SYS_SENDTO                  44
+#define SYS_RECVFROM                45
+#define SYS_SENDMSG                 46
+#define SYS_RECVMSG                 47
+#define SYS_SHUTDOWN                48
+#define SYS_BIND                    49
+#define SYS_LISTEN                  50
+#define SYS_GETSOCKNAME             51
+#define SYS_GETPEERNAME             52
+#define SYS_SOCKETPAIR              53
+#define SYS_SETSOCKOPT              54
+#define SYS_GETSOCKOPT              55
 #define SYS_CLONE                   56
 #define SYS_FORK                    57
 #define SYS_VFORK                   58
@@ -131,6 +146,7 @@
 #define SYS_TIMERFD_CREATE          283
 #define SYS_TIMERFD_SETTIME         286
 #define SYS_TIMERFD_GETTIME         287
+#define SYS_ACCEPT4                 288
 #define SYS_SIGNALFD4               289
 #define SYS_EVENTFD2                290
 #define SYS_EPOLL_CREATE1           291
@@ -245,14 +261,23 @@
 #define EMFILE              24
 #define ENOSPC              28
 #define EROFS               30
-#define ERANGE              34
 #define EPIPE               32
+#define ERANGE              34
 #define ENAMETOOLONG        36
 #define ENOSYS              38
 #define ENOTEMPTY           39
 #define ELOOP               40
+#define ENOTSOCK            88
+#define EDESTADDRREQ        89
+#define EMSGSIZE            90
+#define ESOCKTNOSUPPORT     94
 #define EOPNOTSUPP          95
+#define EAFNOSUPPORT        97
+#define EADDRINUSE          98
+#define EADDRNOTAVAIL       99
+#define ENOBUFS             105
 #define ETIMEDOUT           110
+#define ECONNREFUSED        111
 
 #define WNOHANG             1 //waitpid选项
 

@@ -19,6 +19,7 @@
 #define ANON_SIGNALFD  4
 #define ANON_PIDFD     5
 #define ANON_INOTIFY   6
+#define ANON_SOCKET    7
 
 typedef struct anon_obj anon_obj_t;
 

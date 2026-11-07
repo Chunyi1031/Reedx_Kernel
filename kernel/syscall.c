@@ -24,6 +24,7 @@
 #include <poll.h>
 #include <anon.h>
 #include <inotify.h>
+#include <socket.h>
 #include <signals.h>
 #include <rtc.h>
 #include <delay.h>
@@ -2605,6 +2606,362 @@ static long sys_inotify_rm_watch(long fd, long wd, long a3, long a4, long a5, lo
 	return AnonInotifyRmWatch((int)fd, (int)wd);
 }
 
+//从用户空间拷出路径名
+static long sk_copy_path(long uaddr, long addrlen, char *out, int outsz){
+	if(!uaddr)return -EFAULT;
+	if(addrlen < 3)return -EINVAL;
+	ksockaddr_un_t ka;
+	memset(&ka, 0, sizeof(ka));
+	long n = addrlen < (long)sizeof(ka) ? addrlen : (long)sizeof(ka);
+	if(copy_from_user(&ka, (void*)uaddr, (unsigned long)n))return -EFAULT;
+	if(ka.sun_family != AF_UNIX)return -EAFNOSUPPORT;
+	int len = (int)n - (int)sizeof(uint16_t);
+	if(len <= 0)return -EINVAL;
+	if(len > outsz - 1)len = outsz - 1;
+	memcpy(out,ka.sun_path,(unsigned long)len);
+	out[len] = 0;
+	return 0;
+}
+
+/*
+ * int socket(int family, int type, int protocol)
+ * 创建套接字
+ */
+static long sys_socket(long family, long type, long proto, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EBADF;
+	return SockCreate((int)family,(int)type,(int)proto);
+}
+
+/*
+ * int socketpair(int family, int type, int protocol, int sv[2])
+ * 创建套接字对
+ */
+static long sys_socketpair(long family, long type, long proto, long usv, long a5, long a6){
+	(void)a5; (void)a6;
+	if(!usv)return -EFAULT;
+	long fds[2] = {0,0};
+	int r = SockPair((int)family, (int)type, (int)proto, &fds[0], &fds[1]);
+	if(r)return r;
+	int ufds[2] = {(int)fds[0],(int)fds[1]};
+	if(copy_to_user((void*)usv,ufds,sizeof(ufds)))return -EFAULT;
+	return 0;
+}
+
+/*
+ * int bind(int fd, const struct sockaddr *addr, socklen_t addrlen)
+ * 绑定地址
+ */
+static long sys_bind(long fd, long uaddr, long addrlen, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	char path[108];
+	long r = sk_copy_path(uaddr, addrlen, path, (int)sizeof(path));
+	if(r)return r;
+	return SockBind((int)fd, path);
+}
+
+/*
+ * int listen(int fd, int backlog)
+ * 监听
+ */
+static long sys_listen(long fd, long backlog, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	return SockListen((int)fd, (int)backlog);
+}
+
+/*
+ * int connect(int fd, const struct sockaddr *addr, socklen_t addrlen)
+ * 连接
+ */
+static long sys_connect(long fd, long uaddr, long addrlen, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	char path[108];
+	long r = sk_copy_path(uaddr, addrlen, path, (int)sizeof(path));
+	if(r)return r;
+	return SockConnect((int)fd, path);
+}
+
+/*
+ * int accept4(int fd, struct sockaddr *addr, socklen_t *addrlen, int flags)
+ * 接受连接
+ */
+static long sys_accept(long fd, long uaddr, long uaddrlen, long flags, long a5, long a6){
+	(void)flags; (void)a5; (void)a6;
+	int nfd = SockAccept((int)fd);
+	if(nfd < 0)return nfd;
+	if(uaddr && uaddrlen){
+		ksockaddr_un_t ka;
+		int len = 0;
+		memset(&ka, 0, sizeof(ka));
+		ka.sun_family = AF_UNIX;
+		SockGetName(nfd, &ka, &len, false);
+		if(copy_to_user((void*)uaddr, &ka, sizeof(ka)))return -EFAULT;
+	}
+	return nfd;
+}
+
+/*
+ * int shutdown(int fd, int how)
+ * 关闭套接字
+ */
+static long sys_shutdown(long fd, long how, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	return SockShutdown((int)fd, (int)how);
+}
+
+/*
+ * int getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen)
+ * 获取本地地址
+ */
+static long sys_getsockname(long fd, long uaddr, long uaddrlen, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!uaddr || !uaddrlen)return -EFAULT;
+	ksockaddr_un_t ka;
+	int len = 0;
+	int r = SockGetName((int)fd, &ka, &len, false);
+	if(r)return r;
+	if(copy_to_user((void*)uaddr, &ka, sizeof(ka)))return -EFAULT;
+	int out = len;
+	if(copy_to_user((void*)uaddrlen, &out, sizeof(out)))return -EFAULT;
+	return 0;
+}
+
+/*
+ * int getpeername(int fd, struct sockaddr *addr, socklen_t *addrlen)
+ * 获取对端地址
+ */
+static long sys_getpeername(long fd, long uaddr, long uaddrlen, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!uaddr || !uaddrlen)return -EFAULT;
+	ksockaddr_un_t ka;
+	int len = 0;
+	int r = SockGetName((int)fd, &ka, &len, true);
+	if(r)return r;
+	if(copy_to_user((void*)uaddr, &ka, sizeof(ka)))return -EFAULT;
+	int out = len;
+	if(copy_to_user((void*)uaddrlen, &out, sizeof(out)))return -EFAULT;
+	return 0;
+}
+
+/*
+ * int setsockopt(int fd, int level, int optname, const void *optval, socklen_t optlen)
+ * 设置套接字选项
+ */
+static long sys_setsockopt(long fd, long level, long optname, long uval, long ulen, long a6){
+	(void)a6;
+	char buf[64];
+	if(uval && ulen > 0){
+		long n = ulen < (long)sizeof(buf) ? ulen : (long)sizeof(buf);
+		if(copy_from_user(buf, (void*)uval, (unsigned long)n))return -EFAULT;
+	}
+	return SockSetOpt((int)fd, (int)level, (int)optname, buf, (int)ulen);
+}
+
+/*
+ * int getsockopt(int fd, int level, int optname, void *optval, socklen_t *optlen)
+ * 获取套接字选项
+ */
+static long sys_getsockopt(long fd, long level, long optname, long uval, long ulen, long a6){
+	(void)a6;
+	if(!uval || !ulen)return -EFAULT;
+	int len = 0;
+	if(copy_from_user(&len, (void*)ulen, sizeof(len)))return -EFAULT;
+	char buf[64];
+	if(len < 0 || len > (int)sizeof(buf))return -EINVAL;
+	int r = SockGetOpt((int)fd, (int)level, (int)optname, buf, &len);
+	if(r)return r;
+	if(copy_to_user((void*)uval, buf, (unsigned long)len))return -EFAULT;
+	if(copy_to_user((void*)ulen, &len, sizeof(len)))return -EFAULT;
+	return 0;
+}
+
+static long sk_send_common(long fd, long buf, long len){
+	if(len < 0)return -EINVAL;
+	char kbuf[512];
+	long total = 0;
+	while(total < len){
+		long chunk = len - total;
+		if(chunk > (long)sizeof(kbuf))chunk = (long)sizeof(kbuf);
+		if(copy_from_user(kbuf, (void*)(buf + total), (unsigned long)chunk))return -EFAULT;
+		int64_t n = SockSend((int)fd, kbuf, (uint64_t)chunk);
+		if(n < 0)return total ? total : (long)n;
+		total += (long)n;
+		if(n < chunk)break;
+	}
+	return total;
+}
+
+static long sk_recv_common(long fd, long buf, long len){
+	if(len < 0)return -EINVAL;
+	char kbuf[512];
+	long want = len < (long)sizeof(kbuf) ? len : (long)sizeof(kbuf);
+	int64_t n = SockRecv((int)fd, kbuf, (uint64_t)want);
+	if(n <= 0)return (long)n;
+	if(copy_to_user((void*)buf, kbuf, (unsigned long)n))return -EFAULT;
+	return (long)n;
+}
+
+/*
+ * ssize_t sendto(int fd, const void *buf, size_t len, int flags, const struct sockaddr *dst, socklen_t dstlen)
+ * 发送数据
+ */
+static long sys_sendto(long fd, long buf, long len, long flags, long a5, long a6){
+	(void)flags;
+	if(len < 0)return -EINVAL;
+	char dst[108];
+	dst[0] = 0;
+	_Bool have_dst = false;
+	if(a5){
+		ksockaddr_un_t ka;
+		memset(&ka, 0, sizeof(ka));
+		long n = (a6 > 0 && a6 < (long)sizeof(ka)) ? a6 : (long)sizeof(ka);
+		if(copy_from_user(&ka, (void*)a5, (unsigned long)n))return -EFAULT;
+		if(ka.sun_family == AF_UNIX && ka.sun_path[0]){
+			int pl = (int)n - (int)sizeof(uint16_t);
+			if(pl > (int)sizeof(dst) - 1)pl = (int)sizeof(dst) - 1;
+			if(pl > 0){
+				memcpy(dst, ka.sun_path, (unsigned long)pl);
+				dst[pl] = 0;
+				have_dst = true;
+			}
+		}
+	}
+	if(!have_dst)return sk_send_common(fd, buf, len);
+	char kbuf[1024];
+	long n = len < (long)sizeof(kbuf) ? len : (long)sizeof(kbuf);
+	if(copy_from_user(kbuf, (void*)buf, (unsigned long)n))return -EFAULT;
+	return (long)SockSendTo((int)fd, kbuf, (uint64_t)n, dst);
+}
+
+/*
+ * ssize_t recvfrom(int fd, void *buf, size_t len, int flags, struct sockaddr *src, socklen_t *srclen)
+ * 接收数据
+ */
+static long sys_recvfrom(long fd, long buf, long len, long flags, long a5, long a6){
+	(void)flags; (void)a6;
+	if(len < 0)return -EINVAL;
+	char kbuf[512];
+	long want = len < (long)sizeof(kbuf) ? len : (long)sizeof(kbuf);
+	char from[108];
+	from[0] = 0;
+	int64_t rn = SockRecvFrom((int)fd, kbuf, (uint64_t)want, from);
+	if(rn <= 0)return (long)rn;
+	if(copy_to_user((void*)buf, kbuf, (unsigned long)rn))return -EFAULT;
+	if(a5){
+		ksockaddr_un_t ka;
+		memset(&ka, 0, sizeof(ka));
+		ka.sun_family = AF_UNIX;
+		int pl = (int)strlen(from);
+		if(pl > (int)sizeof(ka.sun_path) - 1)pl = (int)sizeof(ka.sun_path) - 1;
+		memcpy(ka.sun_path, from, (unsigned long)pl);
+		if(copy_to_user((void*)a5, &ka, sizeof(ka)))return -EFAULT;
+		if(a6){
+			int alen = (int)(sizeof(uint16_t) + pl + 1);
+			if(copy_to_user((void*)a6, &alen, sizeof(alen)))return -EFAULT;
+		}
+	}
+	return (long)rn;
+}
+
+static long sys_sendmsg(long fd, long msg, long flags, long a4, long a5, long a6){
+	(void)flags; (void)a4; (void)a5; (void)a6;
+	if(!msg)return -EFAULT;
+	struct { void *name; uint32_t namelen; void *iov; uint64_t iovlen; void *control; uint64_t controllen; uint32_t flags; } mh;
+	if(copy_from_user(&mh, (void*)msg, sizeof(mh)))return -EFAULT;
+	//目标地址(数据报)
+	char dst[108];
+	dst[0] = 0;
+	if(mh.name && mh.namelen >= 3){
+		ksockaddr_un_t ka;
+		memset(&ka, 0, sizeof(ka));
+		long n = mh.namelen < (long)sizeof(ka) ? (long)mh.namelen : (long)sizeof(ka);
+		if(copy_from_user(&ka, mh.name, (unsigned long)n))return -EFAULT;
+		if(ka.sun_family == AF_UNIX){
+			int pl = (int)n - (int)sizeof(uint16_t);
+			if(pl > (int)sizeof(dst) - 1)pl = (int)sizeof(dst) - 1;
+			if(pl > 0){ memcpy(dst, ka.sun_path, (unsigned long)pl); dst[pl] = 0; }
+		}
+	}
+	//控制消息(SCM_RIGHTS / SCM_CREDENTIALS)
+	char *ctl = NULL;
+	uint64_t ctllen = 0;
+	if(mh.control && mh.controllen){
+		ctllen = mh.controllen > 512 ? 512 : mh.controllen;
+		ctl = (char*)PHYS_TO_VIRT(Pmm_Malloc(1));
+		if(!ctl)return -ENOMEM;
+		if(copy_from_user(ctl, mh.control, (unsigned long)ctllen)){
+			Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ctl), 1);
+			return -EFAULT;
+		}
+	}
+	if(!mh.iov || mh.iovlen == 0){
+		if(ctl)Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ctl), 1);
+		return 0;
+	}
+	char kbuf[1024];
+	long total = 0;
+	for(uint64_t i = 0; i < mh.iovlen && i < 8; i ++){
+		struct { void *base; uint64_t len; } iov;
+		if(copy_from_user(&iov, (char*)mh.iov + i * sizeof(iov), sizeof(iov)))return -EFAULT;
+		if(!iov.len)continue;
+		long chunk = iov.len > (uint64_t)sizeof(kbuf) ? (long)sizeof(kbuf) : (long)iov.len;
+		if(copy_from_user(kbuf, iov.base, (unsigned long)chunk))return -EFAULT;
+		//控制消息随第一段数据一起发送
+		int64_t n = SockSendMsg((int)fd, kbuf, (uint64_t)chunk, total ? NULL : ctl, total ? 0 : ctllen, dst[0] ? dst : NULL);
+		if(n < 0){ if(ctl)Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ctl), 1); return total ? total : (long)n; }
+		total += (long)n;
+	}
+	if(ctl)Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ctl), 1);
+	return total;
+}
+
+/*
+ * ssize_t recvmsg(int fd, struct msghdr *msg, int flags)
+ * 接收数据并回填控制消息
+ */
+static long sys_recvmsg(long fd, long msg, long flags, long a4, long a5, long a6){
+	(void)flags; (void)a4; (void)a5; (void)a6;
+	if(!msg)return -EFAULT;
+	struct { void *name; uint32_t namelen; void *iov; uint64_t iovlen; void *control; uint64_t controllen; uint32_t flags; } mh;
+	if(copy_from_user(&mh, (void*)msg, sizeof(mh)))return -EFAULT;
+	if(!mh.iov || mh.iovlen == 0)return 0;
+	char *ctl = NULL;
+	uint64_t ctlcap = 0;
+	if(mh.control && mh.controllen){
+		ctlcap = mh.controllen > 512 ? 512 : mh.controllen;
+		ctl = (char*)PHYS_TO_VIRT(Pmm_Malloc(1));
+		if(!ctl)return -ENOMEM;
+		memset(ctl, 0, PAGE_SIZE);
+	}
+	char kbuf[1024];
+	long total = 0;
+	uint64_t ctlout = 0;
+	for(uint64_t i = 0; i < mh.iovlen && i < 8; i ++){
+		struct { void *base; uint64_t len; } iov;
+		if(copy_from_user(&iov, (char*)mh.iov + i * sizeof(iov), sizeof(iov)))return -EFAULT;
+		if(!iov.len)continue;
+		long chunk = iov.len > (uint64_t)sizeof(kbuf) ? (long)sizeof(kbuf) : (long)iov.len;
+		int64_t n = SockRecvMsg((int)fd, kbuf, (uint64_t)chunk, total ? NULL : ctl, total ? 0 : ctlcap, total ? NULL : &ctlout, NULL);
+		if(n <= 0){
+			if(ctl)Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ctl), 1);
+			if(total)return total;
+			return (long)n;
+		}
+		if(copy_to_user(iov.base, kbuf, (unsigned long)n))return -EFAULT;
+		total += (long)n;
+	}
+	if(ctl){
+		if(ctlout && mh.control && copy_to_user(mh.control, ctl, (unsigned long)ctlout))return -EFAULT;
+		Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)ctl), 1);
+	}
+	//回填 controllen
+	if(mh.control){
+		uint64_t cl = ctlout;
+		if(copy_to_user((char*)msg + 40, &cl, sizeof(cl)))return -EFAULT;
+	}
+	return total;
+}
+
 /* 
  * int reboot(int magic,int magic2,int cmd, void *arg)
  * 重启/关机/挂起系统
@@ -2717,6 +3074,22 @@ void InitSyscall(void){
 	syscall_table[SYS_INOTIFY_INIT1]     = sys_inotify_init1;
 	syscall_table[SYS_INOTIFY_ADD_WATCH] = sys_inotify_add_watch;
 	syscall_table[SYS_INOTIFY_RM_WATCH]  = sys_inotify_rm_watch;
+	syscall_table[SYS_SOCKET]      = sys_socket;
+	syscall_table[SYS_SOCKETPAIR]  = sys_socketpair;
+	syscall_table[SYS_BIND]        = sys_bind;
+	syscall_table[SYS_LISTEN]      = sys_listen;
+	syscall_table[SYS_CONNECT]     = sys_connect;
+	syscall_table[SYS_ACCEPT]      = sys_accept;
+	syscall_table[SYS_ACCEPT4]     = sys_accept;
+	syscall_table[SYS_SHUTDOWN]    = sys_shutdown;
+	syscall_table[SYS_SENDTO]      = sys_sendto;
+	syscall_table[SYS_RECVFROM]    = sys_recvfrom;
+	syscall_table[SYS_SENDMSG]     = sys_sendmsg;
+	syscall_table[SYS_RECVMSG]     = sys_recvmsg;
+	syscall_table[SYS_GETSOCKNAME] = sys_getsockname;
+	syscall_table[SYS_GETPEERNAME] = sys_getpeername;
+	syscall_table[SYS_SETSOCKOPT]  = sys_setsockopt;
+	syscall_table[SYS_GETSOCKOPT]  = sys_getsockopt;
 	syscall_table[SYS_RT_SIGACTION]     = sys_rt_sigaction;
 	syscall_table[SYS_RT_SIGPROCMASK]   = sys_rt_sigprocmask;
 	syscall_table[SYS_RT_SIGRETURN]     = sys_rt_sigreturn;
