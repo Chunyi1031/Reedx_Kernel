@@ -84,6 +84,7 @@
 #define SYS_LCHOWN                  94
 #define SYS_UMASK                   95
 #define SYS_GETTIMEOFDAY            96
+#define SYS_GETRLIMIT               97
 #define SYS_SYSINFO                 99
 #define SYS_GETUID                  102
 #define SYS_GETGID                  104
@@ -92,6 +93,7 @@
 #define SYS_GETEUID                 107
 #define SYS_GETEGID                 108
 #define SYS_SETPGID                 109
+#define SYS_SETSID                  112
 #define SYS_SETREUID                113
 #define SYS_SETREGID                114
 #define SYS_GETGROUPS               115
@@ -103,6 +105,9 @@
 #define SYS_GETRESUID               118
 #define SYS_GETRESGID               120
 #define SYS_GETPGID                 121
+#define SYS_GETSID                  124
+#define SYS_CAPGET                  125
+#define SYS_CAPSET                  126
 #define SYS_RT_SIGTIMEDWAIT         128
 #define SYS_SIGALTSTACK             131
 #define SYS_MKNOD                   133
@@ -110,6 +115,7 @@
 #define SYS_FSTATFS                 138
 #define SYS_PRCTL                   157
 #define SYS_ARCH_PRCTL              158
+#define SYS_SETRLIMIT               160
 #define SYS_SYNC                    162
 #define SYS_MOUNT                   165
 #define SYS_UMOUNT2                 166
@@ -163,6 +169,7 @@
 #define SYS_PRLIMIT64               302
 #define SYS_RENAMEAT2               316
 #define SYS_GETRANDOM               318
+#define SYS_MEMFD_CREATE            319
 #define SYS_STATX                   332
 #define SYS_PIDFD_SEND_SIGNAL       424
 #define SYS_PIDFD_OPEN              434
@@ -210,6 +217,8 @@
 #define F_DUPFD_CLOEXEC 1030
 #define F_SETPIPE_SZ    1031
 #define F_GETPIPE_SZ    1032
+#define F_ADD_SEALS     1033
+#define F_GET_SEALS     1034
 
 //锁类型
 #define F_RDLCK   0
@@ -316,6 +325,10 @@
 #define FUTEX_PRIVATE_FLAG    128
 #define FUTEX_CLOCK_REALTIME  256
 
+//socket(2) 标志
+#define SOCK_CLOEXEC          0x80000
+#define SOCK_NONBLOCK         0x800
+
 //POSIX timespec
 typedef struct timespec {
     long tv_sec;//秒
@@ -333,7 +346,28 @@ typedef struct rlimit64 {
     uint64_t rlim_cur;
     uint64_t rlim_max;
 } rlimit64_t;
-#define RLIMIT_STACK 3
+
+//资源限制的种类
+#define RLIMIT_CPU        0
+#define RLIMIT_FSIZE      1
+#define RLIMIT_DATA       2
+#define RLIMIT_STACK      3
+#define RLIMIT_CORE       4
+#define RLIMIT_RSS        5
+#define RLIMIT_NPROC      6
+#define RLIMIT_NOFILE     7
+#define RLIMIT_MEMLOCK    8
+#define RLIMIT_AS         9
+#define RLIMIT_LOCKS      10
+#define RLIMIT_SIGPENDING 11
+#define RLIMIT_MSGQUEUE   12
+#define RLIMIT_NICE       13
+#define RLIMIT_RTPRIO     14
+#define RLIMIT_RTTIME     15
+#define RLIMIT_NLIMITS    16
+#define RLIM_INFINITY     (~0ULL)
+
+void RlimitGet(int resource, uint64_t *cur, uint64_t *max);//查询一项资源限制
 
 //gettimeofday用timeval
 typedef struct timeval {
@@ -345,8 +379,13 @@ typedef struct timeval {
 #define CLOCK_REALTIME           0
 #define CLOCK_MONOTONIC          1
 #define CLOCK_PROCESS_CPUTIME_ID 2
+#define CLOCK_THREAD_CPUTIME_ID  3
+#define CLOCK_MONOTONIC_RAW      4
 #define CLOCK_REALTIME_COARSE    5
 #define CLOCK_MONOTONIC_COARSE   6
+#define CLOCK_BOOTTIME           7
+#define CLOCK_BOOTTIME_ALARM     8
+#define CLOCK_TAI                11
 
 //文件类型/权限位(POSIX)
 #define S_IFMT   0170000

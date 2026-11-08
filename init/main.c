@@ -120,6 +120,8 @@ void KernelMain(){
     sti();//启用中断
     printk(PRINTK_INFO"%s",SYSTEM_buildStamp);
     if(!InitDiskAndFs())printk(PRINTK_WARNING"Disk init failed!");//初始化磁盘及文件系统
+    FsMkdir("/tmp", 01777);
+    FsMount("tmpfs", "/tmp");
     //创建首个用户程序
     mm_struct* umm = vmm_create_address_space();
     if(!umm)SYSTEM_STOP();

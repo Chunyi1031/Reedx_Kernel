@@ -91,21 +91,27 @@ static struct dentry *dir_lookup(struct dentry *dir, const char *name){
     return d;
 }
 
-//在目录 dentry 下创建; 成功返回0, out 得到新 dentry(带引用)
+//在目录dentry下创建
 static int dir_create(struct dentry *dir, const char *name, int isdir, uint16_t mode, struct dentry **out){
     if(!dir || !dir->d_inode || !name || !*name)return -ENOTDIR;
     struct inode *din = dir->d_inode;
-    int (*fn)(struct inode*, struct dentry*, uint16_t) = NULL;
-    if(din->i_op)fn = isdir ? din->i_op->mkdir : din->i_op->create;
-    if(!fn)return -EROFS;
-    //检查在父目录的写权限和搜索权限
-    int pr = InodePermission(din, MAY_WRITE | MAY_EXEC);
-    if(pr)return pr;
     struct dentry *d = dir_lookup(dir, name);
     if(!d)return -ENOMEM;
     if(d->d_inode){
         dput(d);
         return -EEXIST;
+    }
+    int (*fn)(struct inode*, struct dentry*, uint16_t) = NULL;
+    if(din->i_op)fn = isdir ? din->i_op->mkdir : din->i_op->create;
+    if(!fn){
+        dput(d);
+        return -EROFS;
+    }
+    //检查在父目录的写权限和搜索权限
+    int pr = InodePermission(din, MAY_WRITE | MAY_EXEC);
+    if(pr){
+        dput(d);
+        return pr;
     }
     //新建文件的权限位要扣掉本进程的umask
     uint16_t m = (uint16_t)(mode & ~CurrentCred()->umask & 07777);

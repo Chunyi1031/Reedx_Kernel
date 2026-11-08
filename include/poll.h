@@ -38,6 +38,7 @@ typedef struct __attribute__((packed)) kepoll_event {
 #define EP_CTL_ADD     1
 #define EP_CTL_DEL     2
 #define EP_CTL_MOD     3
+#define EP_ET          0x80000000u
 
 int EpollCreate(void);//创建epoll实例并返回fd
 int EpollCtl(int epfd, int op, long fd, uint32_t events, uint64_t data);//增删改被监视的fd

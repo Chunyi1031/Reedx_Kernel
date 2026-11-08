@@ -12,6 +12,7 @@
 #include <mm/pmm.h>
 #include <irq.h>
 #include <drives/timer.h>
+#include <syscalls.h>
 
 #define PROC_BUF_MAX 3072//单个伪文件内容上限
 
@@ -38,9 +39,13 @@ enum {
     PROC_K_FILESYSTEMS, // /proc/filesystems
     PROC_K_SYSDIR,      // /proc/sys
     PROC_K_SYSKERNELDIR,// /proc/sys/kernel
-    PROC_K_SYSCTL,      // /proc/sys/kernel/* 下的单个文件
+    PROC_K_SYSCTL,      // /proc/sys/* 下的单个参数文件
+    PROC_K_SYSFSDIR,    // /proc/sys/fs
     PROC_K_CGROUPS,     // /proc/cgroups
     PROC_K_ROOTLINK,    // /proc/<pid>/root 符号链接
+    PROC_K_LIMITS,      // /proc/<pid>/limits
+    PROC_K_OOM_SCORE_ADJ,// /proc/<pid>/oom_score_adj
+    PROC_K_OOM_SCORE,   // /proc/<pid>/oom_score
 };
 
 //每个proc inode的私有信息
@@ -62,14 +67,20 @@ typedef struct proc_inode_info {
 #define PROC_INO_FDLINK(p,f) ((uint64_t)(0x10000000ULL + (uint64_t)(p) * 1024 + (uint64_t)(f)))
 #define PROC_INO_SYSDIR      ((uint64_t)0x20000001ULL)
 #define PROC_INO_SYSKERNELDIR ((uint64_t)0x20000002ULL)
+#define PROC_INO_SYSFSDIR    ((uint64_t)0x20000003ULL)
 #define PROC_INO_SYSCTL(i)   ((uint64_t)(0x20000100ULL + (uint64_t)(i)))
 
-// /proc/sys/kernel下的可读写参数
+// /proc/sys下的可读写参数
 typedef struct proc_sysctl_desc {
     const char *name;//文件名
     uint16_t    mode;//权限
     uint32_t    gen; //内容种类
+    uint32_t    dir; //所属目录
 } proc_sysctl_desc_t;
+
+//参数所在的目录
+#define PSYS_DIR_KERNEL 0
+#define PSYS_DIR_FS     1
 
 enum {
     PSYS_OSRELEASE = 0,
@@ -81,18 +92,22 @@ enum {
     PSYS_HOSTNAME,
     PSYS_DOMAINNAME,
     PSYS_CONSOLE_LOGLEVEL,
+    PSYS_FILE_MAX,
+    PSYS_NR_OPEN,
 };
 
 static const proc_sysctl_desc_t g_proc_sysctls[] = {
-    {"osrelease",           S_IFREG | 0444, PSYS_OSRELEASE},
-    {"cap_last_cap",        S_IFREG | 0444, PSYS_CAP_LAST_CAP},
-    {"printk_devkmsg",      S_IFREG | 0644, PSYS_PRINTK_DEVKMSG},
-    {"core_pattern",        S_IFREG | 0644, PSYS_CORE_PATTERN},
-    {"ostype",              S_IFREG | 0444, PSYS_OSTYPE},
-    {"version",             S_IFREG | 0444, PSYS_VERSION},
-    {"hostname",            S_IFREG | 0644, PSYS_HOSTNAME},
-    {"domainname",          S_IFREG | 0644, PSYS_DOMAINNAME},
-    {"printk",              S_IFREG | 0644, PSYS_CONSOLE_LOGLEVEL},
+    {"osrelease",           S_IFREG | 0444, PSYS_OSRELEASE,         PSYS_DIR_KERNEL},
+    {"cap_last_cap",        S_IFREG | 0444, PSYS_CAP_LAST_CAP,      PSYS_DIR_KERNEL},
+    {"printk_devkmsg",      S_IFREG | 0644, PSYS_PRINTK_DEVKMSG,    PSYS_DIR_KERNEL},
+    {"core_pattern",        S_IFREG | 0644, PSYS_CORE_PATTERN,      PSYS_DIR_KERNEL},
+    {"ostype",              S_IFREG | 0444, PSYS_OSTYPE,            PSYS_DIR_KERNEL},
+    {"version",             S_IFREG | 0444, PSYS_VERSION,           PSYS_DIR_KERNEL},
+    {"hostname",            S_IFREG | 0644, PSYS_HOSTNAME,          PSYS_DIR_KERNEL},
+    {"domainname",          S_IFREG | 0644, PSYS_DOMAINNAME,        PSYS_DIR_KERNEL},
+    {"printk",              S_IFREG | 0644, PSYS_CONSOLE_LOGLEVEL,  PSYS_DIR_KERNEL},
+    {"file-max",            S_IFREG | 0644, PSYS_FILE_MAX,          PSYS_DIR_FS},
+    {"nr_open",             S_IFREG | 0644, PSYS_NR_OPEN,           PSYS_DIR_FS},
 };
 #define PROC_NSYSCTL ((int)(sizeof(g_proc_sysctls) / sizeof(g_proc_sysctls[0])))
 
@@ -125,6 +140,10 @@ static const struct {
     {"comm",PROC_K_COMM},//进程名
     {"cgroup",PROC_K_CGROUP},//cgroup归属
     {"root",PROC_K_ROOTLINK},//根目录符号链接
+    {"limits",PROC_K_LIMITS},//资源限制
+    {"oom_score_adj",PROC_K_OOM_SCORE_ADJ},//OOM调节值
+    {"oom_score",PROC_K_OOM_SCORE},//OOM分数
+    {"mountinfo",PROC_K_MOUNTINFO},//挂载表
 };
 #define PROC_NPIDFILES ((int)(sizeof(g_proc_pidfiles) / sizeof(g_proc_pidfiles[0])))
 
@@ -182,7 +201,7 @@ static struct inode *proc_iget(struct super_block *sb, uint64_t ino, uint32_t ki
     inode->i_nlink = 1;
     inode->i_fop = &g_proc_file_fops;
     //根目录或或进程目录，设置为目录
-    if(kind == PROC_K_ROOT || kind == PROC_K_PIDDIR || kind == PROC_K_FDDIR || kind == PROC_K_SYSDIR || kind == PROC_K_SYSKERNELDIR){
+    if(kind == PROC_K_ROOT || kind == PROC_K_PIDDIR || kind == PROC_K_FDDIR || kind == PROC_K_SYSDIR || kind == PROC_K_SYSKERNELDIR || kind == PROC_K_SYSFSDIR){
         inode->i_mode = (uint16_t)(S_IFDIR | 0555);
         inode->i_nlink = 2;
         inode->i_op = &g_proc_dir_iops;
@@ -197,6 +216,9 @@ static struct inode *proc_iget(struct super_block *sb, uint64_t ino, uint32_t ki
         uint32_t idx = (uint32_t)(ino - PROC_INO_SYSCTL(0));
         if(idx >= (uint32_t)PROC_NSYSCTL)idx = 0;
         inode->i_mode = g_proc_sysctls[idx].mode;
+        inode->i_op = NULL;
+    }else if(kind == PROC_K_OOM_SCORE_ADJ){
+        inode->i_mode = (uint16_t)(S_IFREG | 0644);
         inode->i_op = NULL;
     }else{
         inode->i_mode = (uint16_t)(S_IFREG | 0444);
@@ -348,6 +370,42 @@ static int proc_gen_cgroup(char *out, int cap){
     return sprintf(out, "0::/\n");
 }
 
+//格式化一行资源限制
+static int proc_lim_line(char *out, const char *name, int resource, const char *units){
+    uint64_t cur, max;
+    char sbuf[24], hbuf[24];
+    RlimitGet(resource, &cur, &max);
+    if(cur == RLIM_INFINITY)sprintf(sbuf, "unlimited");
+    else sprintf(sbuf, "%llu", (unsigned long long)cur);
+    if(max == RLIM_INFINITY)sprintf(hbuf, "unlimited");
+    else sprintf(hbuf, "%llu", (unsigned long long)max);
+    return sprintf(out, "%-25s %-20s %-20s %s\n", name, sbuf, hbuf, units);
+}
+
+//资源限制表
+static int proc_gen_limits(char *out, int cap){
+    (void)cap;
+    int n = 0;
+    n += sprintf(out + n, "%-25s %-20s %-20s %s\n", "Limit", "Soft Limit", "Hard Limit", "Units");
+    n += proc_lim_line(out + n, "Max cpu time",              RLIMIT_CPU,        "seconds");
+    n += proc_lim_line(out + n, "Max file size",             RLIMIT_FSIZE,      "bytes");
+    n += proc_lim_line(out + n, "Max data size",             RLIMIT_DATA,       "bytes");
+    n += proc_lim_line(out + n, "Max stack size",            RLIMIT_STACK,      "bytes");
+    n += proc_lim_line(out + n, "Max core file size",        RLIMIT_CORE,       "bytes");
+    n += proc_lim_line(out + n, "Max resident set",          RLIMIT_RSS,        "bytes");
+    n += proc_lim_line(out + n, "Max processes",             RLIMIT_NPROC,      "processes");
+    n += proc_lim_line(out + n, "Max open files",            RLIMIT_NOFILE,     "files");
+    n += proc_lim_line(out + n, "Max locked memory",         RLIMIT_MEMLOCK,    "bytes");
+    n += proc_lim_line(out + n, "Max address space",         RLIMIT_AS,         "bytes");
+    n += proc_lim_line(out + n, "Max file locks",            RLIMIT_LOCKS,      "locks");
+    n += proc_lim_line(out + n, "Max pending signals",       RLIMIT_SIGPENDING, "signals");
+    n += proc_lim_line(out + n, "Max msgqueue size",         RLIMIT_MSGQUEUE,   "bytes");
+    n += proc_lim_line(out + n, "Max nice priority",         RLIMIT_NICE,       "");
+    n += proc_lim_line(out + n, "Max realtime priority",     RLIMIT_RTPRIO,     "");
+    n += proc_lim_line(out + n, "Max realtime timeout",      RLIMIT_RTTIME,     "us");
+    return n;
+}
+
 //详细挂载表
 typedef struct proc_mountinfo_ctx {
     char *buf;
@@ -383,6 +441,15 @@ static int proc_gen_mountinfo(char *out, int cap){
     c.id  = 0;
     VfsMountWalk(proc_mountinfo_one, &c);
     return c.len;
+}
+
+//该inode是否是procfs的挂载表
+int ProcInodeIsMountinfo(struct inode *inode){
+    if(!inode || !inode->i_sb)return 0;
+    if(strcmp(inode->i_sb->s_type_name, "procfs") != 0)return 0;
+    proc_inode_info_t *ii = PROC_INFO(inode);
+    if(!ii)return 0;
+    return ii->kind == PROC_K_MOUNTINFO;
 }
 
 //内核命令行
@@ -426,6 +493,8 @@ static int proc_gen_sysctl(char *out, int cap, uint32_t idx){
         case PSYS_HOSTNAME:         return sprintf(out, "%s\n", system_utsname.nodename);
         case PSYS_DOMAINNAME:       return sprintf(out, "localdomain\n");
         case PSYS_CONSOLE_LOGLEVEL: return sprintf(out, "7\t4\t1\t7\n");
+        case PSYS_FILE_MAX:         return sprintf(out, "1048576\n");
+        case PSYS_NR_OPEN:          return sprintf(out, "1048576\n");
         default:                    return -EINVAL;
     }
 }
@@ -449,6 +518,9 @@ static int proc_gen(char *out, int cap, const proc_inode_info_t *ii){
         case PROC_K_ENVIRON: return proc_gen_environ(out, cap);
         case PROC_K_COMM:    return proc_gen_comm(out, cap, ii->pid);
         case PROC_K_CGROUP:  return proc_gen_cgroup(out, cap);
+        case PROC_K_LIMITS:  return proc_gen_limits(out, cap);
+        case PROC_K_OOM_SCORE_ADJ: return sprintf(out, "0\n");
+        case PROC_K_OOM_SCORE:     return sprintf(out, "0\n");
         default:             return -EINVAL;
     }
 }
@@ -554,8 +626,11 @@ static struct dentry *proc_lookup(struct inode *dir, struct dentry *dentry, unsi
         if(len == 2 && memcmp(name, "fd", 2) == 0 && TaskFind((pid_t)di->pid))return proc_add(dir, dentry, PROC_INO_FDDIR(di->pid), PROC_K_FDDIR, di->pid, 0);//fd目录
     }else if(di->kind == PROC_K_SYSDIR){
         if(len == 6 && memcmp(name, "kernel", 6) == 0)return proc_add(dir, dentry, PROC_INO_SYSKERNELDIR, PROC_K_SYSKERNELDIR, 0, 0);
-    }else if(di->kind == PROC_K_SYSKERNELDIR){
+        if(len == 2 && memcmp(name, "fs", 2) == 0)return proc_add(dir, dentry, PROC_INO_SYSFSDIR, PROC_K_SYSFSDIR, 0, 0);
+    }else if(di->kind == PROC_K_SYSKERNELDIR || di->kind == PROC_K_SYSFSDIR){
+        uint32_t want = (di->kind == PROC_K_SYSFSDIR) ? PSYS_DIR_FS : PSYS_DIR_KERNEL;
         for(int i = 0;i < PROC_NSYSCTL;i ++){
+            if(g_proc_sysctls[i].dir != want)continue;
             if((strlen(g_proc_sysctls[i].name) == len) && (memcmp(g_proc_sysctls[i].name, name, len) == 0))
                 return proc_add(dir, dentry, PROC_INO_SYSCTL(i), PROC_K_SYSCTL, 0, (uint32_t)i);
         }
@@ -602,10 +677,13 @@ static int proc_iterate(struct file *f,void *ctx,int (*emit)(void *ctx,const cha
         emit(ctx, "fd", 2, PROC_INO_FDDIR(ii->pid), S_IFDIR, off ++);
     }else if(ii->kind == PROC_K_SYSDIR){
         emit(ctx, "kernel", 6, PROC_INO_SYSKERNELDIR, (int)S_IFDIR, 0);
-    }else if(ii->kind == PROC_K_SYSKERNELDIR){
-        for(int i = 0;i < PROC_NSYSCTL;i ++)
-            emit(ctx, g_proc_sysctls[i].name, (int)strlen(g_proc_sysctls[i].name),
-                 PROC_INO_SYSCTL(i), (int)S_IFREG, off ++);
+        emit(ctx, "fs", 2, PROC_INO_SYSFSDIR, (int)S_IFDIR, 1);
+    }else if(ii->kind == PROC_K_SYSKERNELDIR || ii->kind == PROC_K_SYSFSDIR){
+        uint32_t want = (ii->kind == PROC_K_SYSFSDIR) ? PSYS_DIR_FS : PSYS_DIR_KERNEL;
+        for(int i = 0;i < PROC_NSYSCTL;i ++){
+            if(g_proc_sysctls[i].dir != want)continue;
+            emit(ctx, g_proc_sysctls[i].name, (int)strlen(g_proc_sysctls[i].name),PROC_INO_SYSCTL(i), (int)S_IFREG, off ++);
+        }
     }else if(ii->kind == PROC_K_FDDIR){
         task_struct *t = TaskFind((pid_t)ii->pid);
         if(t){
@@ -638,6 +716,7 @@ static int64_t proc_write(struct file *f, const char *buf, uint64_t len, uint64_
     if(!ii)return -EINVAL;
     if(ii->kind == PROC_K_SYSCTL){
         if((g_proc_sysctls[ii->fd].mode & 0222) == 0)return -EPERM;
+    }else if(ii->kind == PROC_K_OOM_SCORE_ADJ){
     }else if(ii->kind != PROC_K_CMDLINE_ROOT && ii->kind != PROC_K_FILESYSTEMS){
         return -EPERM;
     }

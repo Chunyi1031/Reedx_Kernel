@@ -38,6 +38,7 @@ UEFI_MEMORY_DESCRIPTOR* AnalysisMemoryMap(const uint32_t num);
 int Init_Physical_Memory_Manager();//初始化物理内存管理器
 uint64_t GetMemoryTotalSize();
 uint64_t PmmFreeSize(void);//当前空闲的物理内存字节数
+_Bool Pmm_PhysAllocated(uintptr_t phys);//该物理页是否属于可用内存且已分配
 /**
  * @brief 物理内存内存分配
  * @param pages 申请的页数

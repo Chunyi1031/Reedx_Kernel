@@ -221,14 +221,19 @@ void mmput(mm_struct *mm){
 //递归释放用户空间页表
 static void vmm_free_user_pagetable(uint64_t table_phys, int level) {
     if (!table_phys) return;
+    if (!Pmm_PhysAllocated((uintptr_t)table_phys)) {
+        printk(PRINTK_ERR"vmm: free bogus page table page %llx (level=%d)", table_phys, level);
+        return;
+    }
     uint64_t *table = (uint64_t*)PHYS_TO_VIRT(table_phys);
     for(int i = 0; i < 512; i++) {
         uint64_t entry = table[i];
         if (!(entry & PTE_PRESENT)) continue;
         uint64_t child_phys = pte_get_paddr(entry);
+        if (!child_phys) continue;
         if (level < 3 && !(entry & PTE_HUGE)) {
             vmm_free_user_pagetable(child_phys, level + 1);
-        } else {
+        } else if (Pmm_PhysAllocated((uintptr_t)child_phys)) {
             Pmm_Free((void*)child_phys, 1);
         }
     }
@@ -237,6 +242,16 @@ static void vmm_free_user_pagetable(uint64_t table_phys, int level) {
 
 void vmm_destroy_address_space(mm_struct *mm){
     if (!mm) return;
+    if (!Pmm_PhysAllocated(VIRT_TO_PHYS(mm))) {
+        printk(PRINTK_ERR"vmm: destroy bogus mm %llx", (uint64_t)(uintptr_t)mm);
+        return;
+    }
+    if(mm->pgd) {
+        if (!Pmm_PhysAllocated((uintptr_t)mm->pgd)) {
+            printk(PRINTK_ERR"vmm: bogus pgd %llx", (uint64_t)mm->pgd);
+            mm->pgd = NULL;
+        }
+    }
     if(mm->pgd) {
         uintptr_t *pml4 = (uintptr_t*)PHYS_TO_VIRT(mm->pgd);
         //遍历用户空间

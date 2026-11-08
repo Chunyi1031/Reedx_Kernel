@@ -17,6 +17,8 @@
 #include <mm/pmm.h>
 #include <mm/vmm.h>
 #include <mm/pgtables.h>
+#include <anon.h>
+#include <pipe.h>
 
 #define EXEC_STACK_PAGES  2048     //用户栈大小(8MB)
 #define EXEC_MAX_ARGV     32       //最多参数个数
@@ -401,6 +403,17 @@ long sys_execve(long path, long argv, long envp, long a4, long a5, long a6){
     //加载并执行
     int r = do_execve(kpath, argc ? kargv : NULL, envc ? kenvp : NULL);
     Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)page), 2);
+    if(r == 0){
+        for(int i = 3;i < MAX_FD;i ++){
+            fs_file_t *f = &current_task->files[i];
+            if(!f->used || !(f->flags & O_CLOEXEC))continue;
+            if(f->anon)AnonPut(f->anon);
+            else if(f->pipe)pipeCloseEnd((struct pipe*)f->pipe, (f->flags & O_ACCMODE) == O_WRONLY);
+            else FsClose(f);
+            f->anon = NULL;
+            f->pipe = NULL;
+        }
+    }
     return r;
 err:
     Pmm_Free((void*)VIRT_TO_PHYS((uintptr_t)page), 2);

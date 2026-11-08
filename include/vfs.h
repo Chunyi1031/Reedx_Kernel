@@ -197,6 +197,7 @@ struct file {
     uint32_t             f_count;//引用计数
     uint32_t             f_flags;//打开标志
     uint64_t             f_pos;//当前读写位置
+    uint64_t             f_version;//文件内容版本号
     struct path          f_path;//路径
     struct inode        *f_inode;//指向inode
     const struct file_operations *f_op;//读写操作表(read/write/iterate)
@@ -258,6 +259,9 @@ struct vfsmount *VfsKernMount(struct super_block *sb, struct dentry *root, uint3
 int              VfsAttachMount(struct vfsmount *parent, struct dentry *mountpoint,struct vfsmount *child);//把子挂载挂到目录上
 int              VfsDetachMount(struct vfsmount *m);//卸载
 void             VfsMountWalk(void (*cb)(struct vfsmount *m, void *ctx), void *ctx);//遍历所有挂载点
+uint64_t         VfsMountSeq(void);
+void             VfsMountSeqBump(void);
+int              ProcInodeIsMountinfo(struct inode *inode);
 int              VfsMountNew(struct vfsmount *parent, struct dentry *mountpoint, const char *type);//在目录上新建并挂载ramfs/tmpfs
 struct dentry   *VfsDotDot(struct vfsmount **mnt_io, struct dentry *dentry);
 uint32_t         VfsMountCount(void);

@@ -109,3 +109,17 @@ short AnonPoll(void *obj, short want){
     if(!o->ops || !o->ops->poll)return (FSPOLL_IN | FSPOLL_OUT);
     return o->ops->poll(o, want);
 }
+
+//定位
+int64_t AnonSeek(void *obj, int64_t off, int whence){
+    anon_obj_t *o = (anon_obj_t*)obj;
+    if(!o || !o->ops || !o->ops->seek)return -EINVAL;
+    return o->ops->seek(o, off, whence);
+}
+
+//截断
+int64_t AnonTruncate(void *obj, uint64_t len){
+    anon_obj_t *o = (anon_obj_t*)obj;
+    if(!o || !o->ops || !o->ops->truncate)return -EINVAL;
+    return o->ops->truncate(o, len);
+}

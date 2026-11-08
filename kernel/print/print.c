@@ -227,8 +227,6 @@ static void panic_line(const char* fmt, ...){
 	vsprintf(buf, fmt, args);
 	__builtin_va_end(args);
 	printk(PRINTK_EMERG"%s", buf);
-	SerialWriteString(SERIAL_COM1, buf);
-	SerialWriteString(SERIAL_COM1, "\n");
 }
 
 void panic_report(struct exc_frame *f, const char *msg){

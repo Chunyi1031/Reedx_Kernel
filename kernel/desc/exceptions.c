@@ -87,7 +87,6 @@ static void panic_print(const char *fmt, ...){
         vsprintf(buf, fmt, args);
         __builtin_va_end(args);
         TTY_Print(buf, CurrentConsoleStyle.TextColor);
-        SerialWriteString(SERIAL_COM1, buf);
 }
 
 //把整帧寄存器与控制寄存器打出来
@@ -252,7 +251,7 @@ void interrupt_GP(exc_frame_t *f){
 		early_printk("%s [USER] pid=%d ec=%p RIP=%p\n",exception_names[INT_GATE_GP],current_task?(int)current_task->pid:-1,error_code,rip);
 		user_exception_exit(SIGSEGV);
 	}
-	print_error();
+	printk(PRINTK_EMERG":( #GP");
 	dump_frame(exception_names[INT_GATE_GP], f);
 	DrawString("The machine needs to restart\n",SYSTEM_ScreenInfo.Width/2-145,SYSTEM_ScreenInfo.Height/2-8,COLOR_YELLOW);
 	SYSTEM_STOP();

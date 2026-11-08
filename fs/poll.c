@@ -59,6 +59,12 @@ short PollFdReady(long fd, short want){
     if(!f->used)return FSPOLL_NVAL;
     if(f->anon)return AnonPoll(f->anon,want);
     if(f->pipe)return poll_pipe_ready(f);
+    if(f->f && ProcInodeIsMountinfo(f->f->f_inode)){
+        uint64_t seq = VfsMountSeq();
+        if(f->f->f_version == seq)return 0;
+        f->f->f_version = seq;
+        return FSPOLL_IN;
+    }
     //普通文件/设备，恒就绪
     int acc = f->flags & O_ACCMODE;
     short rv = 0;

@@ -13,6 +13,7 @@
 
 static struct list_node g_mount_list;
 static uint32_t g_nr_mounts;//当前挂载数量
+static volatile uint64_t g_mount_seq = 1;//挂载表版本号,每次挂载表变化自增
 static struct kmem_cache *g_mnt_cache;//挂载结构缓存
 static int g_mnt_ready;
 
@@ -108,8 +109,19 @@ int VfsDetachMount(struct vfsmount *m){
     }
     l_del(&m->mnt_list);
     if(g_nr_mounts)g_nr_mounts --;
+    g_mount_seq ++;//挂载表变了
     MntFree(m);//释放挂载结构
     return 0;
+}
+
+//取当前挂载表版本号
+uint64_t VfsMountSeq(void){
+    return g_mount_seq;
+}
+
+//挂载表变化时递增版本号
+void VfsMountSeqBump(void){
+    g_mount_seq ++;
 }
 
 //遍历所有挂载点
@@ -190,5 +202,6 @@ int VfsMountNew(struct vfsmount *parent, struct dentry *mountpoint, const char *
     if(!m)return -ENOMEM;
     int r = VfsAttachMount(parent, mountpoint, m);
     if(r)VfsDetachMount(m);//挂载失败要回收刚建的挂载树
+    else g_mount_seq ++;//挂载表变了
     return r;
 }

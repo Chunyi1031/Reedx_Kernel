@@ -15,6 +15,7 @@
 #include <pipe.h>
 #include <vfs.h>
 #include <signals.h>
+#include <anon.h>
 
 //clone(2)标志位
 #define CLONE_SETTLS 0x00080000
@@ -103,6 +104,7 @@ pid_t do_fork_ex(uintptr_t child_stack, uint64_t tls){
 		child->files[i] = parent->files[i];
 		FileGet(child->files[i].f);//共享同一个打开文件描述
 		if (child->files[i].used && child->files[i].pipe) pipeForkRef((struct pipe*)child->files[i].pipe, (child->files[i].flags & O_ACCMODE) == O_WRONLY);
+		if (child->files[i].used && child->files[i].anon) AnonGet(child->files[i].anon);//共享同一个匿名对象
 	}
 	SignalForkCopy(child, parent);//复制信号动作表
 	TaskListAdd(child);

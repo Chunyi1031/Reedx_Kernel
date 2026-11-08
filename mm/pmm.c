@@ -256,6 +256,18 @@ void Pmm_RefInc(void* addr){
     spin_unlock_irqrestore(&g_pmm_lock, flags);
 }
 
+//该物理页是否属于可用内存且当前已分配
+_Bool Pmm_PhysAllocated(uintptr_t phys) {
+    uint64_t flags;
+    OS_MEMORY_DESCRIPTOR* desc = NULL;
+    uint64_t offset = 0;
+    spin_lock_irqsave(&g_pmm_lock, flags);
+    find_addr_in_bitmap(phys,&desc,&offset);
+    _Bool ok = (desc != NULL) && (offset < desc->bitmap.bit_size) && BitmapGetBit(&desc->bitmap,(uint32_t)offset);
+    spin_unlock_irqrestore(&g_pmm_lock, flags);
+    return ok;
+}
+
 void Pmm_Free(void* addr,int pages) {
     uint64_t flags;
     spin_lock_irqsave(&g_pmm_lock, flags);

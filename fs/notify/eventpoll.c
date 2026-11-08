@@ -19,6 +19,7 @@ typedef struct epitem {
     long     fd;    //被监视的fd
     uint32_t events;//被监视的事件位
     uint64_t data;  //用户数据
+    short    last_ready;//上一次报告的就绪位
     _Bool    used;  //是否使用
 } epitem_t;
 
@@ -29,6 +30,18 @@ typedef struct epoll_inst {
     epitem_t   items[EP_MAX_WATCH];//监视表
 } epoll_inst_t;
 
+//算出一个表项当前应报告的就绪位
+static short ep_item_ready(epitem_t *it){
+    short rv = PollFdReady(it->fd, (short)it->events);
+    rv &= (short)((it->events & 0xFFFF) | FSPOLL_ERR | FSPOLL_HUP | FSPOLL_NVAL);
+    if(it->events & EP_ET){
+        short rise = (short)(rv & ~it->last_ready);
+        it->last_ready = rv;
+        return rise;
+    }
+    return rv;
+}
+
 //实例是否有就绪事件
 short EpollReadyMask(void *inst){
     epoll_inst_t *ep = (epoll_inst_t*)inst;
@@ -36,8 +49,7 @@ short EpollReadyMask(void *inst){
     for(int i = 0;i < EP_MAX_WATCH;i ++){
         epitem_t *it = &ep->items[i];
         if(!it->used)continue;
-        short rv = PollFdReady(it->fd, (short)it->events);
-        if(rv & (short)(it->events | FSPOLL_ERR | FSPOLL_HUP | FSPOLL_NVAL))return FSPOLL_IN;
+        if(ep_item_ready(it))return FSPOLL_IN;
     }
     return 0;
 }
@@ -97,6 +109,7 @@ int EpollCtl(int epfd, int op, long fd, uint32_t events, uint64_t data){
             ep->items[i].fd     = fd;
             ep->items[i].events = events;
             ep->items[i].data   = data;
+            ep->items[i].last_ready = 0;
             ep->items[i].used   = true;
             ep->count ++;
             return 0;
@@ -131,8 +144,7 @@ int EpollWait(int epfd, kepoll_event_t *out, int maxevents, int64_t timeout_ms){
         for(int i = 0;i < EP_MAX_WATCH && n < maxevents;i ++){
             epitem_t *it = &ep->items[i];
             if(!it->used)continue;
-            short rv = PollFdReady(it->fd, (short)it->events);
-            rv &= (short)(it->events | FSPOLL_ERR | FSPOLL_HUP | FSPOLL_NVAL);
+            short rv = ep_item_ready(it);
             if(!rv)continue;
             out[n].events = (uint32_t)(rv & 0xFFFF);
             out[n].data   = it->data;

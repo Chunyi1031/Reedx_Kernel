@@ -20,15 +20,18 @@
 #define ANON_PIDFD     5
 #define ANON_INOTIFY   6
 #define ANON_SOCKET    7
+#define ANON_MEMFD     8
 
 typedef struct anon_obj anon_obj_t;
 
 //操作表
 typedef struct anon_ops {
-    int64_t (*read)   (anon_obj_t *o, char *buf, uint64_t len);
-    int64_t (*write)  (anon_obj_t *o, const char *buf, uint64_t len);
-    short   (*poll)   (anon_obj_t *o, short want);
-    void    (*release)(anon_obj_t *o);
+    int64_t (*read)    (anon_obj_t *o, char *buf, uint64_t len);
+    int64_t (*write)   (anon_obj_t *o, const char *buf, uint64_t len);
+    short   (*poll)    (anon_obj_t *o, short want);
+    void    (*release) (anon_obj_t *o);
+    int64_t (*seek)    (anon_obj_t *o, int64_t off, int whence);
+    int64_t (*truncate)(anon_obj_t *o, uint64_t len);
 } anon_ops_t;
 
 //所有匿名对象头
@@ -55,5 +58,9 @@ int AnonTimerFdGetTime(int fd, uint64_t *value_ns, uint64_t *interval_ns);//查�
 int AnonSignalFd(uint64_t kmask, int flags);//创建signalfd
 int AnonPidFdOpen(long pid, int flags);//打开一个指向进程的pidfd
 int AnonPidFdSignal(int fd, int sig);//通过pidfd给目标进程发信号
+int AnonMemFd(int flags);//创建一个匿名内存文件,返回fd
+uint64_t AnonMemFdSize(void *obj);//取匿名内存文件大小
+int64_t AnonSeek(void *obj, int64_t off, int whence);//匿名对象定位
+int64_t AnonTruncate(void *obj, uint64_t len);//匿名对象截断
 
 #endif

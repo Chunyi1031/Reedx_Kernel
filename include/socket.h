@@ -62,6 +62,18 @@ typedef struct ksockaddr_un {
     char     sun_path[108];
 } ksockaddr_un_t;
 
+//AF_NETLINK套接字地址
+typedef struct ksockaddr_nl {
+    uint16_t nl_family;
+    uint16_t nl_pad;
+    uint32_t nl_pid;
+    uint32_t nl_groups;
+} ksockaddr_nl_t;
+
+//netlink协议号
+#define NETLINK_ROUTE            0
+#define NETLINK_KOBJECT_UEVENT   15
+
 //ucred(SO_PEERCRED)
 typedef struct k_ucred {
     int32_t  pid;
@@ -72,6 +84,9 @@ typedef struct k_ucred {
 int SockCreate(int family, int type, int proto);//创建socket,返回fd
 int SockPair(int family, int type, int proto, long *fd0, long *fd1);//创建一对已连接的socket
 int SockBind(int fd, const char *path);//绑定路径名
+int SockIsNetlink(int fd);//该fd是否为netlink套接字
+int SockBindNetlink(int fd, uint32_t nl_pid, uint32_t nl_groups);//绑定netlink地址
+int SockGetNameNetlink(int fd, uint32_t *out_pid, uint32_t *out_groups);//取netlink本端地址
 int SockListen(int fd, int backlog);//开始监听
 int SockConnect(int fd, const char *path);//连接已监听路径
 int SockAccept(int fd);//从监听队列取一个连接

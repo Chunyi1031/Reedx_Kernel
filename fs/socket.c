@@ -79,6 +79,9 @@ struct ksocket {
     struct sk_anc *anc_head;
     struct sk_anc *anc_tail;
     _Bool       passcred;
+    //netlink本地地址
+    uint32_t    nl_pid;
+    uint32_t    nl_groups;
 };
 
 static ksocket_t *g_named = NULL;//已bind的socket链
@@ -121,7 +124,9 @@ static short sk_poll(anon_obj_t *o, short want){
     ksocket_t *s = (ksocket_t*)o;
     short rv = 0;
     if(s->dgram_count > 0)rv |= FSPOLL_IN;
-    if((s->rc > 0) || (s->peer_eof))rv |= FSPOLL_IN;
+    //数据报socket对端关闭不算可读
+    if(s->rc > 0)rv |= FSPOLL_IN;
+    if(s->peer_eof && (s->type != SOCK_DGRAM))rv |= FSPOLL_IN;
     if(s->peer && (sk_free(s->peer) > 0))rv |= FSPOLL_OUT;
     if(s->type == SOCK_DGRAM && s->state == SS_CONNECTED)rv |= FSPOLL_OUT;
     if(!s->peer && (s->state == SS_CONNECTED) && (s->type != SOCK_DGRAM))rv |= FSPOLL_HUP;
@@ -288,12 +293,11 @@ static int64_t sk_read(anon_obj_t *o, char *buf, uint64_t len){
             PollWakeAll();
             return (int64_t)n;
         }
-        if(s->peer_eof)return 0;
         if(s->type == SOCK_DGRAM)return -EAGAIN;
+        if(s->peer_eof)return 0;
         if(s->nonblock)return -EAGAIN;
         {
-            int w = PollWait(s->peer_eof ? 0 : -1);
-            if(w == POLL_WAIT_INTR)return -EINTR;
+            int w = PollWait(s->peer_eof ? 0 : -1);            if(w == POLL_WAIT_INTR)return -EINTR;
             if(w == POLL_WAIT_TIMEOUT)return -EAGAIN;
         }
     }
@@ -303,6 +307,7 @@ static int64_t sk_read(anon_obj_t *o, char *buf, uint64_t len){
 static int64_t sk_write(anon_obj_t *o, const char *buf, uint64_t len){
     ksocket_t *s = (ksocket_t*)o;
     if(!s || !buf)return -EINVAL;
+    if(s->family == AF_NETLINK)return (int64_t)len;
     if(s->type == SOCK_DGRAM){
         ksocket_t *dst = s->peer;
         if(!dst && s->state == SS_CONNECTED && s->path[0])dst = sk_find_named(s->path);
@@ -379,16 +384,18 @@ static ksocket_t *sk_alloc(int family, int type){
 }
 
 //把socket对象装到新fd上
-static int sk_install(ksocket_t *s){
+static int sk_install(ksocket_t *s, int flags){
     if(!s)return -ENOMEM;
-    return AnonInstallFd(s, 0);
+    return AnonInstallFd(s, flags);
 }
 
 //创建socket
 int SockCreate(int family, int type, int proto){
     (void)proto;
-    if(family != AF_UNIX)return -EAFNOSUPPORT;
+    if((family != AF_UNIX) && (family != AF_NETLINK))return -EAFNOSUPPORT;
     int t = (type & 0xff);
+    if(t == SOCK_SEQPACKET)t = SOCK_STREAM;
+    if(family == AF_NETLINK)t = SOCK_DGRAM;
     if((t != SOCK_STREAM) && (t != SOCK_DGRAM))return -ESOCKTNOSUPPORT;
     //分配
     ksocket_t *s = sk_alloc(family,t);
@@ -396,7 +403,7 @@ int SockCreate(int family, int type, int proto){
     //初始化并挂到fd
     s->nonblock = (type & SOCK_NONBLOCK) ? 1 : 0;
     s->flags = type;
-    int fd = sk_install(s);
+    int fd = sk_install(s, (type & SOCK_CLOEXEC) ? O_CLOEXEC : 0);
     return fd;
 }
 
@@ -406,6 +413,7 @@ int SockPair(int family, int type, int proto, long *fd0, long *fd1){
     if(!fd0 || !fd1)return -EFAULT;
     if(family != AF_UNIX)return -EAFNOSUPPORT;
     int t = (type & 0xff);
+    if(t == SOCK_SEQPACKET)t = SOCK_STREAM;
     if((t != SOCK_STREAM) && (t != SOCK_DGRAM))return -ESOCKTNOSUPPORT;
     //分配两个对象
     ksocket_t *a = sk_alloc(family,t);
@@ -421,12 +429,13 @@ int SockPair(int family, int type, int proto, long *fd0, long *fd1){
     b->peer = a;
     a->state = b->state = SS_CONNECTED;
     a->peer_pid = b->peer_pid = current_task ? current_task->pid : 0;
-    int f0 = sk_install(a);
+    int cflags = (type & SOCK_CLOEXEC) ? O_CLOEXEC : 0;
+    int f0 = sk_install(a, cflags);
     if(f0 < 0){
         AnonPut(b);
         return f0;
     }
-    int f1 = sk_install(b);
+    int f1 = sk_install(b, cflags);
     if(f1 < 0)return f1;
     *fd0 = f0;
     *fd1 = f1;
@@ -445,6 +454,7 @@ static ksocket_t *sk_find_named(const char *path){
 int SockBind(int fd, const char *path){
     ksocket_t *s = (ksocket_t*)SockFromFd(fd);
     if(!s)return -ENOTSOCK;
+    if(s->family == AF_NETLINK)return -EINVAL;
     if(!path || !path[0])return -EINVAL;
     if(strlen(path) >= SK_NAME_MAX)return -ENAMETOOLONG;
     if(sk_find_named(path))return -EADDRINUSE;
@@ -453,6 +463,31 @@ int SockBind(int fd, const char *path){
     s->path[n] = 0;
     s->next_named = g_named;
     g_named = s;
+    return 0;
+}
+
+//该fd是否为netlink套接字
+int SockIsNetlink(int fd){
+    ksocket_t *s = (ksocket_t*)SockFromFd(fd);
+    return s && (s->family == AF_NETLINK);
+}
+
+//绑定netlink地址
+int SockBindNetlink(int fd, uint32_t nl_pid, uint32_t nl_groups){
+    ksocket_t *s = (ksocket_t*)SockFromFd(fd);
+    if(!s || s->family != AF_NETLINK)return -ENOTSOCK;
+    s->nl_pid    = nl_pid ? nl_pid : (uint32_t)(current_task ? current_task->pid : 1);
+    s->nl_groups = nl_groups;
+    s->state     = SS_CONNECTED;
+    return 0;
+}
+
+//取netlink本端地址
+int SockGetNameNetlink(int fd, uint32_t *out_pid, uint32_t *out_groups){
+    ksocket_t *s = (ksocket_t*)SockFromFd(fd);
+    if(!s || s->family != AF_NETLINK)return -ENOTSOCK;
+    if(out_pid)*out_pid = s->nl_pid ? s->nl_pid : (uint32_t)(current_task ? current_task->pid : 1);
+    if(out_groups)*out_groups = s->nl_groups;
     return 0;
 }
 
@@ -513,7 +548,7 @@ int SockAccept(int fd){
             ksocket_t *s = l->pending[0];
             for(int i = 1;i < l->npending;i ++)l->pending[i - 1] = l->pending[i];
             l->npending --;
-            return sk_install(s);
+            return sk_install(s, 0);
         }
         if(l->nonblock)return -EAGAIN;
         int w = PollWait(-1);
@@ -759,6 +794,10 @@ int64_t SockSendMsg(int fd, const char *buf, uint64_t len, const char *ctl, uint
     if(!s)return -ENOTSOCK;
     sk_anc_t *a = sk_anc_parse(ctl, ctllen);
     if(!a && ctllen >= sizeof(k_cmsghdr_t))return -EINVAL;//解析失败
+    if(s->family == AF_NETLINK){
+        if(a)sk_anc_free(a);
+        return (int64_t)len;
+    }
     if(s->type == SOCK_DGRAM){
         ksocket_t *dst = s->peer;
         if(!dst && dst_path && dst_path[0])dst = sk_find_named(dst_path);

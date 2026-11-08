@@ -260,20 +260,28 @@ static long sys_pread64(long fd, long buf, long count, long off, long a5, long a
 	if(!current_task)return -EBADF;
 	if(count < 0)return -EINVAL;
 	if(fd < 3 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
-	if((current_task->files[fd].flags & O_ACCMODE) == O_WRONLY)return -EBADF;
-	uint64_t old_off = current_task->files[fd].f ? current_task->files[fd].f->f_pos : 0;
-	FsSeek(&current_task->files[fd], (int64_t)off, SEEK_SET);
+	fs_file_t *ff = &current_task->files[fd];
+	if((ff->flags & O_ACCMODE) == O_WRONLY)return -EBADF;
+	int64_t old_off;
+	if(ff->anon)old_off = AnonSeek(ff->anon, 0, SEEK_CUR);
+	else old_off = ff->f ? (int64_t)ff->f->f_pos : 0;
+	if(ff->anon)AnonSeek(ff->anon, (int64_t)off, SEEK_SET);
+	else FsSeek(ff, (int64_t)off, SEEK_SET);
 	long total = 0;
 	char kbuf[512];
 	while(total < count){
 		long chunk = count - total;
 		if(chunk > (long)sizeof(kbuf))chunk = sizeof(kbuf);
-		uint64_t n = FsRead(&current_task->files[fd], kbuf, (uint64_t)chunk);
-		if(n == 0)break;//EOF
-		if(copy_to_user((char*)buf + total, kbuf, n)){ total = -EFAULT; break; }
+		int64_t n;
+		if(ff->anon)n = AnonRead(ff->anon, kbuf, (uint64_t)chunk);
+		else n = (int64_t)FsRead(ff, kbuf, (uint64_t)chunk);
+		if(n <= 0)break;//EOF
+		if(copy_to_user((char*)buf + total, kbuf, (size_t)n)){ total = -EFAULT; break; }
 		total += (long)n;
 	}
-	FsSeek(&current_task->files[fd], (int64_t)old_off, SEEK_SET);//恢复原位置
+	//恢复原位置
+	if(ff->anon)AnonSeek(ff->anon, old_off, SEEK_SET);
+	else FsSeek(ff, old_off, SEEK_SET);
 	return total;
 }
 
@@ -312,6 +320,7 @@ static long sys_open(long path, long flags, long mode, long a4, long a5, long a6
 	//复制路径
 	char kpath[256];
 	if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
+	if(((int)flags & O_TMPFILE) == O_TMPFILE)return AnonMemFd((int)flags & O_CLOEXEC);//O_TMPFILE,直接开一个匿名内存文件
 	//分配文件描述符
 	int fd;
 	for(fd = 3; fd < MAX_FD; fd++) {
@@ -464,12 +473,31 @@ static long sys_dup3(long oldfd, long newfd, long flags, long a4, long a5, long 
 	(void)a4; (void)a5; (void)a6;
 	if(oldfd == newfd)return -EINVAL;
 	if(flags & ~(long)O_CLOEXEC)return -EINVAL;
-	return fd_dup_to(oldfd, newfd);
+    long r = fd_dup_to(oldfd, newfd);
+    if(r >= 0 && (flags & O_CLOEXEC))current_task->files[newfd].flags |= O_CLOEXEC;
+    return r;
+}
+
+/*
+ * int memfd_create(const char *name, unsigned int flags)
+ */
+#define MFD_CLOEXEC       0x0001
+#define MFD_ALLOW_SEALING 0x0002
+#define MFD_EXEC          0x0010
+#define MFD_NOEXEC_SEAL   0x0008
+
+static long sys_memfd_create(long name, long flags, long a3, long a4, long a5, long a6){
+	(void)name; (void)a3; (void)a4; (void)a5; (void)a6;
+	(void)MFD_ALLOW_SEALING; (void)MFD_EXEC; (void)MFD_NOEXEC_SEAL;
+	return AnonMemFd((flags & MFD_CLOEXEC) ? O_CLOEXEC : 0);
 }
 
 /*
  * int mount(const char *source, const char *target, const char *type,unsigned long flags, const void *data)
  */
+#define MS_MOUNT_REMOUNT 32
+#define MS_MOUNT_BIND    4096
+
 static long sys_mount(long source, long target, long fstype, long flags, long data, long a6){
     (void)source; (void)data; (void)a6;
     if(!current_task)return -EPERM;
@@ -479,8 +507,10 @@ static long sys_mount(long source, long target, long fstype, long flags, long da
     ktype[0] = 0;
     if(!fstype || strncpy_from_user(ktype, (void*)fstype, 64) < 0){
         ktype[0] = 0;
-    }
-    if(!ktype[0])return 0;
+    }    //remount/bind 这类操作我们不做真实搬挂, 但仍算挂载表发生变化
+    if(flags & (MS_MOUNT_REMOUNT | MS_MOUNT_BIND)){ VfsMountSeqBump(); return 0; }
+    if(!ktype[0]){ VfsMountSeqBump(); return 0; }
+    if(strcmp(ktype, "ext2") == 0){ VfsMountSeqBump(); return 0; }
     return FsMount(ktype, ktarget);
 }
 
@@ -527,6 +557,7 @@ static long sys_ftruncate(long fd, long length, long a3, long a4, long a5, long 
 	(void)a3; (void)a4; (void)a5; (void)a6;
 	if(length < 0)return -EINVAL;
 	if(!current_task || fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+	if(current_task->files[fd].anon)return AnonTruncate(current_task->files[fd].anon, (uint64_t)length);//匿名内存文件可直接截断
 	//控制台/管道等无存储节点的 fd 不支持截断
 	if(!current_task->files[fd].inode || current_task->files[fd].pipe)return -EINVAL;
 	return FsTruncate(&current_task->files[fd], (uint64_t)length);
@@ -944,6 +975,7 @@ static long sys_lseek(long fd, long off, long whence, long a4, long a5, long a6)
 	(void)a4; (void)a5; (void)a6;
 	if (!current_task) return -EBADF;
 	if (fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+	if(current_task->files[fd].anon)return (long)AnonSeek(current_task->files[fd].anon, off, (int)whence);//匿名内存文件自带缓冲区,直接定位
 	int r = FsSeek(&current_task->files[fd], off, (int)whence);
 	if (r < 0) return -EINVAL;
 	return r;
@@ -1068,6 +1100,22 @@ static long stat_of_fd(long fd, stat_t *st){
 		st->st_nlink = 1;
 		st->st_mode = S_IFIFO | 0600;
 		st->st_blksize = 4096;
+		uint64_t now = rtc_get_epoch();
+		st->st_atime = (int64_t)now;
+		st->st_mtime = (int64_t)now;
+		st->st_ctime = (int64_t)now;
+		return 0;
+	}
+	//匿名内存文件,当成普通文件报属性
+	if(current_task->files[fd].anon){
+		memset(st, 0, sizeof(*st));
+		st->st_dev = 1;
+		st->st_ino = (uint64_t)(uintptr_t)current_task->files[fd].anon;
+		st->st_nlink = 1;
+		st->st_mode = S_IFREG | 0600;
+		st->st_size = (int64_t)AnonMemFdSize(current_task->files[fd].anon);
+		st->st_blksize = 4096;
+		st->st_blocks = (st->st_size + 511) / 512;
 		uint64_t now = rtc_get_epoch();
 		st->st_atime = (int64_t)now;
 		st->st_mtime = (int64_t)now;
@@ -1394,6 +1442,29 @@ static long sys_setpgid(long pid, long pgid, long a3, long a4, long a5, long a6)
 	return 0;//无进程组: 假装成功(让shell的作业控制初始化通过)
 }
 
+/*
+ * pid_t setsid(void)
+ * 创建新绘画
+ */
+static long sys_setsid(long a1, long a2, long a3, long a4, long a5, long a6){
+	(void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	return (long)current_task->pid;
+}
+
+/*
+ * pid_t getsid(pid_t pid)
+ * 返回会话ID
+ */
+static long sys_getsid(long pid, long a2, long a3, long a4, long a5, long a6){
+	(void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -ESRCH;
+	if(pid == 0 || pid == (long)current_task->pid)return (long)current_task->pid;
+	task_struct *t = TaskFind((pid_t)pid);
+	if(!t)return -ESRCH;
+	return (long)t->pid;
+}
+
 //把内核缓冲区里的数据写入已打开的描述符(管道或文件/设备),返回写入字节数
 static long fd_write_kbuf(long fd, const char *kbuf, long len){
 	if(current_task->files[fd].pipe){
@@ -1569,19 +1640,85 @@ static long sys_set_robust_list(long head, long len, long a3, long a4, long a5, 
 	return 0;
 }
 
+static rlimit64_t g_rlim[RLIMIT_NLIMITS];
+static _Bool g_rlim_ready = false;
+
+//填充默认限制
+static void rlim_init(void){
+	if(g_rlim_ready)return;
+	g_rlim_ready = true;
+	for(int i = 0;i < RLIMIT_NLIMITS;i ++){
+		g_rlim[i].rlim_cur = RLIM_INFINITY;
+		g_rlim[i].rlim_max = RLIM_INFINITY;
+	}
+	g_rlim[RLIMIT_CORE].rlim_cur     = 0;//默认不产生 core
+	g_rlim[RLIMIT_NOFILE].rlim_cur   = 1024;
+	g_rlim[RLIMIT_NOFILE].rlim_max   = 1048576;
+	g_rlim[RLIMIT_STACK].rlim_cur    = 8ULL * 1024 * 1024;
+	g_rlim[RLIMIT_MEMLOCK].rlim_cur  = 8ULL * 1024 * 1024;
+	g_rlim[RLIMIT_MEMLOCK].rlim_max  = 8ULL * 1024 * 1024;
+	g_rlim[RLIMIT_NPROC].rlim_cur    = 4096;
+	g_rlim[RLIMIT_NPROC].rlim_max    = 4096;
+}
+
+//查询一项资源限制
+void RlimitGet(int resource, uint64_t *cur, uint64_t *max){
+	rlim_init();
+	if(resource < 0 || resource >= RLIMIT_NLIMITS)resource = 0;
+	if(cur)*cur = g_rlim[resource].rlim_cur;
+	if(max)*max = g_rlim[resource].rlim_max;
+}
+
+//设置一项资源限制
+static int rlim_set(int resource, uint64_t cur, uint64_t max){
+	rlim_init();
+	if(resource < 0 || resource >= RLIMIT_NLIMITS)return -EINVAL;
+	if(cur > max)return -EINVAL;
+	g_rlim[resource].rlim_cur = cur;
+	g_rlim[resource].rlim_max = max;
+	return 0;
+}
+
+/*
+ * int getrlimit(int resource, struct rlimit *rlim)
+ */
+static long sys_getrlimit(long resource, long rlim, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!rlim)return -EFAULT;
+	rlimit64_t rl;
+	RlimitGet((int)resource, &rl.rlim_cur, &rl.rlim_max);
+	if(copy_to_user((void*)rlim, &rl, sizeof(rl)))return -EFAULT;
+	return 0;
+}
+
+/*
+ * int setrlimit(int resource, const struct rlimit *rlim)
+ */
+static long sys_setrlimit(long resource, long rlim, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!rlim)return -EFAULT;
+	rlimit64_t rl;
+	if(copy_from_user(&rl, (void*)rlim, sizeof(rl)))return -EFAULT;
+	return rlim_set((int)resource, rl.rlim_cur, rl.rlim_max);
+}
+
 /*
  * int prlimit64(pid_t pid, int resource, const struct rlimit64 *new, struct rlimit64 *old)
- * 仅支持当前进程查询; 栈限制返回8MB/无上限, 其余无上限; 设置忽略
+ * 
  */
 static long sys_prlimit64(long pid, long resource, long newlim, long oldlim, long a5, long a6){
-	(void)newlim; (void)a5; (void)a6;
+	(void)a5; (void)a6;
 	if(pid != 0)return -EINVAL;//只支持当前进程
-	if(oldlim){
-		rlimit64_t rl;
-		rl.rlim_cur = (resource == RLIMIT_STACK) ? (8ULL * 1024 * 1024) : ~0ULL;
-		rl.rlim_max = ~0ULL;
-		if(copy_to_user((void*)oldlim, &rl, sizeof(rl)))return -EFAULT;
+	if((int)resource < 0 || (int)resource >= RLIMIT_NLIMITS)return -EINVAL;
+	rlimit64_t old;
+	RlimitGet((int)resource, &old.rlim_cur, &old.rlim_max);
+	if(newlim){
+		rlimit64_t nl;
+		if(copy_from_user(&nl, (void*)newlim, sizeof(nl)))return -EFAULT;
+		int r = rlim_set((int)resource, nl.rlim_cur, nl.rlim_max);
+		if(r < 0)return r;
 	}
+	if(oldlim && copy_to_user((void*)oldlim, &old, sizeof(old)))return -EFAULT;
 	return 0;
 }
 
@@ -1666,21 +1803,40 @@ static long sys_time(long tloc, long a2, long a3, long a4, long a5, long a6){
 
 /*
  * int clock_gettime(clockid_t clk_id, struct timespec *tp)
- * 支持REALTIME/MONOTONIC及COARSE变体
+ * 支持实时钟、单调钟、BOOTTIME、RAW与CPU时钟
  */
+//时钟归类: 0=实时钟 1=单调钟 -1=不支持
+static int clock_kind(long clk){
+	switch(clk){
+		case CLOCK_REALTIME:
+		case CLOCK_REALTIME_COARSE:
+		case CLOCK_TAI:
+			return 0;
+		case CLOCK_MONOTONIC:
+		case CLOCK_MONOTONIC_COARSE:
+		case CLOCK_MONOTONIC_RAW:
+		case CLOCK_BOOTTIME:
+		case CLOCK_PROCESS_CPUTIME_ID:
+		case CLOCK_THREAD_CPUTIME_ID:
+			return 1;
+		default:
+			return -1;
+	}
+}
+
 static long sys_clock_gettime(long clk, long tp, long a3, long a4, long a5, long a6){
 	(void)a3; (void)a4; (void)a5; (void)a6;
 	if(!tp)return -EFAULT;
 	timespec_t ts;
-	if(clk == CLOCK_REALTIME || clk == CLOCK_REALTIME_COARSE){
+	int kind = clock_kind(clk);
+	if(kind < 0)return -EINVAL;
+	if(kind == 0){
 		ts.tv_sec = (long)rtc_get_epoch();
 		ts.tv_nsec = (long)((SYSTEM_TimerTicks * 10000) % 1000000) * 1000L;
-	}else if(clk == CLOCK_MONOTONIC || clk == CLOCK_MONOTONIC_COARSE){
+	}else{
 		uint64_t ms = SYSTEM_TimerTicks * 10;//每tick 10ms
 		ts.tv_sec = (long)(ms / 1000);
 		ts.tv_nsec = (long)(ms % 1000) * 1000000L;
-	}else{
-		return -EINVAL;
 	}
 	if(copy_to_user((void*)tp, &ts, sizeof(ts)))return -EFAULT;
 	return 0;
@@ -1692,8 +1848,7 @@ static long sys_clock_gettime(long clk, long tp, long a3, long a4, long a5, long
  */
 static long sys_clock_getres(long clk, long tp, long a3, long a4, long a5, long a6){
 	(void)a3; (void)a4; (void)a5; (void)a6;
-	if(clk != CLOCK_REALTIME && clk != CLOCK_MONOTONIC &&
-	   clk != CLOCK_REALTIME_COARSE && clk != CLOCK_MONOTONIC_COARSE)return -EINVAL;
+	if(clock_kind(clk) < 0)return -EINVAL;
 	if(tp){
 		timespec_t ts = {0, 10000000L};//10ms
 		if(copy_to_user((void*)tp, &ts, sizeof(ts)))return -EFAULT;
@@ -1711,6 +1866,8 @@ static long sys_clock_nanosleep(long clk, long flags, long req, long rem, long a
 	timespec_t ts;
 	if(copy_from_user(&ts, (void*)req, sizeof(ts)))return -EFAULT;
 	if(ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000L)return -EINVAL;
+	int kind = clock_kind(clk);
+	if(kind < 0)return -EINVAL;
 	uint64_t ms;
 	if(!(flags & 1)){
 		//相对时间
@@ -1718,7 +1875,7 @@ static long sys_clock_nanosleep(long clk, long flags, long req, long rem, long a
 	}else{
 		//绝对时间(TIMER_ABSTIME): 相对当前时钟求差值
 		uint64_t cur_sec, cur_nsec;
-		if(clk == CLOCK_MONOTONIC){
+		if(kind == 1){
 			uint64_t m = SYSTEM_TimerTicks * 10;
 			cur_sec = m / 1000;
 			cur_nsec = (m % 1000) * 1000000L;
@@ -1762,15 +1919,18 @@ static long sys_fcntl(long fd, long cmd, long arg, long a4, long a5, long a6){
 		return -EINVAL;
 	}
 	case F_GETFD://1
-		return 0;
+		return (current_task->files[fd].flags & O_CLOEXEC) ? 1 : 0;
 	case F_SETFD://2
+		if(!real)return 0;
+		if(arg & 1)current_task->files[fd].flags |= O_CLOEXEC;//FD_CLOEXEC
+		else current_task->files[fd].flags &= ~O_CLOEXEC;
 		return 0;
 	case F_GETFL://3
 		if(!real)return O_RDWR;
-		return current_task->files[fd].flags;
+		return current_task->files[fd].flags & ~O_CLOEXEC;//O_CLOEXEC不属于文件状态标志
 	case F_SETFL://4
 		if(!real)return 0;
-		current_task->files[fd].flags = (current_task->files[fd].flags & ~O_ACCMODE) | ((int)arg & O_ACCMODE);
+		current_task->files[fd].flags = (current_task->files[fd].flags & ~(O_APPEND | O_NONBLOCK)) | ((int)arg & (O_APPEND | O_NONBLOCK));
 		return 0;
 	case F_GETLK://5
 	{
@@ -1790,6 +1950,10 @@ static long sys_fcntl(long fd, long cmd, long arg, long a4, long a5, long a6){
 		return (long)arg;
 	case F_GETPIPE_SZ://1032
 		return 65536;
+	case F_ADD_SEALS://1033
+		return 0;
+	case F_GET_SEALS://1034
+		return 0;
 	default:
 		return -EINVAL;
 	}
@@ -2110,13 +2274,118 @@ static long sys_sigaltstack(long ss, long old_ss, long a3, long a4, long a5, lon
 	return 0;
 }
 
+#define LINUX_CAPABILITY_VERSION_3  0x20080522U
+
+typedef struct linux_cap_header {
+	uint32_t version;
+	int      pid;
+} linux_cap_header_t;
+
+typedef struct linux_cap_data {
+	uint32_t effective;
+	uint32_t permitted;
+	uint32_t inheritable;
+} linux_cap_data_t;
+
+/*
+ * int capget(cap_user_header_t hdrp, cap_user_data_t datap)
+ */
+static long sys_capget(long hdrp, long datap, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!hdrp)return -EFAULT;
+	linux_cap_header_t hdr;
+	if(copy_from_user(&hdr, (void*)hdrp, sizeof(hdr)))return -EFAULT;
+	if(hdr.version != LINUX_CAPABILITY_VERSION_3){
+		hdr.version = LINUX_CAPABILITY_VERSION_3;
+		if(copy_to_user((void*)hdrp, &hdr, sizeof(hdr)))return -EFAULT;
+		return -EINVAL;
+	}
+	if(!datap)return -EFAULT;
+	for(int i = 0;i < 2;i ++){
+		linux_cap_data_t d;
+		d.effective   = 0xFFFFFFFFU;
+		d.permitted   = 0xFFFFFFFFU;
+		d.inheritable = 0;
+		if(copy_to_user((void*)((uintptr_t)datap + (uint64_t)i * sizeof(d)), &d, sizeof(d)))return -EFAULT;
+	}
+	return 0;
+}
+
+/*
+ * int capset(cap_user_header_t hdrp, const cap_user_data_t datap)
+ */
+static long sys_capset(long hdrp, long datap, long a3, long a4, long a5, long a6){
+	(void)datap; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!hdrp)return -EFAULT;
+	linux_cap_header_t hdr;
+	if(copy_from_user(&hdr, (void*)hdrp, sizeof(hdr)))return -EFAULT;
+	if(hdr.version != LINUX_CAPABILITY_VERSION_3){
+		hdr.version = LINUX_CAPABILITY_VERSION_3;
+		if(copy_to_user((void*)hdrp, &hdr, sizeof(hdr)))return -EFAULT;
+		return -EINVAL;
+	}
+	return 0;
+}
+
 /*
  * int prctl(int option, ...)
- * 暂不支持, -EINVAL(glibc会回退)
+ * 只接受systemd等程序常用的选项,其余-EINVAL
  */
 static long sys_prctl(long option, long a2, long a3, long a4, long a5, long a6){
-	(void)option; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
-	return -EINVAL;
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	switch(option){
+		case 1:{//PR_SET_PDEATHSIG: 暂不跟踪父进程死亡
+			return 0;
+		}
+		case 2:{//PR_GET_PDEATHSIG
+			if(a2){
+				long sig = 0;
+				if(copy_to_user((void*)a2, &sig, sizeof(sig)))return -EFAULT;
+			}
+			return 0;
+		}
+		case 15:{//PR_SET_NAME
+			if(!current_task)return -EINVAL;
+			char name[16];
+			if(copy_from_user(name, (void*)a2, sizeof(name)))return -EFAULT;
+			name[sizeof(name) - 1] = 0;
+			memcpy(current_task->name, name, sizeof(name));
+			return 0;
+		}
+		case 16:{//PR_GET_NAME
+			if(!current_task)return -EINVAL;
+			if(copy_to_user((void*)a2, current_task->name, sizeof(current_task->name)))return -EFAULT;
+			return 0;
+		}
+		case 22:  //PR_SET_SECCOMP: 暂不过滤系统调用
+		case 23:  //PR_CAPBSET_DROP: 不记账,直接接受
+		case 38:  //PR_SET_NO_NEW_PRIVS
+		case 40:  //PR_SET_CHILD_SUBREAPER
+		case 8:   //PR_SET_KEEPCAPS
+		case 28:  //PR_SET_SECUREBITS
+			return 0;
+		case 9:   //PR_GET_KEEPCAPS
+		case 27:  //PR_GET_SECUREBITS
+			return 0;
+		case 24:  //PR_CAPBSET_READ: 声称拥有全部能力
+			return 1;
+		case 39:{//PR_GET_NO_NEW_PRIVS
+			if(a2){
+				int v = 0;
+				if(copy_to_user((void*)a2, &v, sizeof(v)))return -EFAULT;
+			}
+			return 0;
+		}
+		case 41:{//PR_GET_CHILD_SUBREAPER
+			if(a2){
+				int v = 0;
+				if(copy_to_user((void*)a2, &v, sizeof(v)))return -EFAULT;
+			}
+			return 0;
+		}
+		default:
+			return -EINVAL;
+	}
 }
 
 /*
@@ -2874,8 +3143,19 @@ static long sys_socketpair(long family, long type, long proto, long usv, long a5
  */
 static long sys_bind(long fd, long uaddr, long addrlen, long a4, long a5, long a6){
 	(void)a4; (void)a5; (void)a6;
-	char path[108];
-	long r = sk_copy_path(uaddr, addrlen, path, (int)sizeof(path));
+   if(!uaddr)return -EFAULT;
+   uint16_t fam = 0;
+   if(copy_from_user(&fam, (void*)uaddr, sizeof(fam)))return -EFAULT;
+   if(fam == AF_NETLINK){
+       ksockaddr_nl_t nl;
+       memset(&nl, 0, sizeof(nl));
+       long n = addrlen < (long)sizeof(nl) ? addrlen : (long)sizeof(nl);
+       if(n < 4)return -EINVAL;
+       if(copy_from_user(&nl, (void*)uaddr, (unsigned long)n))return -EFAULT;
+       return SockBindNetlink((int)fd, nl.nl_pid, nl.nl_groups);
+   }
+   char path[108];
+   long r = sk_copy_path(uaddr, addrlen, path, (int)sizeof(path));
 	if(r)return r;
 	return SockBind((int)fd, path);
 }
@@ -2895,8 +3175,12 @@ static long sys_listen(long fd, long backlog, long a3, long a4, long a5, long a6
  */
 static long sys_connect(long fd, long uaddr, long addrlen, long a4, long a5, long a6){
 	(void)a4; (void)a5; (void)a6;
-	char path[108];
-	long r = sk_copy_path(uaddr, addrlen, path, (int)sizeof(path));
+   if(!uaddr)return -EFAULT;
+   uint16_t fam = 0;
+   if(copy_from_user(&fam, (void*)uaddr, sizeof(fam)))return -EFAULT;
+   if(fam == AF_NETLINK)return 0;
+   char path[108];
+   long r = sk_copy_path(uaddr, addrlen, path, (int)sizeof(path));
 	if(r)return r;
 	return SockConnect((int)fd, path);
 }
@@ -2936,9 +3220,26 @@ static long sys_shutdown(long fd, long how, long a3, long a4, long a5, long a6){
 static long sys_getsockname(long fd, long uaddr, long uaddrlen, long a4, long a5, long a6){
 	(void)a4; (void)a5; (void)a6;
 	if(!uaddr || !uaddrlen)return -EFAULT;
-	ksockaddr_un_t ka;
-	int len = 0;
-	int r = SockGetName((int)fd, &ka, &len, false);
+   if(SockIsNetlink((int)fd)){
+       uint32_t pid = 0, groups = 0;
+       int nr = SockGetNameNetlink((int)fd, &pid, &groups);
+       if(nr)return nr;
+       ksockaddr_nl_t nl;
+       memset(&nl, 0, sizeof(nl));
+       nl.nl_family = AF_NETLINK;
+       nl.nl_pid    = pid;
+       nl.nl_groups = groups;
+       uint32_t cap = 0;
+       if(copy_from_user(&cap, (void*)uaddrlen, sizeof(cap)))return -EFAULT;
+       uint32_t n = cap < (uint32_t)sizeof(nl) ? cap : (uint32_t)sizeof(nl);
+       if(copy_to_user((void*)uaddr, &nl, (unsigned long)n))return -EFAULT;
+       uint32_t out = (uint32_t)sizeof(nl);
+       if(copy_to_user((void*)uaddrlen, &out, sizeof(out)))return -EFAULT;
+       return 0;
+   }
+   ksockaddr_un_t ka;
+   int len = 0;
+   int r = SockGetName((int)fd, &ka, &len, false);
 	if(r)return r;
 	if(copy_to_user((void*)uaddr, &ka, sizeof(ka)))return -EFAULT;
 	int out = len;
@@ -3270,6 +3571,10 @@ void InitSyscall(void){
 	syscall_table[SYS_READLINKAT]      = sys_readlinkat;
 	syscall_table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
 	syscall_table[SYS_PRLIMIT64]       = sys_prlimit64;
+	syscall_table[SYS_CAPGET]          = sys_capget;
+	syscall_table[SYS_CAPSET]          = sys_capset;
+	syscall_table[SYS_GETRLIMIT]       = sys_getrlimit;
+	syscall_table[SYS_SETRLIMIT]       = sys_setrlimit;
 	syscall_table[SYS_GETRANDOM]       = sys_getrandom;
 	syscall_table[SYS_GETTIMEOFDAY]    = sys_gettimeofday;
 	syscall_table[SYS_TIME]            = sys_time;
@@ -3315,6 +3620,8 @@ void InitSyscall(void){
 	syscall_table[SYS_RT_SIGRETURN]     = sys_rt_sigreturn;
 	syscall_table[SYS_RT_SIGTIMEDWAIT]  = sys_rt_sigtimedwait;
 	syscall_table[SYS_SETPGID]          = sys_setpgid;
+	syscall_table[SYS_SETSID]           = sys_setsid;
+	syscall_table[SYS_GETSID]           = sys_getsid;
 	syscall_table[SYS_GETPGRP]          = sys_getpgrp;
 	syscall_table[SYS_GETPGID]          = sys_getpgid;
 	syscall_table[SYS_KILL]             = sys_kill;
@@ -3389,6 +3696,7 @@ void InitSyscall(void){
 	syscall_table[SYS_SYSINFO]        = sys_sysinfo;
 	syscall_table[SYS_SETHOSTNAME]    = sys_sethostname;
 	syscall_table[SYS_SETDOMAINNAME]  = sys_setdomainname;
+	syscall_table[SYS_MEMFD_CREATE]   = sys_memfd_create;
 	syscall_table[SYS_REBOOT]	  = sys_reboot;
 	syscall_table[SYS_GETRESUID] = sys_getresuid;
 	syscall_table[SYS_GETRESGID] = sys_getresgid;
