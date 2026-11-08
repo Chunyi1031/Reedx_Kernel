@@ -13,7 +13,7 @@
 #include <irq.h>
 #include <drives/timer.h>
 
-#define PROC_BUF_MAX 1024//单个伪文件内容上限
+#define PROC_BUF_MAX 3072//单个伪文件内容上限
 
 //伪文件的种类
 enum {
@@ -30,6 +30,17 @@ enum {
     PROC_K_STAT,      //进程stat行
     PROC_K_FDDIR,     //进程fd目录
     PROC_K_FDLINK,    //单个fd的符号链接
+    PROC_K_ENVIRON,   //进程环境变量块
+    PROC_K_COMM,      //进程名
+    PROC_K_CGROUP,    //进程所属cgroup
+    PROC_K_MOUNTINFO, ///proc/mountinfo
+    PROC_K_CMDLINE_ROOT,// /proc/cmdline
+    PROC_K_FILESYSTEMS, // /proc/filesystems
+    PROC_K_SYSDIR,      // /proc/sys
+    PROC_K_SYSKERNELDIR,// /proc/sys/kernel
+    PROC_K_SYSCTL,      // /proc/sys/kernel/* 下的单个文件
+    PROC_K_CGROUPS,     // /proc/cgroups
+    PROC_K_ROOTLINK,    // /proc/<pid>/root 符号链接
 };
 
 //每个proc inode的私有信息
@@ -47,8 +58,43 @@ typedef struct proc_inode_info {
 #define PROC_INO_FIXED(k)    ((uint64_t)(2 + (k)))
 #define PROC_INO_PID(p)      ((uint64_t)((uint64_t)(p) * 16 + 8))
 #define PROC_INO_PIDFILE(p,k)((uint64_t)((uint64_t)(p) * 16 + 8 + (k)))
-#define PROC_INO_FDDIR(p)    ((uint64_t)((uint64_t)(p) * 16 + 8 + 4))
+#define PROC_INO_FDDIR(p)    ((uint64_t)((uint64_t)(p) * 16 + 23))
 #define PROC_INO_FDLINK(p,f) ((uint64_t)(0x10000000ULL + (uint64_t)(p) * 1024 + (uint64_t)(f)))
+#define PROC_INO_SYSDIR      ((uint64_t)0x20000001ULL)
+#define PROC_INO_SYSKERNELDIR ((uint64_t)0x20000002ULL)
+#define PROC_INO_SYSCTL(i)   ((uint64_t)(0x20000100ULL + (uint64_t)(i)))
+
+// /proc/sys/kernel下的可读写参数
+typedef struct proc_sysctl_desc {
+    const char *name;//文件名
+    uint16_t    mode;//权限
+    uint32_t    gen; //内容种类
+} proc_sysctl_desc_t;
+
+enum {
+    PSYS_OSRELEASE = 0,
+    PSYS_CAP_LAST_CAP,
+    PSYS_PRINTK_DEVKMSG,
+    PSYS_CORE_PATTERN,
+    PSYS_OSTYPE,
+    PSYS_VERSION,
+    PSYS_HOSTNAME,
+    PSYS_DOMAINNAME,
+    PSYS_CONSOLE_LOGLEVEL,
+};
+
+static const proc_sysctl_desc_t g_proc_sysctls[] = {
+    {"osrelease",           S_IFREG | 0444, PSYS_OSRELEASE},
+    {"cap_last_cap",        S_IFREG | 0444, PSYS_CAP_LAST_CAP},
+    {"printk_devkmsg",      S_IFREG | 0644, PSYS_PRINTK_DEVKMSG},
+    {"core_pattern",        S_IFREG | 0644, PSYS_CORE_PATTERN},
+    {"ostype",              S_IFREG | 0444, PSYS_OSTYPE},
+    {"version",             S_IFREG | 0444, PSYS_VERSION},
+    {"hostname",            S_IFREG | 0644, PSYS_HOSTNAME},
+    {"domainname",          S_IFREG | 0644, PSYS_DOMAINNAME},
+    {"printk",              S_IFREG | 0644, PSYS_CONSOLE_LOGLEVEL},
+};
+#define PROC_NSYSCTL ((int)(sizeof(g_proc_sysctls) / sizeof(g_proc_sysctls[0])))
 
 //根目录下的固定文件
 static const struct {
@@ -60,6 +106,10 @@ static const struct {
     {"version",PROC_K_VERSION},//内核版本
     {"uptime",PROC_K_UPTIME},//开机时间
     {"mounts",PROC_K_MOUNTS},//挂载表
+    {"mountinfo",PROC_K_MOUNTINFO},//详细挂载表
+    {"cmdline",PROC_K_CMDLINE_ROOT},//内核命令行
+    {"filesystems",PROC_K_FILESYSTEMS},//已注册的文件系统
+    {"cgroups",PROC_K_CGROUPS},//cgroup控制器列表
 };
 #define PROC_NFILES ((int)(sizeof(g_proc_files) / sizeof(g_proc_files[0])))
 
@@ -71,6 +121,10 @@ static const struct {
     {"status",PROC_K_STATUS},//进程状态
     {"cmdline",PROC_K_CMDLINE},//命令行
     {"stat",PROC_K_STAT},//进程stat行
+    {"environ",PROC_K_ENVIRON},//环境变量块
+    {"comm",PROC_K_COMM},//进程名
+    {"cgroup",PROC_K_CGROUP},//cgroup归属
+    {"root",PROC_K_ROOTLINK},//根目录符号链接
 };
 #define PROC_NPIDFILES ((int)(sizeof(g_proc_pidfiles) / sizeof(g_proc_pidfiles[0])))
 
@@ -128,17 +182,22 @@ static struct inode *proc_iget(struct super_block *sb, uint64_t ino, uint32_t ki
     inode->i_nlink = 1;
     inode->i_fop = &g_proc_file_fops;
     //根目录或或进程目录，设置为目录
-    if(kind == PROC_K_ROOT || kind == PROC_K_PIDDIR || kind == PROC_K_FDDIR){
+    if(kind == PROC_K_ROOT || kind == PROC_K_PIDDIR || kind == PROC_K_FDDIR || kind == PROC_K_SYSDIR || kind == PROC_K_SYSKERNELDIR){
         inode->i_mode = (uint16_t)(S_IFDIR | 0555);
         inode->i_nlink = 2;
         inode->i_op = &g_proc_dir_iops;
         inode->i_fop = &g_proc_dir_fops;
     //符号链接
-    }else if(kind == PROC_K_SELF || kind == PROC_K_FDLINK){
+    }else if(kind == PROC_K_SELF || kind == PROC_K_FDLINK || kind == PROC_K_ROOTLINK){
         inode->i_mode = (uint16_t)(S_IFLNK | 0777);
         inode->i_op = &g_proc_link_iops;
         inode->i_fop = NULL;
     //其他文件
+    }else if(kind == PROC_K_SYSCTL){
+        uint32_t idx = (uint32_t)(ino - PROC_INO_SYSCTL(0));
+        if(idx >= (uint32_t)PROC_NSYSCTL)idx = 0;
+        inode->i_mode = g_proc_sysctls[idx].mode;
+        inode->i_op = NULL;
     }else{
         inode->i_mode = (uint16_t)(S_IFREG | 0444);
         inode->i_op = NULL;
@@ -265,6 +324,112 @@ static int proc_gen_stat(char *out, int cap, uint32_t pid){
     return n;
 }
 
+//环境变量块
+static int proc_gen_environ(char *out, int cap){
+    static const char env[] =
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\0"
+        "HOME=/\0"
+        "TERM=linux\0";
+    int len = (int)sizeof(env) - 1;
+    if(len > cap)len = cap;
+    memcpy(out, env, (size_t)len);
+    return len;
+}
+
+//进程名(带换行)
+static int proc_gen_comm(char *out, int cap, uint32_t pid){
+    task_struct *t = TaskFind((pid_t)pid);
+    if(!t)return -ESRCH;
+    return sprintf(out, "%s\n", t->name);
+}
+
+//cgroup归属
+static int proc_gen_cgroup(char *out, int cap){
+    return sprintf(out, "0::/\n");
+}
+
+//详细挂载表
+typedef struct proc_mountinfo_ctx {
+    char *buf;
+    int   cap;
+    int   len;
+    int   id;
+} proc_mountinfo_ctx_t;
+
+static void proc_mountinfo_one(struct vfsmount *m, void *ctx){
+    proc_mountinfo_ctx_t *c = (proc_mountinfo_ctx_t*)ctx;
+    if(!m || (c->len >= (c->cap - 1)))return;
+    char path[128];
+    struct path p;
+    if(m->mnt_parent && m->mnt_mountpoint){
+        p.dentry = m->mnt_mountpoint;
+        p.mnt = m->mnt_parent;
+    }else{
+        p.dentry = m->mnt_root;
+        p.mnt = NULL;
+    }
+    if(d_path(&p, path, (int)sizeof(path)) < 0)return;
+    const char *type = (m->mnt_sb && m->mnt_sb->s_type_name[0]) ? m->mnt_sb->s_type_name : "unknown";
+    c->id ++;
+    int n = sprintf(c->buf + c->len, "%d %d 0:41 / %s rw - %s %s rw\n",c->id, 0, path, type, type);
+    if(n > 0)c->len += n;
+}
+
+static int proc_gen_mountinfo(char *out, int cap){
+    proc_mountinfo_ctx_t c;
+    c.buf = out;
+    c.cap = cap;
+    c.len = 0;
+    c.id  = 0;
+    VfsMountWalk(proc_mountinfo_one, &c);
+    return c.len;
+}
+
+//内核命令行
+static int proc_gen_cmdline_root(char *out, int cap){
+    return sprintf(out, "root=/dev/nvme0n1p2 rw console=ttyS0\n");
+}
+
+//cgroup控制器列表
+static int proc_gen_cgroups(char *out, int cap){
+    return sprintf(out,
+        "#subsys_name\thierarchy\tnum_cgroups\tenabled\n"
+        "cpuset\t0\t1\t1\n"
+        "cpu\t0\t1\t1\n"
+        "memory\t0\t1\t1\n"
+        "pids\t0\t1\t1\n");
+}
+
+//已注册的文件系统列表
+static int proc_gen_filesystems(char *out, int cap){
+    return sprintf(out,
+        "nodev\tsysfs\n"
+        "nodev\tproc\n"
+        "nodev\ttmpfs\n"
+        "nodev\tdevtmpfs\n"
+        "nodev\tcgroup2\n"
+        "\text2\n"
+        "\text4\n"
+        "\tvfat\n");
+}
+
+// /proc/sys/kernel/* 内容
+static int proc_gen_sysctl(char *out, int cap, uint32_t idx){
+    if(idx >= (uint32_t)PROC_NSYSCTL)return -EINVAL;
+    switch(g_proc_sysctls[idx].gen){
+        case PSYS_OSRELEASE:        return sprintf(out, "%s\n", system_utsname.release);
+        case PSYS_OSTYPE:           return sprintf(out, "%s\n", system_utsname.sysname);
+        case PSYS_VERSION:          return sprintf(out, "%s\n", system_utsname.version);
+        case PSYS_CAP_LAST_CAP:     return sprintf(out, "40\n");
+        case PSYS_PRINTK_DEVKMSG:   return sprintf(out, "ratelimit\n");
+        case PSYS_CORE_PATTERN:     return sprintf(out, "core\n");
+        case PSYS_HOSTNAME:         return sprintf(out, "%s\n", system_utsname.nodename);
+        case PSYS_DOMAINNAME:       return sprintf(out, "localdomain\n");
+        case PSYS_CONSOLE_LOGLEVEL: return sprintf(out, "7\t4\t1\t7\n");
+        default:                    return -EINVAL;
+    }
+}
+
 //按种类生成内容
 static int proc_gen(char *out, int cap, const proc_inode_info_t *ii){
     switch(ii->kind){
@@ -273,9 +438,17 @@ static int proc_gen(char *out, int cap, const proc_inode_info_t *ii){
         case PROC_K_VERSION: return proc_gen_version(out, cap);
         case PROC_K_UPTIME:  return proc_gen_uptime(out, cap);
         case PROC_K_MOUNTS:  return proc_gen_mounts(out, cap);
+        case PROC_K_MOUNTINFO: return proc_gen_mountinfo(out, cap);
+        case PROC_K_CMDLINE_ROOT: return proc_gen_cmdline_root(out, cap);
+        case PROC_K_FILESYSTEMS:  return proc_gen_filesystems(out, cap);
+        case PROC_K_CGROUPS:      return proc_gen_cgroups(out, cap);
+        case PROC_K_SYSCTL:       return proc_gen_sysctl(out, cap, ii->fd);
         case PROC_K_STATUS:  return proc_gen_status(out, cap, ii->pid);
         case PROC_K_CMDLINE: return proc_gen_cmdline(out, cap, ii->pid);
         case PROC_K_STAT:    return proc_gen_stat(out, cap, ii->pid);
+        case PROC_K_ENVIRON: return proc_gen_environ(out, cap);
+        case PROC_K_COMM:    return proc_gen_comm(out, cap, ii->pid);
+        case PROC_K_CGROUP:  return proc_gen_cgroup(out, cap);
         default:             return -EINVAL;
     }
 }
@@ -308,6 +481,12 @@ static int proc_get_link(struct dentry *dentry, struct inode *inode, const char 
     if(ii->kind == PROC_K_SELF){
         int pid = current_task ? (int)current_task->pid : 0;
         sprintf(ii->link, "%d", pid);
+        *target = ii->link;
+        return 0;
+    }
+    if(ii->kind == PROC_K_ROOTLINK){
+        ii->link[0] = '/';
+        ii->link[1] = 0;
         *target = ii->link;
         return 0;
     }
@@ -356,6 +535,7 @@ static struct dentry *proc_lookup(struct inode *dir, struct dentry *dentry, unsi
     //根目录下的文件或目录
     if(di->kind == PROC_K_ROOT){
         if(len == 4 && memcmp(name, "self", 4) == 0)return proc_add(dir, dentry, PROC_INO_FIXED(PROC_NFILES), PROC_K_SELF, 0, 0);
+        if(len == 3 && memcmp(name, "sys", 3) == 0)return proc_add(dir, dentry, PROC_INO_SYSDIR, PROC_K_SYSDIR, 0, 0);
         //固定文件
         for(int i = 0;i < PROC_NFILES;i ++){
             if((strlen(g_proc_files[i].name) == len) && (memcmp(g_proc_files[i].name, name, len) == 0))return proc_add(dir, dentry, PROC_INO_FIXED(i), g_proc_files[i].kind, 0, 0);
@@ -372,6 +552,13 @@ static struct dentry *proc_lookup(struct inode *dir, struct dentry *dentry, unsi
             }
         }
         if(len == 2 && memcmp(name, "fd", 2) == 0 && TaskFind((pid_t)di->pid))return proc_add(dir, dentry, PROC_INO_FDDIR(di->pid), PROC_K_FDDIR, di->pid, 0);//fd目录
+    }else if(di->kind == PROC_K_SYSDIR){
+        if(len == 6 && memcmp(name, "kernel", 6) == 0)return proc_add(dir, dentry, PROC_INO_SYSKERNELDIR, PROC_K_SYSKERNELDIR, 0, 0);
+    }else if(di->kind == PROC_K_SYSKERNELDIR){
+        for(int i = 0;i < PROC_NSYSCTL;i ++){
+            if((strlen(g_proc_sysctls[i].name) == len) && (memcmp(g_proc_sysctls[i].name, name, len) == 0))
+                return proc_add(dir, dentry, PROC_INO_SYSCTL(i), PROC_K_SYSCTL, 0, (uint32_t)i);
+        }
     //fd目录下的描述符
     }else if(di->kind == PROC_K_FDDIR){
         task_struct *t = TaskFind((pid_t)di->pid);
@@ -413,6 +600,12 @@ static int proc_iterate(struct file *f,void *ctx,int (*emit)(void *ctx,const cha
     }else if(ii->kind == PROC_K_PIDDIR){
         for(int i = 0;i < PROC_NPIDFILES;i ++)emit(ctx, g_proc_pidfiles[i].name,(int)strlen(g_proc_pidfiles[i].name),PROC_INO_PIDFILE(ii->pid, i + 1), S_IFREG, off ++);
         emit(ctx, "fd", 2, PROC_INO_FDDIR(ii->pid), S_IFDIR, off ++);
+    }else if(ii->kind == PROC_K_SYSDIR){
+        emit(ctx, "kernel", 6, PROC_INO_SYSKERNELDIR, (int)S_IFDIR, 0);
+    }else if(ii->kind == PROC_K_SYSKERNELDIR){
+        for(int i = 0;i < PROC_NSYSCTL;i ++)
+            emit(ctx, g_proc_sysctls[i].name, (int)strlen(g_proc_sysctls[i].name),
+                 PROC_INO_SYSCTL(i), (int)S_IFREG, off ++);
     }else if(ii->kind == PROC_K_FDDIR){
         task_struct *t = TaskFind((pid_t)ii->pid);
         if(t){
@@ -439,8 +632,22 @@ static struct file_operations g_proc_dir_fops = {
     .iterate = proc_iterate,
 };
 
+static int64_t proc_write(struct file *f, const char *buf, uint64_t len, uint64_t *pos){
+    if(!f || !f->f_inode)return -EINVAL;
+    proc_inode_info_t *ii = PROC_INFO(f->f_inode);
+    if(!ii)return -EINVAL;
+    if(ii->kind == PROC_K_SYSCTL){
+        if((g_proc_sysctls[ii->fd].mode & 0222) == 0)return -EPERM;
+    }else if(ii->kind != PROC_K_CMDLINE_ROOT && ii->kind != PROC_K_FILESYSTEMS){
+        return -EPERM;
+    }
+    if(pos)*pos += len;
+    return (int64_t)len;
+}
+
 static struct file_operations g_proc_file_fops = {
-    .read = proc_read,
+    .read  = proc_read,
+    .write = proc_write,
 };
 
 uint32_t ProcFsInodeSize(void){

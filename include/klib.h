@@ -38,4 +38,17 @@ extern utsname_t system_utsname;
 
 #define KERNEL_VERSION "0.0.2-beta"
 
+#if defined(__clang__)
+    #define COMPILER_NAME "Clang"
+    #define COMPILER_VERSION __clang_version__
+#elif defined(__GNUC__)
+    #define COMPILER_NAME "GCC"
+    #define _STR(x) #x
+    #define STR(x) _STR(x)
+    #define COMPILER_VERSION STR(__GNUC__) "." STR(__GNUC_MINOR__) "." STR(__GNUC_PATCHLEVEL__)
+#else
+    #define COMPILER_NAME "Unknown"
+    #define COMPILER_VERSION "Unknown"
+#endif
+
 #endif

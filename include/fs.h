@@ -133,6 +133,25 @@ int FsMount(const char *type, const char *target);//把type类型的文件系统
 int FsMountExt2(const char *target);//把第一个ext2分区挂到target目录上
 int FsUmount(const char *target);//卸载挂在target目录上的文件系统
 int FsSync(void);//把所有文件系统的脏数据刷回磁盘
+
+//statfs结果
+typedef struct kstatfs {
+    long    f_type;     //文件系统魔数
+    long    f_bsize;    //块大小
+    long    f_blocks;   //总块数
+    long    f_bfree;    //空闲块数
+    long    f_bavail;   //可用块数
+    long    f_files;    //inode 总数
+    long    f_ffree;    //空闲 inode 数
+    int32_t f_fsid[2];  //文件系统 id
+    long    f_namelen;  //文件名长度上限
+    long    f_frsize;   //基本块大小
+    long    f_flags;    //挂载标志
+    long    f_spare[4]; //保留
+} kstatfs_t;
+
+int FsStatFs(const char *path, kstatfs_t *st);//按路径取 statfs
+void FsFillStatFs(struct super_block *sb, kstatfs_t *st);//按超级块填充 statfs
 int FsExistsAt(struct dentry *dir, const char *name);//存在性检查(0存在,-ENOENT不存在)
 
 void FsClose(fs_file_t *f);//关闭文件
@@ -175,4 +194,8 @@ struct dentry *ProcFsFillSuper(struct super_block *sb);
 uint32_t SysFsInodeSize(void);
 const struct super_operations *SysFsSuperOps(void);
 struct dentry *SysFsFillSuper(struct super_block *sb);
+//cgroup2
+uint32_t Cg2InodeSize(void);
+const struct super_operations *Cg2SuperOps(void);
+struct dentry *Cg2FillSuper(struct super_block *sb);
 #endif

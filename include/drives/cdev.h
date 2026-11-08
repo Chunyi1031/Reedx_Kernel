@@ -30,5 +30,6 @@ typedef struct cdev {
 int RegisterChrdev(uint16_t major, uint16_t minor_start, uint16_t count,const char *name, const struct file_operations *fops);//注册一段字符设备
 const struct file_operations *ChrdevLookup(uint32_t dev);//按设备号找驱动
 void DevicesInit(void);//注册内置设备
+void RandInit(uint64_t seed);//用8字节种子初始化随机源
 
 #endif

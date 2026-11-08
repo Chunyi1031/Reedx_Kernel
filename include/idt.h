@@ -160,6 +160,16 @@ void set_intr_gate(uint32_t vector, void *handler);
  */
 void set_trap_gate(uint32_t vector, void *handler);
 
+/**
+ * @brief 设置使用独立中断栈(IST)的陷阱门
+ * @param vector 中断号
+ * @param handler 处理函数
+ * @param ist    IST 索引(1..7, 0 表示不用)
+ */
+void set_trap_gate_ist(uint32_t vector, void *handler, uint8_t ist);
+
+#define DF_IST 1//双重故障使用的 IST 索引(TSS.ist[0])
+
 extern char exc_entries_start[];//由 .rept 宏生成的 32 个异常入口桩数组，每个 16 字节对齐
 
 void setup_exceptions(void);//初始化 32 个异常处理程序并注册到 IDT

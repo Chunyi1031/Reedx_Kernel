@@ -27,6 +27,7 @@
 #include <drives/ps2kbd.h>
 #include <drives/drive_path.h>
 #include <drives/disk.h>
+#include <drives/cdev.h>
 #include <fs.h>
 
 BootParam *SYSTEM_BootParam = NULL;
@@ -35,6 +36,7 @@ UEFI_MEMORY_MAP *SYSTEM_MemoryMap = NULL;
 EFI_RUNTIME_SERVICES *UEFI_RuntimeServices = NULL;
 _Bool UEFI_UseRT = false;
 utsname_t system_utsname = {0};
+char SYSTEM_buildStamp[64] = {0};
 
 extern char __bss_start[], __bss_end[];
 
@@ -92,6 +94,7 @@ void fill_utsname(){
     strcpy(system_utsname.sysname,"Reedx");
     strcpy(system_utsname.nodename,"(none)");
     strcpy(system_utsname.release,KERNEL_VERSION);
+    sprintf(SYSTEM_buildStamp,"Reedx version %s built on %s %s by %s %s",KERNEL_VERSION,__DATE__,__TIME__,COMPILER_NAME,COMPILER_VERSION);
     strcpy(system_utsname.version,"(unknown)");
     strcpy(system_utsname.machine,"x86_64");
     strcpy(system_utsname.domainname,"(none)");
@@ -115,6 +118,7 @@ void KernelMain(){
     switch_kernel_stack_to_high();
     fill_utsname();//填充系统信息
     sti();//启用中断
+    printk(PRINTK_INFO"%s",SYSTEM_buildStamp);
     if(!InitDiskAndFs())printk(PRINTK_WARNING"Disk init failed!");//初始化磁盘及文件系统
     //创建首个用户程序
     mm_struct* umm = vmm_create_address_space();
@@ -141,6 +145,8 @@ _Bool LoadBootParam(BootParam* boot_param){
     SYSTEM_FrameBuffer = (uint32_t*)SYSTEM_ScreenInfo.FrameBufferBase;
     //屏幕日志开关
     TTY_ScreenEnabled = boot_param->PrintLog;
+    //随机数种子
+    RandInit(boot_param->RandomSeed);
     //内存映射
     SYSTEM_MemoryMap = &boot_param->MemoryInfo;
     //ACPI

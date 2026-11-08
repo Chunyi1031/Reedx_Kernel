@@ -42,7 +42,6 @@ void print_ok(){
 char* PRINTK_text_buffer = NULL;
 PRINTK_LOG_INFO_t* PRINTK_log_info    = NULL;
 volatile int PRINTK_in_irq = 0;//中断上下文嵌套计数
-static volatile int printk_nesting = 0;//printk 重入计数
 
 //保存中断标志
 static inline uint64_t printk_save_irq(void){
@@ -74,14 +73,16 @@ static const char *level_strings[] = {
 
 void task_putlog(){
 	while(1){
-		print_to_console(1);
-		msleep(20);
+		print_to_console(8);
+		msleep(10);
 	}
 }
 
 int InitPrintk(){
-	PRINTK_text_buffer = (char*)PHYS_TO_VIRT(Pmm_Malloc((PRINTK_TEXT_BUFFER_SIZE + 4095) & ~4095));
-	PRINTK_log_info = (PRINTK_LOG_INFO_t*)PHYS_TO_VIRT(Pmm_Malloc(((sizeof(PRINTK_LOG_INFO_t) * PRINTK_COUNT_MAX) & ~4095) + 4095));
+	int text_pages = (PRINTK_TEXT_BUFFER_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
+	int info_pages = (int)((sizeof(PRINTK_LOG_INFO_t) * PRINTK_COUNT_MAX + PAGE_SIZE - 1) / PAGE_SIZE);
+	PRINTK_text_buffer = (char*)PHYS_TO_VIRT(Pmm_Malloc(text_pages));
+	PRINTK_log_info = (PRINTK_LOG_INFO_t*)PHYS_TO_VIRT(Pmm_Malloc(info_pages));
 	if(!PRINTK_text_buffer || !PRINTK_log_info)return 1;
 	memset(PRINTK_text_buffer, 0, PRINTK_TEXT_BUFFER_SIZE);
 	memset(PRINTK_log_info, 0, sizeof(PRINTK_LOG_INFO_t) * PRINTK_COUNT_MAX);
@@ -93,48 +94,52 @@ int InitPrintk(){
 	return 0;
 }
 
+//把一条已格式化的文本按给定级别写入环形缓冲区
+static void printk_buffer_write(int level, int length, const char *msg){
+	int len, idx;
+	PRINTK_LOG_INFO_t *info;
+	uint64_t iflags;
+	if(!msg || length < 0)return;
+	len = length + 1;
+	iflags = printk_save_irq();
+	cli();
+	if (text_pos + len > PRINTK_TEXT_BUFFER_SIZE)text_pos = 0;//文本缓冲区不够时回绕
+	//日志数组已满，新条目顶替最旧条目,头部与未打印游标一起前移
+	if (info_count >= PRINTK_COUNT_MAX) {
+		idx = info_head;
+		info_head = (info_head + 1) % PRINTK_COUNT_MAX;
+		if (console_read > 0)console_read --;
+	}else{
+		idx = (info_head + info_count) % PRINTK_COUNT_MAX;
+		info_count ++;
+	}
+	memcpy(&PRINTK_text_buffer[text_pos], msg, (size_t)len);
+	info = &PRINTK_log_info[idx];
+	info->level = (uint8_t)level;
+	rtc_get_local(&info->time);
+	info->start = text_pos;
+	info->length = length;
+	text_pos += len;
+	printk_restore_irq(iflags);
+}
+
 int printk(const char* fmt, ...){
 	char buf[256];
 	__builtin_va_list args;
 	int level = PRINTK_LVL_NONE;
 	const char *msg = fmt;
-	int ret, len, idx;
-	PRINTK_LOG_INFO_t *info;
+	int ret;
 	if (!PRINTK_text_buffer || !PRINTK_log_info)goto fallback;
 	//解析,级别前缀
 	if (fmt[0] == '<' && fmt[1] >= '0' && fmt[1] <= '7' && fmt[2] == '>') {
 		level = fmt[1] - '0';
 		msg = fmt + 3;
 	}
-	uint64_t iflags = printk_save_irq();
-	cli();
     //格式化字符
 	__builtin_va_start(args, fmt);
 	ret = vsprintf(buf, msg, args);
 	__builtin_va_end(args);
-	len = ret + 1;
-	if (text_pos + len > PRINTK_TEXT_BUFFER_SIZE)text_pos = 0;//文本缓冲区不够时回绕
-	//日志信息数组满时覆盖最旧条目
-	if (info_count >= PRINTK_COUNT_MAX) {
-		info_count = PRINTK_COUNT_MAX;
-		info_head = (info_head + 1) % PRINTK_COUNT_MAX;
-	}
-    //将日志写入环形缓冲区
-	idx = (info_head + info_count) % PRINTK_COUNT_MAX;
-	memcpy(&PRINTK_text_buffer[text_pos], buf, (size_t)len);
-	info = &PRINTK_log_info[idx];
-	info->level = (uint8_t)level;
-	rtc_get_local(&info->time);
-	info->start = text_pos;
-	info->length = ret;
-	text_pos += len;
-	info_count++;
-	printk_restore_irq(iflags);
-	if(!PRINTK_in_irq && !printk_nesting){
-		printk_nesting ++;
-		print_to_console(PRINTK_COUNT_MAX);
-		printk_nesting --;
-	}
+	printk_buffer_write(level, ret, buf);
 	return ret;
 fallback:
     //未初始化时回退到无级别解析的直出
@@ -143,6 +148,18 @@ fallback:
 	__builtin_va_end(args);
 	TTY_Print(buf, CurrentConsoleStyle.TextColor);
 	return ret;
+}
+
+//按指定级别写入一段已格式化的文本
+void printk_log(int level, const char *msg){
+	if(!msg)return;
+	if(!PRINTK_text_buffer || !PRINTK_log_info){
+		TTY_Print(msg, CurrentConsoleStyle.TextColor);
+		TTY_PrintChar('\n', CurrentConsoleStyle.TextColor);
+		return;
+	}
+	if(level < 0 || (level > PRINTK_LVL_DEBUG && level != PRINTK_LVL_NONE))level = PRINTK_LVL_INFO;
+	printk_buffer_write(level, (int)strlen(msg), msg);
 }
 
 void print_to_console(int count){
@@ -162,12 +179,10 @@ void print_to_console(int count){
 		return;
 	}
 	if (count < to_print)to_print = count;
-	//最旧条目索引 + 已读偏移 = 下一条待打印索引
-	//原理：本环形缓冲区约定 info_head 始终指向最旧条目（未满时即 0），
-	//      因此 info_head + console_read 即为目标位置
 	idx = (info_head + console_read) % PRINTK_COUNT_MAX;
 	for (i = 0; i < to_print; i++) {
 		info = &PRINTK_log_info[(idx + i) % PRINTK_COUNT_MAX];
+		if (info->start < 0 || info->length < 0 || info->start + info->length >= PRINTK_TEXT_BUFFER_SIZE)continue;//文本已被覆盖的陈旧条目
 		if (info->level > PRINTK_LVL_INFO)continue;//DEBUG 级只进环形缓冲区，不上屏
 		//无等级→原样直出，不套任何格式
 		if (info->level == PRINTK_LVL_NONE) {

@@ -37,6 +37,7 @@
 #define SYS_SELECT                  23
 #define SYS_DUP                     32
 #define SYS_DUP2                    33
+#define SYS_PAUSE                   34
 #define SYS_NANOSLEEP               35
 #define SYS_GETPID                  39
 #define SYS_SOCKET                  41
@@ -67,12 +68,6 @@
 #define SYS_FDATASYNC               75
 #define SYS_TRUNCATE                76
 #define SYS_FTRUNCATE               77
-#define SYS_CHMOD                   90
-#define SYS_FCHMOD                  91
-#define SYS_CHOWN                   92
-#define SYS_FCHOWN                  93
-#define SYS_LCHOWN                  94
-#define SYS_UMASK                   95
 #define SYS_GETCWD                  79
 #define SYS_CHDIR                   80
 #define SYS_RENAME                  82
@@ -82,7 +77,14 @@
 #define SYS_UNLINK                  87
 #define SYS_SYMLINK                 88
 #define SYS_READLINK                89
+#define SYS_CHMOD                   90
+#define SYS_FCHMOD                  91
+#define SYS_CHOWN                   92
+#define SYS_FCHOWN                  93
+#define SYS_LCHOWN                  94
+#define SYS_UMASK                   95
 #define SYS_GETTIMEOFDAY            96
+#define SYS_SYSINFO                 99
 #define SYS_GETUID                  102
 #define SYS_GETGID                  104
 #define SYS_SETUID                  105
@@ -104,12 +106,16 @@
 #define SYS_RT_SIGTIMEDWAIT         128
 #define SYS_SIGALTSTACK             131
 #define SYS_MKNOD                   133
+#define SYS_STATFS                  137
+#define SYS_FSTATFS                 138
 #define SYS_PRCTL                   157
 #define SYS_ARCH_PRCTL              158
 #define SYS_SYNC                    162
 #define SYS_MOUNT                   165
 #define SYS_UMOUNT2                 166
 #define SYS_REBOOT                  169
+#define SYS_SETHOSTNAME             170
+#define SYS_SETDOMAINNAME           171
 #define SYS_GETTID                  186
 #define SYS_TKILL                   200
 #define SYS_TIME                    201
@@ -124,6 +130,7 @@
 #define SYS_EPOLL_WAIT              232
 #define SYS_EPOLL_CTL               233
 #define SYS_TGKILL                  234
+#define SYS_WAITID                  247
 #define SYS_INOTIFY_ADD_WATCH       254
 #define SYS_INOTIFY_RM_WATCH        255
 #define SYS_OPENAT                  257
@@ -159,6 +166,7 @@
 #define SYS_STATX                   332
 #define SYS_PIDFD_SEND_SIGNAL       424
 #define SYS_PIDFD_OPEN              434
+#define SYS_CLOSE_RANGE             436
 #define AT_FDCWD                    (-100)
 #define AT_EMPTY_PATH               0x1000  //path 为空字符串时对 dirfd 自身操作(glibc fstat 用它)
 #define AT_SYMLINK_NOFOLLOW         0x100   //不跟随符号链接
@@ -280,6 +288,23 @@
 #define ECONNREFUSED        111
 
 #define WNOHANG             1 //waitpid选项
+#define WEXITED             4 //waitid:等待子进程退出
+
+//waitid的idtype
+#define P_ALL               0
+#define P_PID               1
+#define P_PGID              2
+
+//close_range选项
+#define CLOSE_RANGE_UNSHARE     2
+#define CLOSE_RANGE_CLOEXEC     4
+
+//siginfo.si_code(子进程状态)
+#define CLD_EXITED          1
+#define CLD_KILLED          2
+#define CLD_DUMPED          3
+#define CLD_STOPPED         5
+#define CLD_CONTINUED       6
 
 //futex操作
 #define FUTEX_WAIT            0

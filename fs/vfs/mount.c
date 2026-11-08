@@ -173,6 +173,10 @@ int VfsMountNew(struct vfsmount *parent, struct dentry *mountpoint, const char *
         sb = SuperAlloc("sysfs", 0x62656572, SysFsInodeSize(), SysFsSuperOps());
         if(!sb)return -ENOMEM;
         root = SysFsFillSuper(sb);
+    }else if(strcmp(type, "cgroup2") == 0){
+        sb = SuperAlloc("cgroup2", 0x63677270, Cg2InodeSize(), Cg2SuperOps());
+        if(!sb)return -ENOMEM;
+        root = Cg2FillSuper(sb);
     }else if(strcmp(type, "ramfs") == 0 || strcmp(type, "tmpfs") == 0){
         sb = SuperAlloc("ramfs", 0x01021994, Ramfs2InodeSize(), Ramfs2SuperOps());
         if(!sb)return -ENOMEM;

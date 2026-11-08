@@ -875,6 +875,37 @@ static void inode_to_stat(struct inode *i, struct stat *st){
     st->st_ctime_nsec = i->i_ctime_ns;
 }
 
+//按超级块填充statfs结构
+void FsFillStatFs(struct super_block *sb, kstatfs_t *st){
+    if(!st)return;
+    memset(st, 0, sizeof(*st));
+    st->f_type    = sb ? (long)sb->s_magic : 0x01021994L;
+    st->f_bsize   = 4096;
+    st->f_frsize  = 4096;
+    st->f_blocks  = 4096;
+    st->f_bfree   = 2048;
+    st->f_bavail  = 2048;
+    st->f_files   = 4096;
+    st->f_ffree   = 2048;
+    st->f_namelen = 255;
+}
+
+//按路径取statfs
+int FsStatFs(const char *path, kstatfs_t *st){
+    if(!path || !st)return -EINVAL;
+    uint64_t lk;
+    spin_lock_irqsave(&g_fs_lock, lk);
+    struct path p;
+    int r = lookup_path(path, &p);
+    if(r == 0){
+        struct super_block *sb = p.mnt ? p.mnt->mnt_sb : (p.dentry && p.dentry->d_inode ? p.dentry->d_inode->i_sb : NULL);
+        FsFillStatFs(sb, st);
+        dput(p.dentry);
+    }
+    spin_unlock_irqrestore(&g_fs_lock, lk);
+    return r;
+}
+
 int FsStat(const char *path, struct stat *st){
     uint64_t lk;
     spin_lock_irqsave(&g_fs_lock, lk);

@@ -14,6 +14,9 @@
 
 #define DEVFS_MAX_NODES 32//最多记多少个节点
 
+static const struct inode_operations g_devfs_dir_iops;//目录操作表
+static const struct file_operations  g_devfs_dir_fops;//目录遍历操作表
+
 //一个设备节点
 typedef struct devfs_node {
     char     name[NAMELEN_MAX + 1];//节点名
@@ -33,6 +36,11 @@ static const struct {
     { "null",    S_IFCHR | 0666, MKDEV(1, 3) },
     { "zero",    S_IFCHR | 0666, MKDEV(1, 5) },
     { "ttyS0",   S_IFCHR | 0600, MKDEV(4, 64) },
+    { "kmsg",    S_IFCHR | 0600, MKDEV(1, 11) },
+    { "random",  S_IFCHR | 0666, MKDEV(1, 8) },
+    { "urandom", S_IFCHR | 0666, MKDEV(1, 9) },
+    { "shm",     S_IFDIR | 01777, 0 },
+    { "pts",     S_IFDIR | 0755, 0 },
 };
 #define DEVFS_NPREDEF ((int)(sizeof(g_devfs_predef) / sizeof(g_devfs_predef[0])))
 
@@ -67,6 +75,13 @@ static struct inode *devfs_iget(struct super_block *sb, int idx){
     inode->i_rdev  = n->dev;
     inode->i_op    = NULL;//设备节点里没有别的东西可查
     inode->i_fop   = NULL;//打开时按主/次设备号去 cdev 表找驱动
+    //目录节点
+    if((n->mode & S_IFMT) == S_IFDIR){
+        inode->i_nlink = 2;
+        inode->i_rdev  = 0;
+        inode->i_op    = &g_devfs_dir_iops;
+        inode->i_fop   = &g_devfs_dir_fops;
+    }
     inode->i_state &= ~I_NEW;
     return inode;
 }
@@ -125,9 +140,15 @@ static int devfs_mknod(struct inode *dir, struct dentry *dentry, uint16_t mode, 
     return 0;
 }
 
+//建一个目录节点
+static int devfs_mkdir(struct inode *dir, struct dentry *dentry, uint16_t mode){
+    return devfs_mknod(dir, dentry, (uint16_t)(S_IFDIR | (mode & 07777)), 0);
+}
+
 static const struct inode_operations g_devfs_dir_iops = {
     .lookup = devfs_lookup,
     .mknod  = devfs_mknod,
+    .mkdir  = devfs_mkdir,
 };
 
 static const struct file_operations g_devfs_dir_fops = {

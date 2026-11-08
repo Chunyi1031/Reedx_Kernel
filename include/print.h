@@ -20,8 +20,8 @@ void print_error(void);
 void print_warning(void);
 void print_ok(void);
 
-#define PRINTK_TEXT_BUFFER_SIZE  8192   //文本缓冲区大小 (8 KB)
-#define PRINTK_COUNT_MAX         512    //最大日志条数
+#define PRINTK_TEXT_BUFFER_SIZE  65536  //文本缓冲区大小 (64KB)
+#define PRINTK_COUNT_MAX         1024   //最大日志条数
 
 #define PRINTK_EMERG    "<0>"  //系统不可用
 #define PRINTK_ALERT    "<1>"  //必须立即处理
@@ -55,6 +55,7 @@ extern volatile int       PRINTK_in_irq;
 
 int  InitPrintk(void);
 int  printk(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+void printk_log(int level, const char *msg);//按指定级别写入一段已格式化的文本
 void print_to_console(int count);
 void panic(const char* fmt, ...);
 

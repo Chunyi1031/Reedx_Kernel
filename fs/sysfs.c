@@ -29,7 +29,9 @@ enum {
     SYS_K_VERSION,  // 编译信息
     SYS_K_DEVICESDIR,// /sys/devices
     SYS_K_CLASSDIR, // /sys/class
-    SYS_K_CLASSBLOCK// /sys/class/block
+    SYS_K_CLASSBLOCK,// /sys/class/block
+    SYS_K_FSDIR,    // /sys/fs
+    SYS_K_CGROUPDIR // /sys/fs/cgroup
 };
 
 //每个sysfs inode的私有信息
@@ -50,6 +52,8 @@ typedef struct sysfs_inode_info {
 #define SYSFS_INO_OSTYPE      7ULL
 #define SYSFS_INO_OSRELEASE   8ULL
 #define SYSFS_INO_VERSION     9ULL
+#define SYSFS_INO_FSDIR       10ULL
+#define SYSFS_INO_CGROUPDIR   11ULL
 #define SYSFS_INO_BDEV(i)     ((uint64_t)(100 + (uint64_t)(i) * 4))
 #define SYSFS_INO_BDEV_F(i,k) ((uint64_t)(100 + (uint64_t)(i) * 4 + 1 + (k)))
 
@@ -125,6 +129,8 @@ static struct inode *sysfs_iget(struct super_block *sb, uint64_t ino, uint32_t k
         case SYS_K_DEVICESDIR:
         case SYS_K_CLASSDIR:
         case SYS_K_CLASSBLOCK:
+        case SYS_K_FSDIR:
+        case SYS_K_CGROUPDIR:
             inode->i_mode  = (uint16_t)(S_IFDIR | 0555);
             inode->i_nlink = 2;
             inode->i_op    = &g_sysfs_dir_iops;
@@ -172,6 +178,10 @@ static struct dentry *sysfs_lookup(struct inode *dir, struct dentry *dentry, uns
         if((len == 6) && (memcmp(name, "kernel", 6) == 0))return sysfs_add(dir, dentry, SYSFS_INO_KERNELDIR, SYS_K_KERNELDIR, 0);
         if((len == 7) && (memcmp(name, "devices", 7) == 0))return sysfs_add(dir, dentry, SYSFS_INO_DEVICESDIR, SYS_K_DEVICESDIR, 0);
         if((len == 5) && (memcmp(name, "class", 5) == 0))return sysfs_add(dir, dentry, SYSFS_INO_CLASSDIR, SYS_K_CLASSDIR, 0);
+        if((len == 2) && (memcmp(name, "fs", 2) == 0))return sysfs_add(dir, dentry, SYSFS_INO_FSDIR, SYS_K_FSDIR, 0);
+    }else if(ii->kind == SYS_K_FSDIR){
+        if((len == 6) && (memcmp(name, "cgroup", 6) == 0))
+            return sysfs_add(dir, dentry, SYSFS_INO_CGROUPDIR, SYS_K_CGROUPDIR, 0);
     }else if(ii->kind == SYS_K_BLOCKDIR || ii->kind == SYS_K_CLASSBLOCK){
         //块设备名
         int idx = sysfs_find_bdev(name, len);
@@ -223,6 +233,7 @@ static int sysfs_iterate(struct file *f, void *ctx,int (*emit)(void *ctx, const 
             emit(ctx, "kernel",  6, SYSFS_INO_KERNELDIR,  (int)S_IFDIR, 1);
             emit(ctx, "devices", 7, SYSFS_INO_DEVICESDIR, (int)S_IFDIR, 2);
             emit(ctx, "class",   5, SYSFS_INO_CLASSDIR,   (int)S_IFDIR, 3);
+            emit(ctx, "fs",      2, SYSFS_INO_FSDIR,      (int)S_IFDIR, 4);
             return 0;
         case SYS_K_BLOCKDIR:
         case SYS_K_CLASSBLOCK:
@@ -244,6 +255,9 @@ static int sysfs_iterate(struct file *f, void *ctx,int (*emit)(void *ctx, const 
             return 0;
         case SYS_K_CLASSDIR:
             emit(ctx, "block", 5, SYSFS_INO_CLASSBLOCK, (int)S_IFDIR, 0);
+            return 0;
+        case SYS_K_FSDIR:
+            emit(ctx, "cgroup", 6, SYSFS_INO_CGROUPDIR, (int)S_IFDIR, 0);
             return 0;
         default:
             return 0;

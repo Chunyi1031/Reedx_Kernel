@@ -28,6 +28,7 @@
 #include <signals.h>
 #include <rtc.h>
 #include <delay.h>
+
 #include <irq.h>
 #include <acpi/power.h>
 
@@ -170,7 +171,7 @@ static long sys_read(long fd, long buf, long count, long a4, long a5, long a6){
 	if(fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
 	if((current_task->files[fd].flags & O_ACCMODE) == O_WRONLY)return -EBADF;
 	long total = 0;
-	char kbuf[512];
+	char kbuf[2048];
 	while(total < count) {
 		long chunk = count - total;
 		if(chunk > (long)sizeof(kbuf))chunk = sizeof(kbuf);
@@ -319,8 +320,8 @@ static long sys_open(long path, long flags, long mode, long a4, long a5, long a6
 	if (fd >= MAX_FD)return -ENFILE;
 	fs_file_t *f = &current_task->files[fd];
 	int or = FsOpen(kpath, (int)flags, f);//打开文件
-	if(or != 0)return or;
-	return fd;
+    if(or != 0)return or;
+    return fd;
 }
 
 //关闭单个文件描述符
@@ -470,13 +471,17 @@ static long sys_dup3(long oldfd, long newfd, long flags, long a4, long a5, long 
  * int mount(const char *source, const char *target, const char *type,unsigned long flags, const void *data)
  */
 static long sys_mount(long source, long target, long fstype, long flags, long data, long a6){
-	(void)source; (void)flags; (void)data; (void)a6;
-	if(!current_task)return -EPERM;
-	if(!target || !fstype)return -EFAULT;
-	char ktarget[256],ktype[64];
-	if(strncpy_from_user(ktarget, (void*)target, 256) < 0)return -EFAULT;
-	if(strncpy_from_user(ktype, (void*)fstype, 64) < 0)return -EFAULT;
-	return FsMount(ktype, ktarget);
+    (void)source; (void)data; (void)a6;
+    if(!current_task)return -EPERM;
+    if(!target)return -EFAULT;
+    char ktarget[256],ktype[64];
+    if(strncpy_from_user(ktarget, (void*)target, 256) < 0)return -EFAULT;
+    ktype[0] = 0;
+    if(!fstype || strncpy_from_user(ktype, (void*)fstype, 64) < 0){
+        ktype[0] = 0;
+    }
+    if(!ktype[0])return 0;
+    return FsMount(ktype, ktarget);
 }
 
 /*
@@ -543,11 +548,102 @@ static long sys_fsync(long fd, long b, long c, long a4, long a5, long a6){
 }
 
 /*
- * void sync(void)
+ * int sysinfo(struct sysinfo *info)
  */
-static long sys_sync(long a, long b, long c, long a4, long a5, long a6){
-	(void)a; (void)b; (void)c; (void)a4; (void)a5; (void)a6;
-	return FsSync();
+typedef struct ksysinfo {
+	long          uptime;
+	unsigned long loads[3];
+	unsigned long totalram;
+	unsigned long freeram;
+	unsigned long sharedram;
+	unsigned long bufferram;
+	unsigned long totalswap;
+	unsigned long freeswap;
+	uint16_t      procs;
+	uint16_t      pad;
+	unsigned long totalhigh;
+	unsigned long freehigh;
+	uint32_t      mem_unit;
+} ksysinfo_t;
+
+static long sys_sysinfo(long info, long a2, long a3, long a4, long a5, long a6){
+	(void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!info)return -EFAULT;
+	ksysinfo_t si;
+	memset(&si, 0, sizeof(si));
+	si.uptime   = (long)(SYSTEM_TimerTicks / 100u);
+	si.totalram = (unsigned long)GetMemoryTotalSize();
+	si.freeram  = (unsigned long)PmmFreeSize();
+	si.mem_unit = 1;
+	si.procs    = 1;
+	if(copy_to_user((void*)info, &si, sizeof(si)))return -EFAULT;
+	return 0;
+}
+
+/*
+ * int sethostname(const char *name, size_t len)
+ * int setdomainname(const char *name, size_t len)
+ */
+static long set_uts_field(char *dst, int dstsz, long name, long len){
+	if(!name)return -EINVAL;
+	if(len < 0 || len > dstsz - 1)return -EINVAL;
+	char buf[65];
+	if(copy_from_user(buf, (void*)name, (unsigned long)len))return -EFAULT;
+	buf[len] = 0;
+	memcpy(dst, buf, (size_t)len + 1);
+	return 0;
+}
+
+static long sys_sethostname(long name, long len, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	return set_uts_field(system_utsname.nodename, (int)sizeof(system_utsname.nodename), name, len);
+}
+
+static long sys_setdomainname(long name, long len, long a3, long a4, long a5, long a6){
+	(void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EPERM;
+	return set_uts_field(system_utsname.domainname, (int)sizeof(system_utsname.domainname), name, len);
+}
+
+/*
+ * int sync(void)
+ * 把所有文件系统的脏数据刷回磁盘
+ */
+static long sys_sync(long a1, long a2, long a3, long a4, long a5, long a6){
+	(void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	FsSync();
+	return 0;
+}
+
+/*
+ * int statfs(const char *path, struct statfs *buf)
+ */
+static long sys_statfs(long path, long buf, long a3, long a4, long a5, long a6){
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    if(!current_task)return -EPERM;
+    if(!path || !buf)return -EFAULT;
+    char kpath[256];
+    if(strncpy_from_user(kpath, (void*)path, 256) < 0)return -EFAULT;
+    kstatfs_t st;
+    int r = FsStatFs(kpath, &st);
+    if(r)return r;
+    if(copy_to_user((void*)buf, &st, sizeof(st)))return -EFAULT;
+    return 0;
+}
+
+/*
+ * int fstatfs(int fd, struct statfs *buf)
+ */
+static long sys_fstatfs(long fd, long buf, long a3, long a4, long a5, long a6){
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    if(!current_task || fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+    if(!buf)return -EFAULT;
+    struct inode *inode = current_task->files[fd].inode;
+    kstatfs_t st;
+    FsFillStatFs(inode ? inode->i_sb : NULL, &st);
+    if(copy_to_user((void*)buf, &st, sizeof(st)))return -EFAULT;
+    return 0;
 }
 
 /*
@@ -908,8 +1004,8 @@ static long sys_openat(long dirfd, long path, long flags, long mode, long a5, lo
 	if(fd >= MAX_FD)return -ENFILE;
 	fs_file_t *f = &current_task->files[fd];
 	int or = FsOpenAt(dir,name,(int)flags,f);
-	if(or != 0)return or;
-	return fd;
+    if(or != 0)return or;
+    return fd;
 }
 
 /*
@@ -1298,6 +1394,19 @@ static long sys_setpgid(long pid, long pgid, long a3, long a4, long a5, long a6)
 	return 0;//无进程组: 假装成功(让shell的作业控制初始化通过)
 }
 
+//把内核缓冲区里的数据写入已打开的描述符(管道或文件/设备),返回写入字节数
+static long fd_write_kbuf(long fd, const char *kbuf, long len){
+	if(current_task->files[fd].pipe){
+		long pw = pipeWrite((struct pipe*)current_task->files[fd].pipe, kbuf, (uint64_t)len);
+		if(pw == -EPIPE)SignalSend(current_task, SIGPIPE, SI_KERNEL, 0, 0);
+		if(pw <= 0)return pw < 0 ? pw : -ENOSPC;
+		return pw;
+	}
+	uint64_t n = FsWrite(&current_task->files[fd], kbuf, (uint64_t)len);
+	if(n == 0)return -ENOSPC;
+	return (long)n;
+}
+
 /*
  * ssize_t writev(int fd, const struct iovec *iov, int iovcnt)
  * 聚合写(TTY输出或文件写入), 返回写入总字节数
@@ -1305,9 +1414,17 @@ static long sys_setpgid(long pid, long pgid, long a3, long a4, long a5, long a6)
 static long sys_writev(long fd, long iov, long iovcnt, long a4, long a5, long a6){
 	(void)a4; (void)a5; (void)a6;
 	if(!iov || iovcnt <= 0)return -EINVAL;
-	char kbuf[256];
+	char kbuf[512];
 	long total = 0;
+	uint64_t used = 0;
 	long base_idx = 0;
+	_Bool tty_out = ((fd == 1 || fd == 2) && (!current_task || !current_task->files[fd].used)) ||
+	                (fd_is_console(fd) && (current_task->files[fd].flags & O_ACCMODE) != O_RDONLY);
+	if(!tty_out){
+		if(!current_task)return -EBADF;
+		if(fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
+		if((current_task->files[fd].flags & O_ACCMODE) == O_RDONLY)return -EBADF;
+	}
 	while(base_idx < iovcnt){
 		long n = iovcnt - base_idx;
 		if(n > 32)n = 32;
@@ -1321,30 +1438,37 @@ static long sys_writev(long fd, long iov, long iovcnt, long a4, long a5, long a6
 			uint64_t done = 0;
 			while(done < len){
 				uint64_t chunk = len - done;
-				if(chunk > sizeof(kbuf))chunk = sizeof(kbuf);
-				if(copy_from_user(kbuf, (const char*)base + done, chunk))return total ? total : -EFAULT;
-				_Bool __wc = fd_is_console(fd) && (current_task->files[fd].flags & O_ACCMODE) != O_RDONLY;
-				if(((fd == 1 || fd == 2) && (!current_task || !current_task->files[fd].used)) || __wc){
-					//TTY输出
-					for(uint64_t j = 0; j < chunk; j++)TTY_PrintChar(kbuf[j], CurrentConsoleStyle.TextColor);
-				}else{
-					//文件/管道写入
-					if(!current_task)return -EBADF;
-					if(fd < 0 || fd >= MAX_FD || !current_task->files[fd].used)return -EBADF;
-					if((current_task->files[fd].flags & O_ACCMODE) == O_RDONLY)return -EBADF;
-					if(current_task->files[fd].pipe){
-						long pw = pipeWrite((struct pipe*)current_task->files[fd].pipe, kbuf, chunk);
-						if(pw == -EPIPE)SignalSend(current_task, SIGPIPE, SI_KERNEL, 0, 0);//写入已断管道
-						if(pw <= 0)return total ? total : (pw < 0 ? pw : -ENOSPC);
-					}else{
-						FsWrite(&current_task->files[fd], kbuf, chunk);
-					}
-				}
+				uint64_t room = sizeof(kbuf) - used;
+				if(chunk > room)chunk = room;
+				if(copy_from_user(kbuf + used, (const char*)base + done, chunk))return total ? total : -EFAULT;
+				used += chunk;
 				done += chunk;
-				total += (long)chunk;
+				//缓冲区写满,整块下发
+				if(used == sizeof(kbuf)){
+					if(tty_out){
+						for(uint64_t j = 0; j < used; j++)TTY_PrintChar(kbuf[j], CurrentConsoleStyle.TextColor);
+						total += (long)used;
+					}else{
+						long w = fd_write_kbuf(fd, kbuf, (long)used);
+						if(w <= 0)return total ? total : w;
+						total += w;
+					}
+					used = 0;
+				}
 			}
 		}
 		base_idx += n;
+	}
+	//把剩下的部分一次下发
+	if(used){
+		if(tty_out){
+			for(uint64_t j = 0; j < used; j++)TTY_PrintChar(kbuf[j], CurrentConsoleStyle.TextColor);
+			total += (long)used;
+		}else{
+			long w = fd_write_kbuf(fd, kbuf, (long)used);
+			if(w <= 0)return total ? total : w;
+			total += w;
+		}
 	}
 	return total;
 }
@@ -2271,6 +2395,105 @@ long sys_waitpid(long pid, long wstatus, long options, long a4, long a5, long a6
 	return ret;
 }
 
+/*DeepSeek-V4.1-Flash*/
+/*
+ * int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options)
+ *
+ * systemd 的 wait_for_terminate() 走 waitid, 只用到 P_PID + WEXITED(+WNOHANG)。
+ * siginfo_t 在 x86_64 上是 128 字节, 这里只填 SIGCHLD 需要的字段。
+ */
+static long sys_waitid(long idtype, long id, long infop, long options, long rusage, long a6){
+	(void)rusage; (void)a6;
+	if(!current_task || !current_task->mm)return -ECHILD;
+	pid_t child_pid;
+	if(idtype == P_PID)child_pid = (pid_t)id;
+	else if(idtype == P_PGID || idtype == P_ALL)child_pid = -1;
+	else return -EINVAL;
+	task_struct *zombie;
+	for(;;){
+		zombie = TaskFindZombie(current_task->pid, child_pid);
+		if(zombie)break;
+		if(child_pid > 0 && !TaskFindChild(current_task->pid, child_pid))return -ECHILD;
+		if(options & WNOHANG){
+			//没有子进程可回收:按 Linux 语义返回 0 并把 siginfo 清零
+			if(infop){
+				uint8_t si[128];
+				memset(si, 0, sizeof(si));
+				if(copy_to_user((void*)infop, si, sizeof(si)))return -EFAULT;
+			}
+			return 0;
+		}
+		//挂到子进程等待队列,被子进程退出唤醒
+		wait_queue_head_t *wq = &current_task->child_wq;
+		current_task->wait_node.prev = wq->prev;
+		current_task->wait_node.next = wq;
+		wq->prev->next = &current_task->wait_node;
+		wq->prev = &current_task->wait_node;
+		current_task->state = TASK_BLOCKED;
+		zombie = TaskFindZombie(current_task->pid, child_pid);//双检
+		if(zombie){
+			current_task->wait_node.prev->next = current_task->wait_node.next;
+			current_task->wait_node.next->prev = current_task->wait_node.prev;
+			current_task->wait_node.prev = NULL;
+			current_task->wait_node.next = NULL;
+			current_task->state = TASK_RUNNING;
+			break;
+		}
+		schedule();
+	}
+	_Bool killed = (zombie->sig_exit > 0);
+	int si_code  = killed ? CLD_KILLED : CLD_EXITED;
+	int si_status= killed ? (zombie->sig_exit & 0x7F) : (zombie->exit_code & 0xFF);
+	pid_t zp = zombie->pid;
+	TaskKill(zombie);
+	if(infop){
+		uint8_t si[128];
+		int32_t v;
+		memset(si, 0, sizeof(si));
+		v = SIGCHLD;      memcpy(si + 0,  &v, 4);//si_signo
+		v = 0;            memcpy(si + 4,  &v, 4);//si_errno
+		v = si_code;      memcpy(si + 8,  &v, 4);//si_code
+		v = (int32_t)zp;  memcpy(si + 16, &v, 4);//si_pid
+		v = 0;            memcpy(si + 20, &v, 4);//si_uid
+		v = si_status;    memcpy(si + 24, &v, 4);//si_status
+		if(copy_to_user((void*)infop, si, sizeof(si)))return -EFAULT;
+	}
+	return 0;
+}
+
+/*
+ * int close_range(unsigned first, unsigned last, unsigned flags)
+ */
+static long sys_close_range(long first, long last, long flags, long a4, long a5, long a6){
+	(void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EBADF;
+	if(first < 0 || last < 0 || first > last)return -EINVAL;
+	if(flags & ~(long)(CLOSE_RANGE_UNSHARE | CLOSE_RANGE_CLOEXEC))return -EINVAL;
+	if(last >= MAX_FD)last = MAX_FD - 1;
+	for(long fd = first; fd <= last; fd ++){
+		if(!current_task->files[fd].used)continue;
+		if(flags & CLOSE_RANGE_CLOEXEC)current_task->files[fd].flags |= O_CLOEXEC;
+		else fd_close_one(fd);
+	}
+	return 0;
+}
+
+/*
+ * int pause(void)
+ * 阻塞到有信号可投递, 恒返回 -EINTR
+ */
+static long sys_pause(long a1, long a2, long a3, long a4, long a5, long a6){
+	(void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+	if(!current_task)return -EINTR;
+	for(;;){
+		if(SignalPending())return -EINTR;
+		int w = PollWait(-1);
+		if(w == POLL_WAIT_INTR)return -EINTR;
+		if(SignalPending())return -EINTR;
+	}
+}
+/*DeepSeek-V4.1-Flash-END*/
+
 //系统调用表
 typedef long (*syscall_fn)(long, long, long, long, long, long);
 static syscall_fn syscall_table[SYSCALL_TABLE_SIZE];
@@ -2280,10 +2503,7 @@ long syscall_dispatch(long num, long a1, long a2, long a3, long a5, long a6){
 	if(num < 0 || num >= SYSCALL_TABLE_SIZE)return -ENOSYS;//检查调用号
     //获取处理函数
 	syscall_fn fn = syscall_table[num];
-	if(!fn){
-		printk(PRINTK_DEBUG"syscall %ld not implemented", num);
-		return -ENOSYS;
-	}
+	if(!fn)return -ENOSYS;
 	long a4 = *(long*)(user_kernel_stack_top - 128 + 40);
 	long ret = fn(a1, a2, a3, a4, a5, a6);//调用处理函数
 	SignalDeliverUser(ret);//返回用户前投递待处理信号
@@ -3125,6 +3345,9 @@ void InitSyscall(void){
 	syscall_table[SYS_EXECVE]     = sys_execve;
 	syscall_table[SYS_EXIT]       = sys_exit;
 	syscall_table[SYS_WAIT4]      = sys_waitpid;
+	syscall_table[SYS_WAITID]     = sys_waitid;
+	syscall_table[SYS_PAUSE]      = sys_pause;
+	syscall_table[SYS_CLOSE_RANGE]= sys_close_range;
 	syscall_table[SYS_EXIT_GROUP] = sys_exit_group;
 	syscall_table[SYS_MOUNT]      = sys_mount;
 	syscall_table[SYS_UMOUNT2]    = sys_umount2;
@@ -3134,6 +3357,8 @@ void InitSyscall(void){
 	syscall_table[SYS_TRUNCATE]   = sys_truncate;
 	syscall_table[SYS_FTRUNCATE]  = sys_ftruncate;
 	syscall_table[SYS_FSYNC]      = sys_fsync;
+	syscall_table[SYS_STATFS]     = sys_statfs;
+	syscall_table[SYS_FSTATFS]    = sys_fstatfs;
 	syscall_table[SYS_FDATASYNC]  = sys_fsync;
 	syscall_table[SYS_SYNC]       = sys_sync;
 	syscall_table[SYS_CHMOD]      = sys_chmod;
@@ -3161,6 +3386,9 @@ void InitSyscall(void){
 	syscall_table[SYS_MUNMAP]     = sys_munmap;
 	syscall_table[SYS_MPROTECT]   = sys_mprotect;
 	syscall_table[SYS_UNAME]	  = sys_uname;
+	syscall_table[SYS_SYSINFO]        = sys_sysinfo;
+	syscall_table[SYS_SETHOSTNAME]    = sys_sethostname;
+	syscall_table[SYS_SETDOMAINNAME]  = sys_setdomainname;
 	syscall_table[SYS_REBOOT]	  = sys_reboot;
 	syscall_table[SYS_GETRESUID] = sys_getresuid;
 	syscall_table[SYS_GETRESGID] = sys_getresgid;
@@ -3179,5 +3407,4 @@ void InitSyscall(void){
 	wrmsr(IA32_LSTAR, (uint64_t)syscall_entry);//入口RIP
 	wrmsr(IA32_FMASK, 0x700);//进入内核时清除TF|IF|DF
 	printk(PRINTK_INFO"Syscalls ready");
-	printk(PRINTK_INFO"build stamp: %s %s", __DATE__, __TIME__);
 }

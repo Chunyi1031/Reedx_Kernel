@@ -183,7 +183,6 @@ void interrupt_PF(exc_frame_t *f){
 	uint64_t fault_addr = read_cr2();
 	uint64_t error_code = f->errcode;
 	uintptr_t rip       = (uintptr_t)f->rip;
-	//按需分页：用户态、页不存在、非保留位错误
 	if ((error_code & PF_ERR_USER) && !(error_code & PF_ERR_PRESENT) && !(error_code & PF_ERR_RSVD)) {
 		if (current_task && current_task->mm) {
 			vm_area_t *vma = find_vma(current_task->mm, fault_addr);
@@ -263,4 +262,5 @@ void setup_exceptions(void){
 	for (int i = 0; i < NUM_EXCEPTION_VECTORS; i++)set_trap_gate(i, exc_entries_start + i * 16);
 	set_trap_gate(INT_GATE_GP,int_13_handler);
 	set_trap_gate(INT_GATE_PF,int_14_handler);
+    set_trap_gate_ist(INT_GATE_DF, exc_entries_start + INT_GATE_DF * 16, DF_IST);
 }

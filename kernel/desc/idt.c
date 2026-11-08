@@ -48,3 +48,9 @@ void set_trap_gate(uint32_t vector, void *handler){
 	pack_gate(&gate, GATE_TRAP, (uintptr_t)handler, DPL0, DEFAULT_IST, __KERNEL_CS);
 	write_idt_entry(idt_table, (int)vector, &gate);
 }
+//注册使用独立中断栈(IST)的陷阱门
+void set_trap_gate_ist(uint32_t vector, void *handler, uint8_t ist){
+    struct gate_desc gate;
+    pack_gate(&gate, GATE_TRAP, (uintptr_t)handler, DPL0, ist, __KERNEL_CS);
+    write_idt_entry(idt_table, (int)vector, &gate);
+}

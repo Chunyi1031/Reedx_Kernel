@@ -75,6 +75,8 @@ syscall_entry:
     popq %rbx
     popq %rax               /* 返回值 */
 
+    cli
+
     /* rsp 现在指向用户 RSP 槽位，直接恢复并返回 ring3 */
     popq %rsp
     sysretq
